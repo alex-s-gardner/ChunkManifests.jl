@@ -15,8 +15,12 @@
 Build a [`ManifestStore`](@ref) over `group`, fetching chunk bytes through
 `transport`.
 """
-function ManifestStore(group::VirtualGroup; transport::AbstractTransport=LocalTransport())
-    return ManifestStore{typeof(transport)}(group, transport)
+function ManifestStore(
+    group::VirtualGroup;
+    transport::AbstractTransport=LocalTransport(),
+    readahead::ReadaheadCache=ReadaheadCache(),
+)
+    return ManifestStore{typeof(transport)}(group, transport, readahead)
 end
 
 function _splitkey(key::AbstractString)
@@ -49,7 +53,9 @@ function _children(g::VirtualGroup, p::AbstractString)
     return children
 end
 
-function _arrayitem(va::VirtualArray, leaf::AbstractString, transport::AbstractTransport)
+function _arrayitem(
+    va::VirtualArray, leaf::AbstractString, transport::AbstractTransport, readahead::ReadaheadCache
+)
     leaf == ".zarray" && return zarray_json(va)
     leaf == ".zattrs" && return zattrs_json(va)
     I = parse_chunkkey(va, leaf)
@@ -59,7 +65,7 @@ function _arrayitem(va::VirtualArray, leaf::AbstractString, transport::AbstractT
     state == MISSING_CHUNK && return nothing
     state == INLINE_CHUNK && return inlinebytes(m, I)
     uri, offset, nbytes = chunklocation(m, I)
-    return fetchrange(transport, uri, ByteRange(offset, nbytes))
+    return _readahead_fetch(readahead, transport, m, I, uri, offset, nbytes)
 end
 
 """
@@ -73,7 +79,8 @@ function Base.getindex(s::ManifestStore, key::AbstractString)
     prefix, leaf = _splitkey(key)
     g = s.group
 
-    haskey(arraysof(g), prefix) && return _arrayitem(arraysof(g)[prefix], leaf, s.transport)
+    haskey(arraysof(g), prefix) &&
+        return _arrayitem(arraysof(g)[prefix], leaf, s.transport, s.readahead)
 
     if prefix == "" || _isgrouppath(g, prefix)
         leaf == ".zgroup" && return zgroup_json()
@@ -186,11 +193,16 @@ Resolve every chunk index in `i` (a `CartesianIndices` into array `p`'s chunk
 grid) and `put!` each as `index => bytes_or_nothing` onto `c`. Virtual chunks
 backed by the same source file are grouped and fetched with one coalesced
 [`fetchranges`](@ref) call per file, which is the point of overriding this
-method instead of leaving chunks to be read one at a time.
+method instead of leaving chunks to be read one at a time. A virtual chunk
+already in `s.readahead` (left there by an earlier single-chunk readahead
+fetch) is served from the cache instead, and every freshly fetched chunk is
+cached in turn, so the two paths share one cache of chunk bytes.
 
 The consumer on the other end of `c` expects exactly one `put!` per index in
 `i` — no duplicates, no omissions — and closes `c` itself; closing it here
-would make the consumer's own `close` throw.
+would make the consumer's own `close` throw. Consulting and populating the
+cache does not change that: each index still resolves to exactly one `put!`,
+either from the cache or from the fetch loop below.
 """
 function Zarr.read_items!(
     s::ManifestStore, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
@@ -198,6 +210,8 @@ function Zarr.read_items!(
     g = s.group
     va = arraysof(g)[p]
     m = manifestof(va)
+    readahead = s.readahead
+    caching = readahead.maxbytes > 0
     IdxT = eltype(i)
 
     byuri = Dict{String,Vector{Tuple{IdxT,ByteRange}}}()
@@ -209,10 +223,15 @@ function Zarr.read_items!(
             put!(c, ii => inlinebytes(m, ii))
         else
             uri, offset, nbytes = chunklocation(m, ii)
-            push!(
-                get!(() -> Tuple{IdxT,ByteRange}[], byuri, uri),
-                (ii, ByteRange(offset, nbytes)),
-            )
+            cached = caching ? _cache_get(readahead, (uri, offset), nbytes) : nothing
+            if cached === nothing
+                push!(
+                    get!(() -> Tuple{IdxT,ByteRange}[], byuri, uri),
+                    (ii, ByteRange(offset, nbytes)),
+                )
+            else
+                put!(c, ii => cached)
+            end
         end
     end
 
@@ -221,6 +240,7 @@ function Zarr.read_items!(
         bytes = fetchranges(s.transport, uri, ranges)
         for k in eachindex(entries, bytes)
             put!(c, entries[k][1] => bytes[k])
+            caching && _cache_put!(readahead, (uri, entries[k][2].offset), bytes[k])
         end
     end
     return nothing

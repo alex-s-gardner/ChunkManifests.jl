@@ -171,7 +171,57 @@ Reads byte ranges from the local filesystem.
 struct LocalTransport <: AbstractTransport end
 
 """
-    ManifestStore(group; transport=LocalTransport())
+    S3Transport(bucket; aws=nothing)
+
+Reads byte ranges from an S3 bucket. Available once the `AWSS3` extension
+loads; constructing one without `AWSS3` reports that rather than failing
+obscurely later.
+"""
+struct S3Transport <: AbstractTransport
+    bucket::String
+    aws::Any
+end
+
+function S3Transport(args...; kwargs...)
+    error("AWSS3 must be loaded to use S3Transport. Try `using AWSS3`.")
+end
+
+"""
+    ReadaheadCache(; maxbytes=64 * 1024 * 1024, chunks=32)
+
+Bounded cache of fetched chunk bytes, keyed by source file and byte offset.
+
+Reductions and broadcast walk a Zarr array one chunk at a time through
+`store_readchunk`, which never reaches
+[`Zarr.read_items!`](@ref) and so gets no range coalescing. Filling this cache
+with a run of byte-adjacent chunks on each miss restores it for those access
+patterns. `maxbytes = 0` disables readahead; `chunks` bounds how far ahead a
+single miss reads.
+"""
+struct ReadaheadCache
+    entries::Dict{Tuple{String,UInt64},Vector{UInt8}}
+    order::Vector{Tuple{String,UInt64}}
+    maxbytes::Int
+    nbytes::Base.RefValue{Int}
+    chunks::Int
+    lock::ReentrantLock
+end
+
+function ReadaheadCache(; maxbytes::Integer=64 * 1024 * 1024, chunks::Integer=32)
+    maxbytes >= 0 || throw(ArgumentError("maxbytes must be nonnegative, got $maxbytes"))
+    chunks >= 1 || throw(ArgumentError("chunks must be at least 1, got $chunks"))
+    return ReadaheadCache(
+        Dict{Tuple{String,UInt64},Vector{UInt8}}(),
+        Tuple{String,UInt64}[],
+        Int(maxbytes),
+        Ref(0),
+        Int(chunks),
+        ReentrantLock(),
+    )
+end
+
+"""
+    ManifestStore(group; transport=LocalTransport(), readahead=ReadaheadCache())
 
 Read-only `Zarr.AbstractStore` that answers metadata keys from synthesized
 Zarr v2 documents and chunk keys with the source files' raw, still-encoded
@@ -181,9 +231,10 @@ it returns are byte-for-byte those of the original file.
 struct ManifestStore{T<:AbstractTransport} <: Zarr.AbstractStore
     group::VirtualGroup
     transport::T
+    readahead::ReadaheadCache
 
-    function ManifestStore{T}(group, transport) where {T}
-        return new{T}(group, transport)
+    function ManifestStore{T}(group, transport, readahead) where {T}
+        return new{T}(group, transport, readahead)
     end
 end
 

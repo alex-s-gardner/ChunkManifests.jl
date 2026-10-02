@@ -1,6 +1,7 @@
 module VirtualZarr
 
 import HDF5
+import HTTP
 import JSON
 import Zarr
 
@@ -11,13 +12,16 @@ include("core/virtualarray.jl")
 include("codecs/mapping.jl")
 include("transport/transport.jl")
 include("transport/local.jl")
+include("transport/http.jl")
 include("store/metadata.jl")
+include("store/readahead.jl")
 include("store/manifeststore.jl")
 include("drivers/driver.jl")
 include("drivers/hdf5.jl")
 
 export AbstractManifest, ChunkManifest, AffineManifest
-export AbstractTransport, LocalTransport, ByteRange, ManifestStore
+export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
+export ByteRange, ManifestStore, ReadaheadCache
 export AbstractDriver, HDF5Driver, scan
 export ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK
 export FileEntry, PathTable, VirtualArray, VirtualGroup
