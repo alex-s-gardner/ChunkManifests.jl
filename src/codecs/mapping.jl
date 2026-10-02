@@ -116,18 +116,48 @@ function build_codecs(D::Type{<:AbstractDriver}, pipeline, itemsize; context::Ab
     return compressor, filters
 end
 
+const _BYTE_FILTER_SUPPORT = Ref{Union{Nothing,Bool}}(nothing)
+
+"""
+    zarr_decodes_byte_filters() -> Bool
+
+Whether the loaded Zarr.jl can read an array whose last filter works on raw
+bytes (`shuffle`, `fletcher32`) and whose element type is wider than one byte.
+
+This is probed by round-tripping a small array rather than compared against a
+version bound, because the fix carries no version bump: a patched and an
+unpatched Zarr.jl report the same version. The result is cached, so the probe
+runs at most once per session.
+"""
+function zarr_decodes_byte_filters()
+    cached = _BYTE_FILTER_SUPPORT[]
+    cached === nothing || return cached
+    supported = try
+        data = Int32[1, 2, 3, 4]
+        z = Zarr.zcreate(
+            Int32, Zarr.DictStore(), length(data);
+            chunks=(length(data),), compressor=Zarr.NoCompressor(),
+            filters=(Zarr.ShuffleFilter(sizeof(Int32)),),
+        )
+        z[:] = data
+        z[:] == data
+    catch
+        false
+    end
+    _BYTE_FILTER_SUPPORT[] = supported
+    return supported
+end
+
 """
     check_last_filter_multibyte(filters, ::Type{T}, context::AbstractString) where {T}
 
-Throw if `filters` is nonempty, its last entry (the first filter Zarr.jl
-decodes after the compressor) is `"shuffle"` or `"fletcher32"`, and `T` is
-wider than one byte.
+Throw if the loaded Zarr.jl cannot read an array whose last filter is
+`"shuffle"` or `"fletcher32"` and whose element type `T` is wider than one
+byte, as reported by [`zarr_decodes_byte_filters`](@ref).
 
-Zarr.jl's `zuncompress!` (`src/Compressors/Compressors.jl:49-55`) cannot
-currently reinterpret the decoded buffer back to a multi-byte element type
-when the last-applied filter is bytes-to-bytes; it throws a `BoundsError`
-instead. This is a limitation of Zarr.jl, not of the source file, so `scan`
-rejects the dataset here rather than producing a manifest that fails on read.
+Such a dataset is rejected during a scan rather than producing a manifest that
+throws on read, since the limitation belongs to the decoder and not to the
+source file.
 """
 function check_last_filter_multibyte(
     filters::AbstractVector{<:AbstractDict}, ::Type{T}, context::AbstractString
@@ -135,12 +165,13 @@ function check_last_filter_multibyte(
     isempty(filters) && return nothing
     sizeof(T) == 1 && return nothing
     id = filters[end]["id"]
-    if id == "shuffle" || id == "fletcher32"
+    if (id == "shuffle" || id == "fletcher32") && !zarr_decodes_byte_filters()
         throw(ArgumentError(
             "$context: last filter in the Zarr pipeline is \"$id\" and the element " *
-            "type $T is $(sizeof(T)) bytes wide; Zarr.jl cannot currently decode a " *
+            "type $T is $(sizeof(T)) bytes wide; the loaded Zarr.jl cannot decode a " *
             "trailing bytes-to-bytes filter back into a multi-byte element type " *
-            "(upstream limitation, not a problem with the source file)"
+            "(see https://github.com/JuliaIO/Zarr.jl/pull/354). This is a decoder " *
+            "limitation, not a problem with the source file."
         ))
     end
     return nothing

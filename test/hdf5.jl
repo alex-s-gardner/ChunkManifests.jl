@@ -64,12 +64,24 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
     end
 
     @testset "check_last_filter_multibyte" begin
-        @test_throws "upstream" VirtualZarr.check_last_filter_multibyte(
-            [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
-        )
-        @test_throws "upstream" VirtualZarr.check_last_filter_multibyte(
-            [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
-        )
+        # Whether a trailing bytes-to-bytes filter is accepted depends on the
+        # resolved Zarr.jl, so assert against the same probe the driver uses
+        # rather than hardcoding one outcome.
+        if VirtualZarr.zarr_decodes_byte_filters()
+            @test VirtualZarr.check_last_filter_multibyte(
+                [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
+            ) === nothing
+            @test VirtualZarr.check_last_filter_multibyte(
+                [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
+            ) === nothing
+        else
+            @test_throws "decoder limitation" VirtualZarr.check_last_filter_multibyte(
+                [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
+            )
+            @test_throws "decoder limitation" VirtualZarr.check_last_filter_multibyte(
+                [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
+            )
+        end
         @test VirtualZarr.check_last_filter_multibyte(
             [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)], Int8, "ctx"
         ) === nothing
@@ -120,13 +132,28 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
                 @test dimnamesof(a) == ["delta_time"]
             end
 
-            @testset "n_fit_photons: Int32 shuffle+deflate, multi-byte, rejected" begin
-                @test_throws "upstream" scan(
-                    HDF5Driver(), ATL06_PATH; group="/gt1l/land_ice_segments/fit_statistics/n_fit_photons"
-                )
-                @test_throws "n_fit_photons" scan(
-                    HDF5Driver(), ATL06_PATH; group="/gt1l/land_ice_segments/fit_statistics/n_fit_photons"
-                )
+            @testset "n_fit_photons: Int32 shuffle+deflate, multi-byte" begin
+                path = "/gt1l/land_ice_segments/fit_statistics/n_fit_photons"
+                if VirtualZarr.zarr_decodes_byte_filters()
+                    g = scan(HDF5Driver(), ATL06_PATH; group=path)
+                    a = arraysof(g)["n_fit_photons"]
+                    @test eltype(a) == Int32
+                    @test filtersof(a) ==
+                        [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)]
+                    @test compressorof(a) == Dict{String,Any}("id" => "zlib", "level" => 6)
+
+                    # The values this dataset's filters made unreadable.
+                    z = Zarr.zopen(ManifestStore(g))["n_fit_photons"]
+                    truth = h5open(ATL06_PATH, "r") do f
+                        read(f[lstrip(path, '/')])
+                    end
+                    @test z[:] == truth
+                else
+                    @test_throws "decoder limitation" scan(
+                        HDF5Driver(), ATL06_PATH; group=path
+                    )
+                    @test_throws "n_fit_photons" scan(HDF5Driver(), ATL06_PATH; group=path)
+                end
             end
 
             @testset "crossing_time: chunked, no filter" begin
@@ -259,8 +286,17 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             @test filtersof(a1) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
             @test compressorof(a1) == Dict{String,Any}("id" => "zlib", "level" => 5)
 
-            @test_throws "upstream" scan(HDF5Driver(), fn; group="/shuffle_multi")
-            @test_throws "shuffle_multi" scan(HDF5Driver(), fn; group="/shuffle_multi")
+            if VirtualZarr.zarr_decodes_byte_filters()
+                g2 = scan(HDF5Driver(), fn; group="/shuffle_multi")
+                a2 = arraysof(g2)["shuffle_multi"]
+                @test filtersof(a2) ==
+                    [Dict{String,Any}("id" => "shuffle", "elementsize" => sizeof(eltype(a2)))]
+            else
+                @test_throws "decoder limitation" scan(
+                    HDF5Driver(), fn; group="/shuffle_multi"
+                )
+                @test_throws "shuffle_multi" scan(HDF5Driver(), fn; group="/shuffle_multi")
+            end
         end
 
         @testset "contiguous dataset -> AffineManifest" begin
