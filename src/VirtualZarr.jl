@@ -1,5 +1,6 @@
 module VirtualZarr
 
+import Base64
 import HDF5
 import HTTP
 import JSON
@@ -18,11 +19,14 @@ include("store/readahead.jl")
 include("store/manifeststore.jl")
 include("drivers/driver.jl")
 include("drivers/hdf5.jl")
+include("serialize/zarrnative.jl")
+include("serialize/kerchunkjson.jl")
 
 export AbstractManifest, ChunkManifest, AffineManifest
 export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
 export ByteRange, ManifestStore, ReadaheadCache
 export AbstractDriver, HDF5Driver, scan
+export ManifestFormat, ZarrManifest, KerchunkJSON, KerchunkParquet
 export ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK
 export FileEntry, PathTable, VirtualArray, VirtualGroup
 export chunkgridaxes, chunkgridsize, chunkstate, chunklocation, inlinebytes

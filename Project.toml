@@ -4,6 +4,7 @@ version = "0.1.0-DEV"
 authors = ["Alex S. Gardner, JPL/NASA"]
 
 [deps]
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 CRC32c = "8bf52ea8-c179-5cab-976a-9e18b702a9bc"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
@@ -18,24 +19,32 @@ Zarr = {url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-
 
 [weakdeps]
 AWSS3 = "1c724243-ef5b-51ab-93f4-b0a88ac62a95"
+Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
+PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 
 [extensions]
 VirtualZarrAWSS3Ext = "AWSS3"
+VirtualZarrParquet2Ext = ["Parquet2", "PooledArrays"]
 
 [compat]
 AWSS3 = "0.10, 0.11"
+Base64 = "1.10, 1.11"
 CRC32c = "1.10, 1.11"
 HDF5 = "0.17"
 HTTP = "^1.3, 2"
 JSON = "0.21, 1"
+Parquet2 = "0.2"
+PooledArrays = "1"
 Zarr = "0.10"
 julia = "1.10"
 
 [extras]
 AWSS3 = "1c724243-ef5b-51ab-93f4-b0a88ac62a95"
+Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
+PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["AWSS3", "Random", "Sockets", "Test"]
+test = ["AWSS3", "Parquet2", "PooledArrays", "Random", "Sockets", "Test"]

@@ -11,5 +11,8 @@ using Test
     include("store.jl")
     include("readahead.jl")
     include("hdf5.jl")
+    include("serialize_zarr.jl")
+    include("serialize_kerchunk.jl")
+    include("serialize_parquet.jl")
     include("s3.jl")
 end

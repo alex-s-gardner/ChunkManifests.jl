@@ -239,6 +239,75 @@ struct ManifestStore{T<:AbstractTransport} <: Zarr.AbstractStore
 end
 
 """
+    ManifestFormat
+
+An on-disk representation of a [`VirtualGroup`](@ref). Formats are types rather
+than flags so a new one is a new subtype plus [`save`](@ref) and
+[`load`](@ref) methods, never an edit to a central dispatch function.
+"""
+abstract type ManifestFormat end
+
+"""
+    ZarrManifest(; chunkcells=65536, compressor="zstd")
+
+Native format: each manifest column is stored as a Zarr v2 array over the chunk
+grid, with the path table and array metadata alongside as JSON.
+
+Because the columns are plain integer arrays, one chunk's reference can be
+rewritten without rewriting the whole document, a manifest too large to
+materialize can be read back lazily, and the result stays readable by any Zarr
+implementation. `chunkcells` is the chunk length of those arrays in chunk-grid
+cells.
+"""
+struct ZarrManifest <: ManifestFormat
+    chunkcells::Int
+    compressor::Union{Nothing,String}
+end
+
+function ZarrManifest(; chunkcells::Integer=65536, compressor="zstd")
+    chunkcells >= 1 || throw(ArgumentError("chunkcells must be at least 1, got $chunkcells"))
+    return ZarrManifest(Int(chunkcells), compressor)
+end
+
+"""
+    KerchunkJSON(; inlinethreshold=0)
+
+Kerchunk's JSON reference-set format, for interchange with tools that read it.
+Chunks smaller than `inlinethreshold` bytes are embedded base64-encoded rather
+than referenced; `0` embeds nothing.
+
+This is a reimplementation of the published schema. Nothing here calls Python,
+and neither kerchunk nor fsspec is a dependency.
+"""
+struct KerchunkJSON <: ManifestFormat
+    inlinethreshold::Int
+end
+
+KerchunkJSON(; inlinethreshold::Integer=0) = KerchunkJSON(Int(inlinethreshold))
+
+"""
+    KerchunkParquet(; recordsize=10000)
+
+Kerchunk's Parquet reference-set format, which scales to far more references
+than its JSON form. `recordsize` is the number of rows per `refs.N.parq` file
+and must match what a reader expects, so it is recorded in the store's
+`.zmetadata`.
+
+Available once the `Parquet2` extension loads.
+"""
+struct KerchunkParquet <: ManifestFormat
+    recordsize::Int
+end
+
+function KerchunkParquet(; recordsize::Integer=10000)
+    recordsize >= 1 || throw(ArgumentError("recordsize must be at least 1, got $recordsize"))
+    return KerchunkParquet(Int(recordsize))
+end
+
+function save end
+function load end
+
+"""
     AbstractDriver
 
 Reads a source format's chunk layout. Subtypes implement [`scan`](@ref), and
