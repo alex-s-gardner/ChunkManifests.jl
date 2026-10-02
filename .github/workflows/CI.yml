@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Cancel superseded runs on a branch, never on main.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Named channels rather than version numbers, so there is nothing to bump when a new
+        # Julia lands.
+        version: ['lts', '1', 'pre']
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+        exclude:
+          # One OS is enough to catch a breaking change on an unreleased Julia; three would
+          # triple the cost of the job most likely to be red for reasons outside this package.
+          - version: 'pre'
+            os: macOS-latest
+          - version: 'pre'
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
