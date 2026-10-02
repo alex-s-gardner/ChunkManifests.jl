@@ -95,7 +95,7 @@ function _filterpipeline(dset)
             let ext = pipeline[HDF5.Filters.ExternalFilter, i]
                 (Int(ext.filter_id), Int.(ext.data))
             end
-            for i in 1:length(pipeline)
+            for i in eachindex(pipeline)
         ]
     finally
         close(plist)

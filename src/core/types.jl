@@ -322,6 +322,28 @@ abstract type AbstractDriver end
 function scan end
 function candrive end
 
+"""
+    GeoTIFFDriver(; chunkbytes=8 * 1024 * 1024)
+
+Reads the chunk layout of a TIFF or Cloud-Optimized GeoTIFF.
+
+Only the tag parsing needs `TiffImages`, so `scan` is available once that
+extension loads. The TIFF predictor codec and the GeoTIFF tag semantics live in
+this package proper, because a saved manifest must stay decodable whether or
+not `TiffImages` is present when it is read.
+
+For an uncompressed source the chunk shape is not dictated by the file, so
+`chunkbytes` is the size this driver aims for when grouping strips.
+"""
+struct GeoTIFFDriver <: AbstractDriver
+    chunkbytes::Int
+end
+
+function GeoTIFFDriver(; chunkbytes::Integer=8 * 1024 * 1024)
+    chunkbytes >= 1 || throw(ArgumentError("chunkbytes must be at least 1, got $chunkbytes"))
+    return GeoTIFFDriver(Int(chunkbytes))
+end
+
 # Manifest interface.
 function chunkgridaxes end
 function chunkgridsize end
