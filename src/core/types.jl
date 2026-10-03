@@ -335,6 +335,90 @@ function scan end
 function candrive end
 
 """
+    SourceAccess
+
+How a driver reaches a source file's bytes while scanning it.
+
+Scanning reads a file's metadata — superblocks, chunk indexes, tag
+directories — which is a small fraction of a large file but is scattered
+through it, so how those bytes are reached decides whether scanning a remote
+object is cheap or expensive. Mechanisms are types rather than flags so a new
+one is a new subtype plus a [`scan`](@ref) method, never an edit to a central
+dispatch function.
+
+Whichever mechanism is used, the manifest records the URI the caller asked
+for. A file fetched to a local cache is still recorded under its remote URI,
+because the manifest has to stay valid for readers that never saw the cache.
+
+Not every driver supports every mechanism: a driver that cannot honor one
+says so rather than silently falling back to transferring more than the
+caller expected.
+"""
+abstract type SourceAccess end
+
+"""
+    AutoAccess()
+
+Choose a mechanism per path and per available capability: a local path is read
+directly, and a remote one is read in place where the driver and the
+underlying library can, otherwise fetched to a local cache.
+"""
+struct AutoAccess <: SourceAccess end
+
+"""
+    LocalAccess()
+
+Open the path directly on the local filesystem.
+"""
+struct LocalAccess <: SourceAccess end
+
+"""
+    DownloadAccess(; transport=TransportContainers(), cachedir=nothing, keep=false)
+
+Fetch the whole object to a local file, scan that, and record the original
+URI in the manifest.
+
+This transfers the entire object even though scanning reads only its
+metadata, which is why it is not silent: it is what makes scanning a remote
+source work with a stock install, and the documented workflow of scanning
+once and saving the manifest amortizes it to a single transfer per file.
+`cachedir` defaults to a fresh temporary directory discarded afterwards;
+naming one and setting `keep` retains the copy for a later rescan.
+"""
+struct DownloadAccess <: SourceAccess
+    transport::AbstractTransport
+    cachedir::Union{Nothing,String}
+    keep::Bool
+end
+
+"""
+    ROS3Access(; aws=nothing)
+
+Read the object in place through HDF5's read-only S3 virtual file driver, so
+only the metadata libhdf5 actually touches is transferred.
+
+Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports and
+the HDF5 binaries shipped by `HDF5_jll` do not have; pointing HDF5.jl at a
+system library that does is what makes this available.
+"""
+struct ROS3Access <: SourceAccess
+    aws::Any
+end
+
+ROS3Access(; aws=nothing) = ROS3Access(aws)
+
+function DownloadAccess(;
+    transport::AbstractTransport=TransportContainers(),
+    cachedir=nothing,
+    keep::Bool=false,
+)
+    return DownloadAccess(transport, cachedir === nothing ? nothing : String(cachedir), keep)
+end
+
+function resolve_access end
+function withsourcepath end
+
+"""
     GeoTIFFDriver(; chunkbytes=8 * 1024 * 1024)
 
 Reads the chunk layout of a TIFF or Cloud-Optimized GeoTIFF.

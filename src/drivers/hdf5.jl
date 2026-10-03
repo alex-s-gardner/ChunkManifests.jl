@@ -230,29 +230,91 @@ whose last-applied filter is shuffle or fletcher32 (see
 [`check_last_filter_multibyte`](@ref)) each raise an `ArgumentError` naming
 `path` and the offending dataset.
 """
-function scan(driver::HDF5Driver, path::AbstractString; group::AbstractString="/")
-    isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
+function scan(
+    driver::HDF5Driver, path::AbstractString;
+    group::AbstractString="/", access::SourceAccess=AutoAccess(),
+)
+    return _scan_hdf5(driver, path, resolve_access(access, driver, path); group)
+end
 
+# Mechanisms that hand over a local file. The URI recorded in the manifest is
+# the one the caller named, so a manifest built from a cached copy stays valid
+# for a reader that never saw the cache. The cached file holds the whole
+# object, so its size is the object's size and needs no extra request.
+function _scan_hdf5(
+    driver::HDF5Driver, uri::AbstractString, access::SourceAccess; group::AbstractString
+)
+    return withsourcepath(access, uri) do localpath
+        recorded = _isremote(uri) ? String(uri) : abspath(localpath)
+        _scan_hdf5_open(driver, localpath, recorded, filesize(localpath), nothing; group)
+    end
+end
+
+# libhdf5 reads the object in place, so only the metadata it touches moves.
+# No local copy exists to take a size from, and asking for one would cost a
+# request that nothing here needs.
+# Prefer reading an object in place where libhdf5 can, so only the metadata
+# moves. An s3:// URI is fetched instead: libhdf5's driver addresses objects by
+# endpoint URL, and the region one resolves to cannot be recovered from the URI,
+# so a caller wanting it in place passes the https:// form explicitly.
+function _remoteaccess(::HDF5Driver, uri::AbstractString)
+    HDF5.has_ros3() && startswith(uri, "https://") && return ROS3Access()
+    return DownloadAccess()
+end
+
+function _scan_hdf5(
+    driver::HDF5Driver, uri::AbstractString, access::ROS3Access; group::AbstractString
+)
+    HDF5.has_ros3() || throw(ArgumentError(
+        "ROS3Access cannot scan $(repr(uri)): this libhdf5 has no read-only S3 " *
+        "virtual file driver (HDF5.has_ros3() is false, and the binaries shipped " *
+        "by HDF5_jll are built without it). Point HDF5.jl at a libhdf5 built with " *
+        "that driver, or scan with DownloadAccess(), which fetches the object " *
+        "once and works anywhere",
+    ))
+    startswith(uri, "https://") || throw(ArgumentError(
+        "ROS3Access needs an https:// endpoint, got $(repr(uri)). libhdf5's " *
+        "read-only S3 driver addresses objects by endpoint URL, and the region " *
+        "an s3:// URI resolves to is not recoverable from the URI alone — give " *
+        "the https:// form, or scan with DownloadAccess()",
+    ))
+    h5driver = access.aws === nothing ? HDF5.Drivers.ROS3() : access.aws
+    return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group)
+end
+
+function _scan_hdf5_open(
+    driver::HDF5Driver,
+    openloc::AbstractString,
+    recorded::AbstractString,
+    recordedsize,
+    h5driver;
+    group::AbstractString,
+)
     table = PathTable()
     arrays = Dict{String,ManifestArray}()
     groupattrs = Dict{String,Any}()
 
     lock(HDF5_IO) do
-        HDF5.h5open(path, "r") do f
-            fileindex = push_uri!(table, abspath(path); size=filesize(path))
+        f = h5driver === nothing ?
+            HDF5.h5open(openloc, "r") :
+            HDF5.h5open(openloc, "r"; driver=h5driver)
+        try
+            fileindex = push_uri!(table, recorded; size=recordedsize)
             root = group == "/" ? f : f[group]
             try
                 if root isa HDF5.Dataset
-                    _scandataset!(arrays, table, fileindex, f, root, basename(group), path)
+                    _scandataset!(arrays, table, fileindex, f, root, basename(group), recorded)
                 else
                     for k in keys(HDF5.attrs(root))
                         groupattrs[k] = HDF5.read_attribute(root, k)
                     end
-                    _walk!(arrays, table, fileindex, f, root, "", path)
+                    _walk!(arrays, table, fileindex, f, root, "", recorded)
                 end
             finally
                 root === f || close(root)
             end
+        finally
+            close(f)
         end
     end
 

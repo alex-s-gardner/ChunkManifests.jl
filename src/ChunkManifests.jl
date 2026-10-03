@@ -21,6 +21,7 @@ include("store/metadata.jl")
 include("store/readahead.jl")
 include("store/manifeststore.jl")
 include("drivers/driver.jl")
+include("drivers/access.jl")
 include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")
 include("serialize/zarrnative.jl")
@@ -33,6 +34,7 @@ export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
 export TransportContainers, resolve_transport
 export ByteRange, ReadaheadCache
 export AbstractDriver, HDF5Driver, GeoTIFFDriver, scan
+export SourceAccess, AutoAccess, LocalAccess, DownloadAccess, ROS3Access
 export ManifestFormat, ZarrManifest, KerchunkJSON, KerchunkParquet
 export ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK
 export FileEntry, PathTable, ManifestArray, ChunkManifest

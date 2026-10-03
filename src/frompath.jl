@@ -49,7 +49,7 @@ function _loadsaved(path::AbstractString, fmt::ManifestFormat)
     return load(path, fmt)
 end
 
-function _scansource(path::AbstractString)
+function _scansource(path::AbstractString, access::SourceAccess)
     driver = sniff_driver(path)
     driver === nothing && throw(ArgumentError(
         "no registered driver recognizes $(repr(path)), and it holds no saved " *
@@ -59,17 +59,23 @@ function _scansource(path::AbstractString)
         "`using TiffImages`. To state the driver yourself, call " *
         "scan(SomeDriver(), $(repr(path)))",
     ))
-    return scan(driver, path)
+    return scan(driver, path; access)
 end
 
-function _frompath(path::AbstractString)
+function _frompath(path::AbstractString, access::SourceAccess)
+    # A remote path can only be a source to scan: recognizing a saved manifest
+    # means listing a directory or reading a marker file, which is local work.
+    # Sniffing a source needs only its leading bytes, so that part is deferred
+    # to the driver and its access mechanism.
     if _hasscheme(path)
         throw(ArgumentError(
-            "cannot build a manifest from $(repr(path)): reading a manifest or a " *
-            "source file over a remote URI is not implemented; fetch it to a local " *
-            "path first. Only the manifest or source file itself is affected — the " *
-            "chunks a manifest references may live anywhere, which is what its " *
-            "transport resolves",
+            "cannot build a manifest from $(repr(path)): reading a *saved* " *
+            "manifest over a remote URI is not implemented, and a remote source " *
+            "cannot be recognized without fetching it. Name the driver and the " *
+            "access mechanism instead, as in " *
+            "scan(HDF5Driver(), $(repr(path)); access=DownloadAccess()). Only this " *
+            "file is affected — the chunks a manifest references may live " *
+            "anywhere, which is what its transport resolves",
         ))
     end
 
@@ -83,7 +89,7 @@ function _frompath(path::AbstractString)
     ))
     isfile(path) || throw(ArgumentError("no such file or directory: $(repr(path))"))
 
-    return _scansource(path)
+    return _scansource(path, access)
 end
 
 """
@@ -112,6 +118,7 @@ function ChunkManifest(
     path::AbstractString;
     transport::AbstractTransport=TransportContainers(),
     readahead::ReadaheadCache=ReadaheadCache(),
+    access::SourceAccess=AutoAccess(),
 )
-    return ChunkManifest(_frompath(path); transport, readahead)
+    return ChunkManifest(_frompath(path, access); transport, readahead)
 end
