@@ -196,6 +196,128 @@ function _gt_striprows(data::AbstractMatrix, rowsperstrip::Integer)
     ]
 end
 
+# A placeholder TIFF tag value standing for the file offset of another page
+# in the same `_gt_buildpyramid` call, resolved once every page's own IFD
+# position is known. Used for tag 330 (SubIFDs), which names a child IFD by
+# its file position, and, in the cycle-guard test, for a SubIFDs entry that
+# deliberately names its own owning IFD.
+struct _GTPageRef
+    page::Int  # 1-based index into `pages`
+end
+
+_gt_rawvalue(typ::Integer, v::Real) =
+    typ == _GT_SHORT ? collect(reinterpret(UInt8, [UInt16(v)])) :
+    typ == _GT_LONG ? collect(reinterpret(UInt8, [UInt32(v)])) :
+    collect(reinterpret(UInt8, [Float64(v)]))
+
+# Builds a little-endian multi-IFD TIFF with hand-placed tag payloads and
+# pixel data: tags within each page are written in ascending order as TIFF
+# requires, and any tag payload over 4 bytes is placed out of line after
+# every page's IFD header, once every page's size (and so every out-of-line
+# offset) is fixed. Each page's own next-IFD pointer is given explicitly via
+# `nextof` rather than always chaining to the next page in the list, so a
+# SubIFD page can be written without joining the main chain; `_GTPageRef`
+# lets a tag value point at another page's own IFD offset once layout is
+# known. Assumes a little-endian host; no byte-swapping is applied to tag or
+# pixel values.
+#
+# `pages[i]` is a `(tag, type, values)` list, `values` either a number
+# vector (entries may be `_GTPageRef`) or an ASCII string. `nextof[i]` is the
+# 1-based index of the page that page `i` chains to via its own next-IFD
+# pointer, or `0` for a terminal IFD. `pixeldata[i]` is page `i`'s whole
+# image as raw bytes, written as that page's single strip: every page here
+# must declare exactly one STRIPOFFSETS/STRIPBYTECOUNTS (273/279) value,
+# with 273's value given as the placeholder `0` to be patched in.
+function _gt_buildpyramid(path, pages::Vector, nextof::Vector{Int}, pixeldata::Vector{Vector{UInt8}})
+    npages = length(pages)
+    sorted = [sort(collect(p); by=first) for p in pages]
+    ifdsizes = [2 + 12 * length(p) + 4 for p in sorted]
+    ifdoffset = Vector{Int}(undef, npages)
+    pos = 8
+    for i in 1:npages
+        ifdoffset[i] = pos
+        pos += ifdsizes[i]
+    end
+    tagpoolend = pos
+
+    # _GTPageRef only ever needs ifdoffset, which depends solely on entry
+    # counts above, so every reference can be resolved before any payload
+    # byte is written.
+    resolved = [
+        [(tag, typ, vals isa AbstractString ? vals : [v isa _GTPageRef ? ifdoffset[v.page] : v for v in vals])
+         for (tag, typ, vals) in p]
+        for p in sorted
+    ]
+
+    payload = UInt8[]
+    entries = Vector{Vector{Tuple{Int,Int,Int,Vector{UInt8}}}}()
+    for p in resolved
+        pageentries = Tuple{Int,Int,Int,Vector{UInt8}}[]
+        for (tag, typ, vals) in p
+            raw, count = if vals isa AbstractString
+                Vector{UInt8}(vals * "\0"), ncodeunits(vals) + 1
+            else
+                reduce(vcat, (_gt_rawvalue(typ, v) for v in vals); init=UInt8[]), length(vals)
+            end
+            field = if length(raw) <= 4
+                vcat(raw, zeros(UInt8, 4 - length(raw)))
+            else
+                f = collect(reinterpret(UInt8, [UInt32(tagpoolend + length(payload))]))
+                append!(payload, raw)
+                f
+            end
+            push!(pageentries, (Int(tag), Int(typ), count, field))
+        end
+        push!(entries, pageentries)
+    end
+
+    datastart = tagpoolend + length(payload)
+    dataoffset = Vector{Int}(undef, npages)
+    p = datastart
+    for i in 1:npages
+        dataoffset[i] = p
+        p += length(pixeldata[i])
+    end
+
+    for i in 1:npages
+        idx = findfirst(e -> e[1] == 273, entries[i])
+        idx === nothing && continue
+        tag, typ, cnt, _ = entries[i][idx]
+        cnt == 1 || error("_gt_buildpyramid: page $i has $cnt STRIPOFFSETS values, expected exactly 1")
+        entries[i][idx] = (tag, typ, cnt, collect(reinterpret(UInt8, [UInt32(dataoffset[i])])))
+    end
+
+    open(path, "w") do f
+        write(f, UInt8['I', 'I'], UInt16(42), UInt32(8))
+        for i in 1:npages
+            write(f, UInt16(length(entries[i])))
+            for (tag, typ, cnt, field) in entries[i]
+                write(f, UInt16(tag), UInt16(typ), UInt32(cnt), field)
+            end
+            write(f, UInt32(nextof[i] == 0 ? 0 : ifdoffset[nextof[i]]))
+        end
+        write(f, payload)
+        for i in 1:npages
+            write(f, pixeldata[i])
+        end
+    end
+    return path
+end
+
+# A page's base (non-geo) tag list for `_gt_buildpyramid`: one uncompressed
+# 16-bit strip holding the whole `width × height` image, with `sft` as its
+# NewSubfileType (254). STRIPOFFSETS (273) carries the placeholder `0`,
+# patched in by `_gt_buildpyramid`.
+_gt_pyramidtags(width, height, sft::Integer) = Any[
+    (256, _GT_LONG, [width]), (257, _GT_LONG, [height]), (258, _GT_SHORT, [16]),
+    (259, _GT_SHORT, [1]), (262, _GT_SHORT, [1]), (277, _GT_SHORT, [1]),
+    (278, _GT_LONG, [height]), (273, _GT_LONG, [0]), (279, _GT_LONG, [width * height * 2]),
+    (284, _GT_SHORT, [1]), (339, _GT_SHORT, [1]), (254, _GT_LONG, [sft]),
+]
+
+_gt_pyramidmatrix(width, height) = UInt16[10y + x for x in 1:width, y in 1:height]
+_gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyramidmatrix(width, height))))
+
 @testset "geotiff" begin
     @testset "candrive" begin
         @test !VirtualZarr.candrive(GeoTIFFDriver(), joinpath(mktempdir(), "missing.tif"))
@@ -617,6 +739,170 @@ end
             ]
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * nsp * 2)])
             @test_throws "BITSPERSAMPLE must be the same for every band" VirtualZarr.scan(GeoTIFFDriver(), path)
+        end
+
+        # A full-resolution page (width 9, height 4) plus two reduced-resolution
+        # overviews (ceil(9/2)=5, ceil(4/2)=2, then ceil(5/2)=3, ceil(2/2)=1):
+        # the odd width means neither overview's pixel count is exactly half its
+        # parent's, so a scale derived by assuming a factor of 2 would visibly
+        # disagree with one derived from the extent. Shared by every sub-testset
+        # below rather than rebuilt per assertion.
+        local group, va0, va1, va2, data0, data1, data2
+        @testset "main-chain pyramid: shapes, overview flags, exact pixels at every level" begin
+            path = joinpath(dir, "pyramid.tif")
+            geo0 = Any[
+                (33550, _GT_DOUBLE, [2.0, 3.0, 0.0]),
+                (33922, _GT_DOUBLE, [0.0, 0.0, 0.0, 100000.0, 500000.0, 0.0]),
+                (34735, _GT_SHORT, [1, 1, 0, 1, 3072, 0, 1, 32610]),  # EPSG:32610
+                (42113, UInt16(2), "9999"),  # GDAL_NODATA
+            ]
+            p0 = vcat(_gt_pyramidtags(9, 4, 0), geo0)
+            p1 = _gt_pyramidtags(5, 2, 1)
+            p2 = _gt_pyramidtags(3, 1, 1)
+            data0, data1, data2 = _gt_pyramidmatrix(9, 4), _gt_pyramidmatrix(5, 2), _gt_pyramidmatrix(3, 1)
+            pixeldata = [_gt_pyramidpixels(9, 4), _gt_pyramidpixels(5, 2), _gt_pyramidpixels(3, 1)]
+            _gt_buildpyramid(path, [p0, p1, p2], [2, 3, 0], pixeldata)
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            @test sort(collect(keys(VirtualZarr.arraysof(group)))) == ["0", "1", "2"]
+            va0, va1, va2 = VirtualZarr.arraysof(group)["0"], VirtualZarr.arraysof(group)["1"], VirtualZarr.arraysof(group)["2"]
+
+            @test shapeof(va0) == (9, 4)
+            @test shapeof(va1) == (5, 2)
+            @test shapeof(va2) == (3, 1)
+            @test attrsof(va0)["reduced_resolution"] == false
+            @test attrsof(va1)["reduced_resolution"] == true
+            @test attrsof(va2)["reduced_resolution"] == true
+            @test attrsof(va1)["parent"] == "0"
+            @test attrsof(va2)["parent"] == "0"
+
+            store = ManifestStore(group)
+            @test Array(Zarr.zopen(store; path="0")[:, :]) == data0
+            @test Array(Zarr.zopen(store; path="1")[:, :]) == data1
+            @test Array(Zarr.zopen(store; path="2")[:, :]) == data2
+        end
+
+        @testset "extent preservation: overview pixel scale derived from the extent, not an assumed factor" begin
+            gt0, gt1, gt2 = attrsof(va0)["GeoTransform"], attrsof(va1)["GeoTransform"], attrsof(va2)["GeoTransform"]
+
+            # width * scale (and height * scale) is the raster's total ground
+            # extent; it must be identical at every level.
+            @test 5 * gt1[1] ≈ 9 * gt0[1]
+            @test 2 * gt1[6] ≈ 4 * gt0[6]
+            @test 3 * gt2[1] ≈ 9 * gt0[1]
+            @test 1 * gt2[6] ≈ 4 * gt0[6]
+
+            # Assuming an integer factor of 2 would give scale 2*gt0[1] = 4.0;
+            # the extent-correct value, (9 * 2.0) / 5, is visibly different.
+            @test gt1[1] ≈ (9 * gt0[1]) / 5
+            @test !isapprox(gt1[1], 2 * gt0[1])
+
+            # The tiepoint names the same world point at every level, so pixel
+            # (1,1)'s outer edge coincides exactly...
+            corner0 = VirtualZarr.pixel_to_world(VirtualZarr.GeoTransform(Tuple(Float64.(gt0))), 1.0, 1.0)
+            corner1 = VirtualZarr.pixel_to_world(VirtualZarr.GeoTransform(Tuple(Float64.(gt1))), 1.0, 1.0)
+            @test corner0 == corner1
+
+            # ...while pixel centers sit half a (level-specific) pixel inward,
+            # so they differ between levels by exactly that level's half-pixel.
+            @test attrsof(va0)["x"][1] - corner0[1] ≈ gt0[1] / 2
+            @test attrsof(va1)["x"][1] - corner1[1] ≈ gt1[1] / 2
+            @test attrsof(va0)["x"][1] != attrsof(va1)["x"][1]
+        end
+
+        @testset "CRS and nodata inherited by reduced-resolution overviews" begin
+            @test attrsof(va0)["crs"] == "EPSG:32610"
+            @test attrsof(va1)["crs"] == "EPSG:32610"
+            @test attrsof(va2)["crs"] == "EPSG:32610"
+            @test fillvalueof(va0) == UInt16(9999)
+            @test fillvalueof(va1) == UInt16(9999)
+            @test fillvalueof(va2) == UInt16(9999)
+        end
+
+        @testset "an overview with its own ModelPixelScale/ModelTiepoint keeps them" begin
+            width, height = 4, 4
+            overwidth, overheight = 2, 2
+            path = joinpath(dir, "own_geo_overview.tif")
+            ownscale, owntiepoint = [9.0, 9.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            p0 = vcat(
+                _gt_pyramidtags(width, height, 0),
+                Any[
+                    (33550, _GT_DOUBLE, [1.0, 1.0, 0.0]),
+                    (33922, _GT_DOUBLE, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                    (34735, _GT_SHORT, [1, 1, 0, 1, 2048, 0, 1, 4326]),  # EPSG:4326
+                ],
+            )
+            p1 = vcat(
+                _gt_pyramidtags(overwidth, overheight, 1),
+                Any[(33550, _GT_DOUBLE, ownscale), (33922, _GT_DOUBLE, owntiepoint)],
+            )
+            pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(overwidth, overheight)]
+            _gt_buildpyramid(path, [p0, p1], [2, 0], pixeldata)
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            vaover = VirtualZarr.arraysof(group)["1"]
+            expected = VirtualZarr.geotransform_from_scale_tiepoint(ownscale, owntiepoint)
+            @test attrsof(vaover)["GeoTransform"] == collect(expected.matrix)
+            # The extent-derived value (4 * 1.0 / 2 = 2.0) would differ from the
+            # own scale (9.0) kept above, confirming the own tags took priority.
+            @test attrsof(vaover)["GeoTransform"][1] != 2.0
+        end
+
+        @testset "SubIFD (tag 330) overviews are found, keyed, and georeferenced" begin
+            width, height = 6, 4
+            subwidth, subheight = 3, 2
+            path = joinpath(dir, "subifd.tif")
+            p0 = vcat(
+                _gt_pyramidtags(width, height, 0),
+                Any[
+                    (33550, _GT_DOUBLE, [1.0, 1.0, 0.0]),
+                    (33922, _GT_DOUBLE, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                    (34735, _GT_SHORT, [1, 1, 0, 1, 3072, 0, 1, 32610]),
+                    (330, _GT_LONG, [_GTPageRef(2)]),  # SubIFDs: page 2 is the overview
+                ],
+            )
+            p1 = _gt_pyramidtags(subwidth, subheight, 1)
+            pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(subwidth, subheight)]
+            _gt_buildpyramid(path, [p0, p1], [0, 0], pixeldata)
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            @test sort(collect(keys(VirtualZarr.arraysof(group)))) == ["0", "0.sub1"]
+            vasub = VirtualZarr.arraysof(group)["0.sub1"]
+            @test shapeof(vasub) == (subwidth, subheight)
+            @test attrsof(vasub)["reduced_resolution"] == true
+            @test attrsof(vasub)["parent"] == "0"
+            @test attrsof(vasub)["crs"] == "EPSG:32610"
+            @test attrsof(vasub)["GeoTransform"][1] ≈ (width * 1.0) / subwidth
+
+            store = ManifestStore(group)
+            @test Array(Zarr.zopen(store; path="0.sub1")[:, :]) == _gt_pyramidmatrix(subwidth, subheight)
+        end
+
+        @testset "SubIFD cycle guard: a self-referencing SubIFDs offset errors rather than hangs" begin
+            width, height = 6, 4
+            path = joinpath(dir, "subifd_cycle.tif")
+            p0 = vcat(_gt_pyramidtags(width, height, 0), Any[(330, _GT_LONG, [_GTPageRef(1)])])  # points at itself
+            _gt_buildpyramid(path, [p0], [0], [_gt_pyramidpixels(width, height)])
+
+            task = @async VirtualZarr.scan(GeoTIFFDriver(), path)
+            status = timedwait(() -> istaskdone(task), 10.0)
+            @test status === :ok  # must terminate well within the timeout, not hang
+            status === :ok && @test_throws "revisits" fetch(task)
+        end
+
+        @testset "a transparency-mask page (NewSubfileType=4) is identifiable" begin
+            width, height = 4, 3
+            path = joinpath(dir, "mask.tif")
+            p0 = _gt_pyramidtags(width, height, 0)
+            pmask = _gt_pyramidtags(width, height, 4)
+            pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(width, height)]
+            _gt_buildpyramid(path, [p0, pmask], [2, 0], pixeldata)
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            vamask = VirtualZarr.arraysof(group)["1"]
+            @test attrsof(vamask)["mask"] == true
+            @test attrsof(vamask)["reduced_resolution"] == false
+            @test attrsof(vamask)["parent"] == "0"
         end
     end
 

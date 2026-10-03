@@ -67,20 +67,83 @@ function _gt_checkuniform(values::AbstractVector, nsp::Integer, name::AbstractSt
     return Int(first(vals))
 end
 
-# Reads every IFD's tags, fully resolving any TiffImages.RemoteData
-# placeholder to its real value. This never allocates a pixel buffer or
-# reads a strip/tile byte: `load!` only follows a tag's own remote-data
-# pointer, which is bounded by the tag's declared length, not the image size.
-function _gt_readifds(path::AbstractString)
-    return open(path, "r") do io
+# Reads every IFD reachable from `path`: the main chain (keyed "0", "1", ...)
+# and, for any main-chain page carrying a SubIFDs tag (330), its children
+# (keyed "<parentkey>.sub<i>", `forcedparent = parentkey`). Fully resolves
+# any TiffImages.RemoteData placeholder to its real value; never allocates a
+# pixel buffer or reads a strip/tile byte, since `load!` only follows a tag's
+# own remote-data pointer, bounded by the tag's declared length rather than
+# the image size.
+#
+# IFDs are walked by explicit offset rather than through TiffImages' own
+# chain iterator (`for ifd in tf`), because reading a SubIFD requires seeking
+# to an arbitrary file offset that iterator never visits, and because every
+# offset visited — main chain and SubIFDs alike — is checked against one
+# running set so a self-referencing or circular pointer in a malformed file
+# raises immediately instead of looping forever.
+function _gt_readpages(path::AbstractString)
+    pages = open(path, "r") do io
         tf = read(io, TiffImages.TiffFile)
-        result = TiffImages.IFD[]
-        for ifd in tf
+        visited = Set{Int}()
+        result = Tuple{String,TiffImages.IFD,Union{Nothing,String}}[]
+
+        offset = tf.first_offset
+        mainidx = 0
+        while offset > 0
+            offset in visited && throw(ArgumentError(
+                "$path: IFD chain revisits offset $offset; refusing to loop"
+            ))
+            push!(visited, offset)
+            seek(tf, offset)
+            ifd, nextoffset = read(tf, TiffImages.IFD)
             TiffImages.load!(tf, ifd)
-            push!(result, ifd)
+
+            key = string(mainidx)
+            push!(result, (key, ifd, nothing))
+            TiffImages.SUBIFD in ifd && append!(result, _gt_readsubifds(tf, ifd, key, path, visited))
+
+            offset = nextoffset
+            mainidx += 1
         end
         return result
     end
+    isempty(pages) && throw(ArgumentError("scan: \"$path\" has no image file directories"))
+    return pages
+end
+
+# One level of SubIFDs (tag 330): each array entry is the file offset of one
+# child IFD, keyed "<parentkey>.sub<i>" and forced to belong to `parentkey`
+# regardless of its own NewSubfileType. A child's own next-IFD pointer, or a
+# SubIFDs tag of its own, would describe a second level of nesting; both are
+# rejected by name rather than followed, so SubIFD indirection never recurses
+# past one level and cannot loop even before the shared `visited` guard would
+# catch a direct self-reference.
+function _gt_readsubifds(tf, parentifd, parentkey::AbstractString, path::AbstractString, visited::Set{Int})
+    offsets = _gt_asvector(parentifd[TiffImages.SUBIFD].data)
+    pages = Tuple{String,TiffImages.IFD,Union{Nothing,String}}[]
+    for (i, raw) in enumerate(offsets)
+        offset = Int(raw)
+        key = "$parentkey.sub$i"
+        offset in visited && throw(ArgumentError(
+            "$path: SubIFD \"$key\" at offset $offset revisits an already-read IFD; refusing to loop"
+        ))
+        push!(visited, offset)
+        seek(tf, offset)
+        ifd, nextoffset = read(tf, TiffImages.IFD)
+        TiffImages.load!(tf, ifd)
+
+        nextoffset == 0 || throw(ArgumentError(
+            "$path: SubIFD \"$key\" chains to a further IFD via its own next-IFD pointer; " *
+            "nesting deeper than one level is not supported"
+        ))
+        TiffImages.SUBIFD in ifd && throw(ArgumentError(
+            "$path: SubIFD \"$key\" itself declares a SubIFDs tag; nesting deeper than one " *
+            "level is not supported"
+        ))
+
+        push!(pages, (key, ifd, parentkey))
+    end
+    return pages
 end
 
 # "tiff_predictor" filter config via src/codecs/tiffpredictor.jl's
@@ -121,7 +184,16 @@ end
 # (when GeoKeyDirectoryTag identifies one) and a pixel-to-world affine
 # transform (when either ModelTransformationTag or the ModelPixelScaleTag +
 # ModelTiepointTag pair is present). `shape` is `(width, height)`.
-function _gt_geoattrs(ifd, shape, context::AbstractString)
+#
+# `inherit`, when not `nothing`, is the full-resolution primary's own
+# `(; pixelscale, tiepoint, crs, rastertype, width, height, fillvalue)` (see
+# `_gt_scanifd`): used only when this page has no geo tags of its own. Own
+# tags, when present, always take precedence over `inherit`.
+#
+# Returns `(attrs, owngeo)`, where `owngeo` is this page's own (uninherited)
+# `(; pixelscale, tiepoint, crs, rastertype)` — what a later page would cache
+# if this page turns out to be a full-resolution primary.
+function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
     pixelscale = TiffImages.MODELPIXELSCALE in ifd ? _gt_asvector(ifd[TiffImages.MODELPIXELSCALE].data) : nothing
     tiepoint = TiffImages.MODELTIEPOINT in ifd ? _gt_asvector(ifd[TiffImages.MODELTIEPOINT].data) : nothing
     transformation = _GT_MODELTRANSFORMATION in ifd ? _gt_asvector(ifd[_GT_MODELTRANSFORMATION].data) : nothing
@@ -137,22 +209,37 @@ function _gt_geoattrs(ifd, shape, context::AbstractString)
     else
         Dict{Int,Any}()
     end
-    if !isempty(geokeys)
-        crs = VirtualZarr.identify_crs(geokeys)
-        crs !== nothing && (attrs["crs"] = crs)
-    end
+    owncrs = isempty(geokeys) ? nothing : VirtualZarr.identify_crs(geokeys)
+    ownrastertype = get(geokeys, VirtualZarr.GEOKEY_GTRasterTypeGeoKey, VirtualZarr.RASTER_PIXEL_IS_AREA)
 
-    gt = if transformation !== nothing
-        VirtualZarr.geotransform(; transformation)
+    crs = owncrs !== nothing ? owncrs : (inherit === nothing ? nothing : inherit.crs)
+    crs !== nothing && (attrs["crs"] = crs)
+
+    width, height = shape
+    gt, rastertype = if transformation !== nothing
+        VirtualZarr.geotransform(; transformation), ownrastertype
     elseif pixelscale !== nothing && tiepoint !== nothing
-        VirtualZarr.geotransform(; pixelscale, tiepoints=tiepoint)
+        VirtualZarr.geotransform(; pixelscale, tiepoints=tiepoint), ownrastertype
+    elseif inherit !== nothing && inherit.pixelscale !== nothing && inherit.tiepoint !== nothing
+        # An overview covers the same ground as its full-resolution parent
+        # with fewer, larger pixels. GDAL sizes an overview as
+        # ceil(full / factor), not full / factor, so the true pixel-count
+        # ratio is not exactly the reduction factor whenever a dimension is
+        # odd; deriving the scale from the extent (parent width * parent
+        # scale, divided by this page's own width) is correct regardless,
+        # while assuming an integer factor would not be. The tiepoint names
+        # one world point shared by every level and is reused unchanged.
+        inheritedscale = [
+            inherit.width * inherit.pixelscale[1] / width,
+            inherit.height * inherit.pixelscale[2] / height,
+            inherit.pixelscale[3],
+        ]
+        VirtualZarr.geotransform(; pixelscale=inheritedscale, tiepoints=inherit.tiepoint), inherit.rastertype
     else
-        nothing
+        nothing, ownrastertype
     end
     if gt !== nothing
         attrs["GeoTransform"] = collect(gt.matrix)
-        width, height = shape
-        rastertype = get(geokeys, VirtualZarr.GEOKEY_GTRasterTypeGeoKey, VirtualZarr.RASTER_PIXEL_IS_AREA)
         x, y = VirtualZarr.pixel_coordinates(gt, width, height; rastertype)
         attrs["x"] = x
         attrs["y"] = y
@@ -160,7 +247,8 @@ function _gt_geoattrs(ifd, shape, context::AbstractString)
 
     gdalmetadata !== nothing && (attrs["GDALMetadata"] = gdalmetadata)
 
-    return attrs
+    owngeo = (; pixelscale, tiepoint, crs=owncrs, rastertype=ownrastertype)
+    return attrs, owngeo
 end
 
 function _gt_scantiled(
@@ -349,7 +437,10 @@ function _gt_scanplanar(
     return manifest, (chunkxy..., 1), compressor, filters
 end
 
-function _gt_scanifd(driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString)
+function _gt_scanifd(
+    driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
+    sft::Integer, parentkey::Union{Nothing,AbstractString}, primarygeo::Dict{String,Any}, ismain::Bool,
+)
     context = "$path: page \"$key\""
 
     width = Int(ifd[TiffImages.IMAGEWIDTH].data)
@@ -393,22 +484,61 @@ function _gt_scanifd(driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, p
         ((width, height), chunkshape2, manifest2, compressor, filters, ["x", "y"])
     end
 
-    attrs = _gt_geoattrs(ifd, (width, height), context)
-    fillvalue = _gt_fillvalue(T, ifd)
+    inherit = parentkey === nothing ? nothing : primarygeo[parentkey]
+    attrs, owngeo = _gt_geoattrs(ifd, (width, height), context; inherit)
 
-    return VirtualZarr.VirtualArray{T}(
+    # NewSubfileType (254): a bit field. Bit 0 marks a reduced-resolution
+    # overview, bit 1 one page of an otherwise-ordinary multi-page image, bit
+    # 2 a transparency mask. Absence (default 0) means a full-resolution
+    # primary image.
+    reduced = (sft & 0x1) != 0
+    mask = (sft & 0x4) != 0
+    attrs["NewSubfileType"] = sft
+    attrs["reduced_resolution"] = reduced
+    attrs["mask"] = mask
+    attrs["multipage"] = (sft & 0x2) != 0
+    parentkey !== nothing && (attrs["parent"] = parentkey)
+
+    fillvalue = _gt_fillvalue(T, ifd)
+    if fillvalue === nothing && inherit !== nothing && inherit.fillvalue !== nothing
+        fillvalue = T(inherit.fillvalue)
+    end
+
+    va = VirtualZarr.VirtualArray{T}(
         manifest, shape, chunkshape;
         fillvalue, compressor, filters, attrs, dimnames,
     )
+
+    # Only a full-resolution primary is ever referenced as a parent (a
+    # reduced-resolution or mask page always derives from one, never from
+    # another overview), so only primaries are worth caching here.
+    if ismain && !reduced && !mask
+        primarygeo[key] = (;
+            owngeo.pixelscale, owngeo.tiepoint, owngeo.crs, owngeo.rastertype, width, height, fillvalue,
+        )
+    end
+
+    return va
 end
 
 """
     scan(driver::GeoTIFFDriver, path::AbstractString) -> VirtualGroup
 
-Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each image file directory
-(page) becomes one array, keyed by its 0-based page index as a string
-("0", "1", ...), so a multi-page file — including a COG's reduced-resolution
-overview pages — scans without reading or decoding any strip or tile.
+Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each main-chain image file
+directory (page) becomes one array, keyed by its 0-based page index as a
+string ("0", "1", ...). A page's `SubIFDs` tag (330), when present, is
+followed one level deep and each child becomes its own array keyed
+`"<parentkey>.sub<i>"`. No strip or tile is read or decoded to do any of this.
+
+A page's `NewSubfileType` tag (254) is recorded in its array attributes as
+`"NewSubfileType"` (the raw value), `"reduced_resolution"`, `"mask"`, and
+`"multipage"` (its three bit flags), and, for a reduced-resolution or mask
+page, `"parent"` names the key of the full-resolution array it belongs to —
+the most recent main-chain page without either flag set, or the main-chain
+page owning its `SubIFDs` tag. Such a page inherits its parent's CRS and
+nodata fill value, and — unless it carries its own `ModelPixelScale` /
+`ModelTiepoint` — a pixel scale derived from the parent's extent (not an
+assumed resolution factor) and the parent's tiepoint unchanged.
 
 Supported layouts: any `SAMPLESPERPIXEL`, both `PLANARCONFIG` values, and
 byte-aligned sample widths. A single band keeps a 2-D `(x, y)` array; multiple
@@ -416,9 +546,11 @@ bands add a `"band"` dimension, ordered `(band, x, y)` for chunky data and
 `(x, y, band)` for planar data (see the module docstring comment for why).
 Rejected, by name, with an `ArgumentError`: sub-byte bit depths, `BITSPERSAMPLE`
 or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
-`PREDICTOR` values, and a striped layout whose final strip is shorter than
+`PREDICTOR` values, a striped layout whose final strip is shorter than
 `ROWSPERSTRIP` when that layout cannot be re-chunked around the gap (see
-`GeoTIFFDriver`'s docstring for the uncompressed case, which can).
+`GeoTIFFDriver`'s docstring for the uncompressed case, which can), a `SubIFDs`
+entry nesting deeper than one level, and any IFD offset — main chain or
+`SubIFDs` — revisited while scanning, which would otherwise loop forever.
 """
 function VirtualZarr.scan(driver::VirtualZarr.GeoTIFFDriver, path::AbstractString)
     isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
@@ -426,13 +558,22 @@ function VirtualZarr.scan(driver::VirtualZarr.GeoTIFFDriver, path::AbstractStrin
     table = VirtualZarr.PathTable()
     fileindex = VirtualZarr.push_uri!(table, abspath(path); size=filesize(path))
 
-    ifds = _gt_readifds(path)
-    isempty(ifds) && throw(ArgumentError("scan: \"$path\" has no image file directories"))
+    pages = _gt_readpages(path)
 
     arrays = Dict{String,VirtualZarr.VirtualArray}()
-    for (pageidx, ifd) in enumerate(ifds)
-        key = string(pageidx - 1)
-        arrays[key] = _gt_scanifd(driver, table, fileindex, ifd, path, key)
+    primarygeo = Dict{String,Any}()
+    lastfull = nothing
+    for (key, ifd, forcedparent) in pages
+        sft = Int(TiffImages.getdata(ifd, TiffImages.SUBFILETYPE, 0))
+        reduced = (sft & 0x1) != 0
+        mask = (sft & 0x4) != 0
+        ismain = !occursin('.', key)
+
+        parentkey = forcedparent !== nothing ? forcedparent : ((reduced || mask) ? lastfull : nothing)
+
+        arrays[key] = _gt_scanifd(driver, table, fileindex, ifd, path, key; sft, parentkey, primarygeo, ismain)
+
+        ismain && !reduced && !mask && (lastfull = key)
     end
 
     provenance = Dict{String,Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
