@@ -84,7 +84,7 @@ import Zarr
             fixturejson = """
             {
                 "version": 1,
-                "templates": {"u": "$dir"},
+                "templates": {"u": $(JSON.json(dir))},
                 "refs": {
                     ".zgroup": "{\\"zarr_format\\":2}",
                     ".zattrs": "{\\"title\\":\\"fixture\\"}",
