@@ -122,12 +122,13 @@ end
 # Merges attrs's entries into merged, throwing if a key already present
 # carries a different value. VirtualiZarr's experience with xarray silently
 # dropping conflicting attrs on concat is the reason this errors by default
-# instead of picking one side.
+# instead of picking one side. `context` is the whole prefix of the message,
+# so each caller names itself and the input it was reading.
 function _mergeattrs!(merged::Dict{String,Any}, attrs::Dict{String,Any}, context::AbstractString)
     for (k, v) in attrs
         if haskey(merged, k)
             merged[k] == v || throw(ArgumentError(
-                "concat: $context attribute \"$k\" = $(repr(v)) conflicts with " *
+                "$context attribute \"$k\" = $(repr(v)) conflicts with " *
                 "existing value $(repr(merged[k]))",
             ))
         else
@@ -218,7 +219,7 @@ function concat(
 
     mergedattrs = Dict{String,Any}()
     for (i, a) in enumerate(xs)
-        _mergeattrs!(mergedattrs, attrsof(a), "array $i's")
+        _mergeattrs!(mergedattrs, attrsof(a), "concat: array $i's")
     end
 
     mergedmanifest = concat(collect(AbstractChunkMap, chunkmapof.(xs)); dims, table)
@@ -289,7 +290,7 @@ function concat(
 
     mergedattrs = Dict{String,Any}()
     for (i, g) in enumerate(gs)
-        _mergeattrs!(mergedattrs, attrsof(g), "group $i's")
+        _mergeattrs!(mergedattrs, attrsof(g), "concat: group $i's")
     end
 
     provenance = Dict{String,Any}("driver" => "concat", "ninputs" => length(gs))

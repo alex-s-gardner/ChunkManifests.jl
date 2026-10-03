@@ -29,6 +29,39 @@ ZarrDatasets.ZarrDataset(cm)           # CommonDataModel
 YAXArrays.open_dataset(Zarr.zopen(cm))
 ```
 
+## Several files at once
+
+Files that hold *different* variables merge into one store, a layer per file, following
+`RasterStack(filenames; name)`. A file holding one array becomes that layer; a file holding
+several keeps its own keys beneath its name.
+
+```julia
+ChunkManifest(["elevation.tif", "slope.tif"])    # keys "elevation", "slope"
+ChunkManifest(["a.h5", "b.h5"])                  # keys "a/lat", "a/h", "b/lat", "b/h"
+```
+
+Files that are successive *slices* of one dataset are concatenated instead. Which dimension
+they lie along cannot be recovered from the files without reading and ordering their
+coordinate values, so it is declared, following `RasterSeries(paths, Ti)` then
+`Rasters.combine`:
+
+```julia
+ser = ManifestSeries(sort(readdir("granules"; join=true)), :time)
+cm  = ChunkManifests.combine(ser)
+```
+
+Each array is handled on its own: one naming `time` is concatenated along it, while a
+coordinate like `x` is left as the first member's copy. `combine`'s `check` keyword decides
+how hard the members are compared on those uncombined arrays — `:shape` (the default,
+free), `:values` (decodes and compares, so it reads chunks), or `:none`.
+
+Every member but the last must end on a chunk boundary along the concatenation dimension:
+Zarr permits a partial chunk only as a grid's last one, so a 10-long axis chunked by 4
+cannot be followed by anything. That is rejected outright rather than producing a manifest
+that reads garbage.
+
+`combine` is not exported, because Rasters exports one of its own.
+
 ## Scope
 
 **Read-only with respect to data, single-shot with respect to manifests.** It scans, serves

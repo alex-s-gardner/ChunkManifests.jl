@@ -59,12 +59,32 @@ function _scalename(f, ref::HDF5.Reference)
     end
 end
 
+# NAME attribute libhdf5 gives a dimension scale that has no variable behind
+# it. It names no dimension, so a scale carrying it falls back to generic
+# names like any other dataset.
+const _PHONY_SCALE_NAME = "This is a netCDF dimension but not a netCDF variable."
+
+# A dimension scale names the dimension it *is*, through its own NAME
+# attribute and with no DIMENSION_LIST: a NetCDF4 coordinate variable is the
+# scale for its own single dimension. Restricted to one dimension because that
+# is the only shape for which NAME identifies which axis it refers to.
+function _ownscalename(dset, N)
+    N == 1 || return nothing
+    a = HDF5.attrs(dset)
+    (haskey(a, "CLASS") && haskey(a, "NAME")) || return nothing
+    HDF5.read_attribute(dset, "CLASS") == "DIMENSION_SCALE" || return nothing
+    nm = HDF5.read_attribute(dset, "NAME")
+    nm isa AbstractString || return nothing
+    (isempty(nm) || startswith(nm, _PHONY_SCALE_NAME)) && return nothing
+    return [String(nm)]
+end
+
 # NetCDF4 records dimension scales on each variable as DIMENSION_LIST, one
 # entry per HDF5 (C-order) storage dimension. Julia's dimension order is the
 # reverse of HDF5's storage order (see zarray_json), so the scale names come
 # back reversed to line up with ManifestArray's Julia-order dimnames.
 function _dimnames(f, dset, N)
-    haskey(HDF5.attrs(dset), "DIMENSION_LIST") || return nothing
+    haskey(HDF5.attrs(dset), "DIMENSION_LIST") || return _ownscalename(dset, N)
     dl = HDF5.read_attribute(dset, "DIMENSION_LIST")
     length(dl) == N || return nothing
     any(isempty, dl) && return nothing

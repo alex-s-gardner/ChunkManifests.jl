@@ -187,8 +187,47 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             @test filtersof(grounded) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
             @test dimnamesof(grounded) == ["x", "y"]
         end
+
+        @testset "NetCDF4 coordinate variables name their own dimension" begin
+            # x and y are dimension scales with no DIMENSION_LIST of their own,
+            # so their names come from the CLASS/NAME pair instead.
+            x = arraysof(scan(HDF5Driver(), ITSLIVE_PATH; group="/x"))["x"]
+            y = arraysof(scan(HDF5Driver(), ITSLIVE_PATH; group="/y"))["y"]
+            @test dimnamesof(x) == ["x"]
+            @test dimnamesof(y) == ["y"]
+            @test !haskey(attrsof(x), "NAME")
+            @test !haskey(attrsof(x), "CLASS")
+        end
     else
         @warn "ItsLiveMasks fixture not found; skipping NetCDF4 HDF5Driver tests" ITSLIVE_PATH
+    end
+
+    @testset "dimension scale names" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "scales.h5")
+        h5open(fn, "w") do f
+            named = create_dataset(f, "lon", datatype(Int32), dataspace((4,)); chunk=(2,))
+            write(named, Int32.(1:4))
+            HDF5.API.h5ds_set_scale(named, "lon")
+
+            # libhdf5 gives a dimension with no variable behind it this exact
+            # name, which identifies no dimension.
+            phony = create_dataset(f, "anon", datatype(Int32), dataspace((4,)); chunk=(2,))
+            write(phony, Int32.(1:4))
+            HDF5.API.h5ds_set_scale(
+                phony, "This is a netCDF dimension but not a netCDF variable.        4"
+            )
+
+            # Two dimensions, so NAME cannot say which axis it refers to.
+            square = create_dataset(f, "square", datatype(Int32), dataspace((4, 4)); chunk=(2, 2))
+            write(square, reshape(Int32.(1:16), 4, 4))
+            HDF5.API.h5ds_set_scale(square, "square")
+        end
+
+        @test dimnamesof(arraysof(scan(HDF5Driver(), fn; group="/lon"))["lon"]) == ["lon"]
+        @test dimnamesof(arraysof(scan(HDF5Driver(), fn; group="/anon"))["anon"]) == ["dim_1"]
+        @test dimnamesof(arraysof(scan(HDF5Driver(), fn; group="/square"))["square"]) ==
+            ["dim_1", "dim_2"]
     end
 
     @testset "synthetic fixtures" begin

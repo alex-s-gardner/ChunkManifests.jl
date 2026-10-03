@@ -28,6 +28,8 @@ include("serialize/zarrnative.jl")
 include("serialize/kerchunkjson.jl")
 include("combine/combine.jl")
 include("frompath.jl")
+include("combine/merge.jl")
+include("combine/series.jl")
 
 export AbstractChunkMap, ExplicitChunkMap, AffineChunkMap
 export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
@@ -37,7 +39,7 @@ export AbstractDriver, HDF5Driver, GeoTIFFDriver, scan
 export SourceAccess, AutoAccess, LocalAccess, DownloadAccess, ROS3Access
 export ManifestFormat, ZarrManifest, KerchunkJSON, KerchunkParquet
 export ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK
-export FileEntry, PathTable, ManifestArray, ChunkManifest
+export FileEntry, PathTable, ManifestArray, ChunkManifest, ManifestSeries
 export chunkgridaxes, chunkgridsize, chunkstate, chunklocation, inlinebytes
 export manifestversion, pathtable
 export uriof, push_uri!, seturi!, replace_prefix!
@@ -45,6 +47,7 @@ export fetchrange, fetchranges, objectsize
 export concat, validate, setchunk!
 export chunkmapof, shapeof, chunkshapeof, fillvalueof, compressorof, filtersof
 export attrsof, dimnamesof, arraysof, provenanceof, transportof
+export membersof, dimnameof
 
 function __init__()
     _register_tiff_predictor!()

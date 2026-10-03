@@ -251,6 +251,39 @@ struct ChunkManifest <: Zarr.AbstractStore
 end
 
 """
+    ManifestSeries(members, dim)
+    ManifestSeries(paths, dim; access=AutoAccess())
+
+An ordered set of [`ChunkManifest`](@ref)s declared to lie along the dimension
+named `dim`, which `ChunkManifests.combine` concatenates into one manifest.
+
+The declaration is the whole point: which dimension a set of files is stacked
+along cannot be recovered from the files themselves without reading and
+ordering their coordinate values, which this package does not do. `dim` states
+it, and the members stay in the order given.
+
+Dimensions are named rather than numbered because one number cannot serve a
+whole group: `time` is dimension 3 of a data variable and dimension 1 of its
+own coordinate. Arrays that do not name `dim` at all are not concatenated —
+only one member's copy of `x` or `y` survives — which is what
+`combine`'s `check` keyword governs.
+"""
+struct ManifestSeries
+    members::Vector{ChunkManifest}
+    dimname::String
+
+    function ManifestSeries(members, dimname)
+        ms = collect(ChunkManifest, members)
+        isempty(ms) && throw(ArgumentError(
+            "ManifestSeries: no manifests given; a series needs at least one member"
+        ))
+        nm = String(string(dimname))
+        isempty(nm) && throw(ArgumentError("ManifestSeries: the dimension name is empty"))
+        return new(ms, nm)
+    end
+end
+
+"""
     ManifestFormat
 
 An on-disk representation of a [`ChunkManifest`](@ref). Formats are types rather
@@ -471,8 +504,14 @@ download.
 """
 function objectsize end
 
-# Combining and integrity.
+# Combining and integrity. `combine` is deliberately not exported: Rasters
+# exports a `combine` of its own, and `using Rasters, ChunkManifests` would
+# otherwise make the bare name ambiguous for exactly the pair of packages a
+# caller here is likely to have loaded.
 function concat end
+function combine end
+function membersof end
+function dimnameof end
 function validate end
 function setchunk! end
 function coalesce_ranges end
