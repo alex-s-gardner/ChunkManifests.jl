@@ -28,8 +28,8 @@ end
     HDF5_IO
 
 Guards every call into libhdf5 made while scanning: libhdf5 is not
-thread-safe. Reading a scanned [`VirtualGroup`](@ref) through a
-[`ManifestStore`](@ref) never touches libhdf5, so no lock is needed there.
+thread-safe. Reading a scanned [`ChunkManifest`](@ref) through a
+Reading a [`ChunkManifest`](@ref) never touches libhdf5, so no lock is needed there.
 """
 const HDF5_IO = ReentrantLock()
 
@@ -62,7 +62,7 @@ end
 # NetCDF4 records dimension scales on each variable as DIMENSION_LIST, one
 # entry per HDF5 (C-order) storage dimension. Julia's dimension order is the
 # reverse of HDF5's storage order (see zarray_json), so the scale names come
-# back reversed to line up with VirtualArray's Julia-order dimnames.
+# back reversed to line up with ManifestArray's Julia-order dimnames.
 function _dimnames(f, dset, N)
     haskey(HDF5.attrs(dset), "DIMENSION_LIST") || return nothing
     dl = HDF5.read_attribute(dset, "DIMENSION_LIST")
@@ -134,12 +134,12 @@ function _scanchunked(table, fileindex, dset, ::Type{T}, itemsize, context::Abst
     compressor, filters = build_codecs(HDF5Driver, pipeline, itemsize; context)
     check_last_filter_multibyte(filters, T, context)
 
-    manifest = ChunkManifest(table, index, offset, nbytes)
+    manifest = ExplicitChunkMap(table, index, offset, nbytes)
     return manifest, chunkshape, compressor, filters
 end
 
 # A contiguous HDF5 dataset is one unbroken, uncompressed, unfiltered block,
-# so it is exactly the regular layout AffineManifest exists for: a single
+# so it is exactly the regular layout AffineChunkMap exists for: a single
 # grid cell whose byte range is the dataset's own file offset and storage
 # size.
 function _scancontiguous(table, dset, shape, context::AbstractString)
@@ -152,7 +152,7 @@ function _scancontiguous(table, dset, shape, context::AbstractString)
     gridsize = ntuple(_ -> 1, N)
     strides = ntuple(_ -> UInt64(0), N)
 
-    manifest = AffineManifest(table, gridsize, UInt64(base), strides, UInt32(chunkbytes))
+    manifest = AffineChunkMap(table, gridsize, UInt64(base), strides, UInt32(chunkbytes))
     return manifest, shape, nothing, Dict{String,Any}[]
 end
 
@@ -187,7 +187,7 @@ function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractStri
     dimnames = something(_dimnames(f, dset, N), ["dim_$i" for i in 1:N])
     attrs = _datasetattrs(dset)
 
-    arrays[dsetpath] = VirtualArray{T}(
+    arrays[dsetpath] = ManifestArray{T}(
         manifest, shape, chunkshape; fillvalue, compressor, filters, attrs, dimnames
     )
     return nothing
@@ -211,17 +211,17 @@ function _walk!(arrays, table, fileindex, f, group, prefix::AbstractString, file
 end
 
 """
-    scan(driver::HDF5Driver, path::AbstractString; group::AbstractString="/") -> VirtualGroup
+    scan(driver::HDF5Driver, path::AbstractString; group::AbstractString="/") -> ChunkManifest
 
 Scan the HDF5 or NetCDF4 file at `path`, starting from `group` (the file
-root, `"/"`, by default). Returns a [`VirtualGroup`](@ref) whose array keys
+root, `"/"`, by default). Returns a [`ChunkManifest`](@ref) whose array keys
 are the HDF5 paths of its datasets relative to `group`, joined with `"/"`,
 and whose manifests point into `path` without reading or decoding any
 chunk's bytes. If `group` names a dataset rather than a group, the result
 holds that one array, keyed by its own name.
 
-Chunked datasets become a [`ChunkManifest`](@ref); contiguous datasets
-become an [`AffineManifest`](@ref) of one block. A chunk HDF5 never
+Chunked datasets become a [`ExplicitChunkMap`](@ref); contiguous datasets
+become an [`AffineChunkMap`](@ref) of one block. A chunk HDF5 never
 allocated is recorded as [`MISSING_INDEX`](@ref) so a read returns the
 array's fill value for it. Every filter in a dataset's pipeline is mapped to
 a Zarr v2 codec via [`build_codecs`](@ref); a filter with no byte-compatible
@@ -234,7 +234,7 @@ function scan(driver::HDF5Driver, path::AbstractString; group::AbstractString="/
     isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
 
     table = PathTable()
-    arrays = Dict{String,VirtualArray}()
+    arrays = Dict{String,ManifestArray}()
     groupattrs = Dict{String,Any}()
 
     lock(HDF5_IO) do
@@ -257,7 +257,7 @@ function scan(driver::HDF5Driver, path::AbstractString; group::AbstractString="/
     end
 
     provenance = Dict{String,Any}("driver" => "HDF5Driver", "scanned_at" => time())
-    return VirtualGroup(; arrays, attrs=groupattrs, provenance)
+    return ChunkManifest(; arrays, attrs=groupattrs, provenance)
 end
 
 register_codec!(HDF5Driver, 1, COMPRESSOR, (cd, itemsize) -> Dict{String,Any}("id" => "zlib", "level" => Int(cd[1])))

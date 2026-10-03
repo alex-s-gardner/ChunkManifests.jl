@@ -56,6 +56,17 @@ URI of entry `i`.
 """
 uriof(t::PathTable, i) = t.entries[i].uri
 
+# Adds every entry of `t` to `merged`, returning a vector mapping `t`'s own
+# 1-based row numbers to their row in `merged`.
+function _remaptable!(merged::PathTable, t::PathTable)
+    remap = Vector{UInt32}(undef, length(t))
+    for i in eachindex(remap)
+        entry = t[i]
+        remap[i] = push_uri!(merged, entry.uri; etag=entry.etag, size=entry.size, mtime=entry.mtime)
+    end
+    return remap
+end
+
 Base.length(t::PathTable) = length(t.entries)
 
 """

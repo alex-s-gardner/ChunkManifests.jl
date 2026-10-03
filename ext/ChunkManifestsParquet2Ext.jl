@@ -1,6 +1,6 @@
-module VirtualZarrParquet2Ext
+module ChunkManifestsParquet2Ext
 
-using VirtualZarr
+using ChunkManifests
 using Parquet2
 using PooledArrays
 
@@ -16,7 +16,7 @@ _refsfilename(f::Integer) = string("refs.", f, ".parq")
 
 # Ancestor group paths implied by nested array keys: "grp/sub/var" implies
 # "grp" and "grp/sub". The root group "" is always included.
-function _grouppaths(group::VirtualGroup)
+function _grouppaths(group::ChunkManifest)
     paths = Set{String}([""])
     for key in keys(arraysof(group))
         parts = split(key, '/')
@@ -31,12 +31,12 @@ end
 # document, keyed by its path (root group documents are bare ".zgroup" /
 # ".zattrs", never nested under a path). These keys are not written as files;
 # fsspec's lazy reader only ever looks them up inside `.zmetadata`.
-function _metadatadoc(group::VirtualGroup)
+function _metadatadoc(group::ChunkManifest)
     metadata = Dict{String,Any}()
     for gp in _grouppaths(group)
         zgroupkey = isempty(gp) ? ".zgroup" : "$gp/.zgroup"
         zattrskey = isempty(gp) ? ".zattrs" : "$gp/.zattrs"
-        metadata[zgroupkey] = VirtualZarr.JSON.parse(String(VirtualZarr.zgroup_json()))
+        metadata[zgroupkey] = ChunkManifests.JSON.parse(String(ChunkManifests.zgroup_json()))
         metadata[zattrskey] = isempty(gp) ? copy(attrsof(group)) : Dict{String,Any}()
     end
     for (key, va) in arraysof(group)
@@ -46,8 +46,8 @@ function _metadatadoc(group::VirtualGroup)
             "dimensions, so a scalar array's single chunk has no row coordinate " *
             "in this format",
         ))
-        metadata["$key/.zarray"] = VirtualZarr.JSON.parse(String(VirtualZarr.zarray_json(va)))
-        metadata["$key/.zattrs"] = VirtualZarr.JSON.parse(String(VirtualZarr.zattrs_json(va)))
+        metadata["$key/.zarray"] = ChunkManifests.JSON.parse(String(ChunkManifests.zarray_json(va)))
+        metadata["$key/.zattrs"] = ChunkManifests.JSON.parse(String(ChunkManifests.zattrs_json(va)))
     end
     return metadata
 end
@@ -59,9 +59,9 @@ _emptycolumns(n::Integer) = (
     Vector{Union{Vector{UInt8},Missing}}(missing, n),
 )
 
-function _writearrayrefs(dir::AbstractString, key::AbstractString, va::VirtualArray, recordsize::Integer)
+function _writearrayrefs(dir::AbstractString, key::AbstractString, va::ManifestArray, recordsize::Integer)
     mkpath(dir)
-    m = manifestof(va)
+    m = chunkmapof(va)
     gridaxes = chunkgridaxes(m)
     cis = CartesianIndices(gridaxes)
     totalchunks = length(cis)
@@ -125,7 +125,7 @@ function _writearrayrefs(dir::AbstractString, key::AbstractString, va::VirtualAr
 end
 
 """
-    save(path, group::VirtualGroup, fmt::KerchunkParquet) -> String
+    save(path, group::ChunkManifest, fmt::KerchunkParquet) -> String
 
 Write `group` to the directory `path` (created if needed) as kerchunk's
 Parquet reference-set format: one `<path>/<field>/refs.N.parq` file per
@@ -138,8 +138,8 @@ Zarr v2 metadata and `fmt.recordsize` itself.
 recognize this format. Throws for a zero-dimensional array, which this
 format cannot address. Returns `path`.
 """
-function VirtualZarr.save(
-    path::AbstractString, group::VirtualGroup, fmt::VirtualZarr.KerchunkParquet
+function ChunkManifests.save(
+    path::AbstractString, group::ChunkManifest, fmt::ChunkManifests.KerchunkParquet
 )
     mkpath(path)
     metadata = _metadatadoc(group)
@@ -153,7 +153,7 @@ function VirtualZarr.save(
         "record_size" => fmt.recordsize,
         "zarr_consolidated_format" => 1,
     )
-    write(joinpath(path, ".zmetadata"), VirtualZarr.JSON.json(zmeta))
+    write(joinpath(path, ".zmetadata"), ChunkManifests.JSON.json(zmeta))
     return path
 end
 
@@ -165,7 +165,7 @@ function _loadarray(
     # order against this package's Julia order); undo that here.
     shape = NTuple{N,Int}(reverse(Int.(zarraydoc["shape"])))
     chunkshape = NTuple{N,Int}(reverse(Int.(zarraydoc["chunks"])))
-    T = VirtualZarr.Zarr.typestr(zarraydoc["dtype"]::AbstractString)
+    T = ChunkManifests.Zarr.typestr(zarraydoc["dtype"]::AbstractString)
     gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
     gridaxes = map(Base.OneTo, gridsize)
     cis = CartesianIndices(gridaxes)
@@ -204,10 +204,10 @@ function _loadarray(
             s = sizecol[row]
             r = rawcol[row]
             if r !== missing
-                index[I] = VirtualZarr.INLINE_INDEX
+                index[I] = ChunkManifests.INLINE_INDEX
                 inline[I] = Vector{UInt8}(r)
             elseif p === missing
-                # index[I] is already VirtualZarr.MISSING_INDEX (zero).
+                # index[I] is already ChunkManifests.MISSING_INDEX (zero).
             elseif o == 0 && s == 0
                 throw(ArgumentError(
                     "load: array \"$key\" chunk $(Tuple(I)) is a whole-object " *
@@ -224,7 +224,7 @@ function _loadarray(
         end
     end
 
-    manifest = ChunkManifest(table, index, offset, nbytes; inline)
+    manifest = ExplicitChunkMap(table, index, offset, nbytes; inline)
 
     attrs = Dict{String,Any}(zattrsdoc)
     dimnames = haskey(attrs, "_ARRAY_DIMENSIONS") ?
@@ -234,7 +234,7 @@ function _loadarray(
     compressor = zarraydoc["compressor"]
     filters = zarraydoc["filters"]
 
-    return VirtualArray{T}(
+    return ManifestArray{T}(
         manifest, shape, chunkshape;
         fillvalue=zarraydoc["fill_value"],
         compressor=compressor === nothing ? nothing : Dict{String,Any}(compressor),
@@ -246,12 +246,12 @@ function _loadarray(
 end
 
 """
-    load(path, fmt::KerchunkParquet) -> VirtualGroup
+    load(path, fmt::KerchunkParquet) -> ChunkManifest
 
-Read a [`VirtualGroup`](@ref) previously written by [`save`](@ref) to
-the directory `path`. Every array comes back as a [`ChunkManifest`](@ref):
+Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
+the directory `path`. Every array comes back as a [`ExplicitChunkMap`](@ref):
 this format records one explicit reference per chunk, so an
-[`AffineManifest`](@ref)'s closed-form relationship between chunk index and
+[`AffineChunkMap`](@ref)'s closed-form relationship between chunk index and
 byte offset cannot be recovered, only reproduced chunk by chunk.
 
 Not implemented: a kerchunk whole-object reference (`offset == 0 == size`
@@ -262,12 +262,12 @@ to do. `fmt.recordsize` must match the directory's own recorded
 `record_size`; group `provenance` is not part of the kerchunk schema and
 comes back empty.
 """
-function VirtualZarr.load(path::AbstractString, fmt::VirtualZarr.KerchunkParquet)
+function ChunkManifests.load(path::AbstractString, fmt::ChunkManifests.KerchunkParquet)
     zmetapath = joinpath(path, ".zmetadata")
     isfile(zmetapath) || throw(ArgumentError(
         "load: \"$path\" has no .zmetadata; not a KerchunkParquet directory"
     ))
-    doc = VirtualZarr.JSON.parse(read(zmetapath, String))
+    doc = ChunkManifests.JSON.parse(read(zmetapath, String))
     metadata = doc["metadata"]
     recordsize = Int(doc["record_size"])
     recordsize == fmt.recordsize || throw(ArgumentError(
@@ -276,7 +276,7 @@ function VirtualZarr.load(path::AbstractString, fmt::VirtualZarr.KerchunkParquet
         "KerchunkParquet(; recordsize=$recordsize) to match",
     ))
 
-    arrays = Dict{String,VirtualArray}()
+    arrays = Dict{String,ManifestArray}()
     for k in keys(metadata)
         endswith(k, "/.zarray") || continue
         key = chop(k; tail=length("/.zarray"))
@@ -285,7 +285,7 @@ function VirtualZarr.load(path::AbstractString, fmt::VirtualZarr.KerchunkParquet
     end
 
     groupattrs = Dict{String,Any}(get(metadata, ".zattrs", Dict{String,Any}()))
-    return VirtualGroup(; arrays, attrs=groupattrs)
+    return ChunkManifest(; arrays, attrs=groupattrs)
 end
 
-end # module VirtualZarrParquet2Ext
+end # module ChunkManifestsParquet2Ext

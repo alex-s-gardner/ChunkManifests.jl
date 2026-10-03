@@ -17,7 +17,7 @@
 # raises `ArgumentError` for a range past end-of-file; a range request past
 # the end of a remote object fails the same way) instead of silently
 # returning fewer bytes than the chunk key promised. The value is
-# `typemax(Int64)`, not `typemax(UInt64)`: `ManifestStore`'s readahead
+# `typemax(Int64)`, not `typemax(UInt64)`: the readahead
 # planner and `Zarr.storagesize` both narrow a chunk's `nbytes` to `Int`
 # while scanning neighboring chunks, including ones nobody asked to read
 # yet, so a value `Int` cannot hold would throw there instead of at the
@@ -63,15 +63,15 @@ function _juliadtype(dtype, path, key)
 end
 
 # parse_chunkkey only consults shapeof/chunkshapeof, so a throwaway
-# VirtualArray over an AffineManifest sized to match the real chunk grid is
+# ManifestArray over an AffineChunkMap sized to match the real chunk grid is
 # enough to reuse it before the real manifest exists; it is discarded once
 # the chunk loop below finishes.
 function _chunkkeyparser(shape::NTuple{N,Int}, chunkshape::NTuple{N,Int}) where {N}
     gridsize = cld.(shape, chunkshape)
     table = PathTable()
     push_uri!(table, "")
-    manifest = AffineManifest(table, gridsize, UInt64(0), ntuple(_ -> UInt64(0), N), UInt32(0))
-    return VirtualArray{UInt8}(manifest, shape, chunkshape)
+    manifest = AffineChunkMap(table, gridsize, UInt64(0), ntuple(_ -> UInt64(0), N), UInt32(0))
+    return ManifestArray{UInt8}(manifest, shape, chunkshape)
 end
 
 # One ref value, decoded into one of the schema's four shapes and returned
@@ -137,7 +137,7 @@ function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, 
         "$path: array \"$arraypath\": \"shape\" has $N dimensions but \"chunks\" has " *
         "$(length(zarraydoc["chunks"]))",
     ))
-    # Zarr v2 is C-ordered; VirtualArray is Julia (column-major) order. This
+    # Zarr v2 is C-ordered; ManifestArray is Julia (column-major) order. This
     # is the one point where shape/chunks are reversed back, the inverse of
     # zarray_json's own reversal on write.
     shape = NTuple{N,Int}(reverse(Int.(zarraydoc["shape"])))
@@ -178,14 +178,14 @@ function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, 
         end
     end
 
-    manifest = ChunkManifest(table, index, offset, nbytes; inline)
+    manifest = ExplicitChunkMap(table, index, offset, nbytes; inline)
     attrs, dimnames = _attrsanddimnames(zattrsdoc, N)
     fillvalue = get(zarraydoc, "fill_value", nothing)
     compressor = get(zarraydoc, "compressor", nothing)
     filters = get(zarraydoc, "filters", nothing)
     filters = filters === nothing ? Dict{String,Any}[] : Vector{Dict{String,Any}}(filters)
 
-    return VirtualArray{T}(manifest, shape, chunkshape; fillvalue, compressor, filters, attrs, dimnames)
+    return ManifestArray{T}(manifest, shape, chunkshape; fillvalue, compressor, filters, attrs, dimnames)
 end
 
 # Every "/"-separated proper prefix of an array path that is not itself an
@@ -201,8 +201,8 @@ function _implicitgroups(arraypaths)
     return prefixes
 end
 
-function _writechunks!(refs, arraypath, va::VirtualArray, fmt::KerchunkJSON, transport::AbstractTransport)
-    m = manifestof(va)
+function _writechunks!(refs, arraypath, va::ManifestArray, fmt::KerchunkJSON, transport::AbstractTransport)
+    m = chunkmapof(va)
     for I in CartesianIndices(chunkgridaxes(m))
         state = chunkstate(m, I)
         # Absent from refs is how kerchunk expresses "no chunk, use fill_value".
@@ -224,7 +224,7 @@ function _writechunks!(refs, arraypath, va::VirtualArray, fmt::KerchunkJSON, tra
 end
 
 """
-    save(path, group::VirtualGroup, fmt::KerchunkJSON; transport=LocalTransport())
+    save(path, group::ChunkManifest, fmt::KerchunkJSON; transport=LocalTransport())
 
 Write `group` as a kerchunk JSON reference-set document to `path`.
 
@@ -237,7 +237,7 @@ byte-range references; `inlinethreshold = 0` embeds nothing. No `templates`
 section is written, matching real kerchunk drivers.
 """
 function save(
-    path::AbstractString, group::VirtualGroup, fmt::KerchunkJSON;
+    path::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
     transport::AbstractTransport=LocalTransport(),
 )
     arrays = arraysof(group)
@@ -256,16 +256,16 @@ function save(
         _writechunks!(refs, arraypath, va, fmt, transport)
     end
 
-    doc = Dict{String,Any}("version" => MANIFEST_FORMAT_VERSION, "refs" => refs)
+    doc = Dict{String,Any}("version" => KERCHUNK_REFERENCE_VERSION, "refs" => refs)
     write(path, JSON.json(doc))
     return nothing
 end
 
 """
-    load(path, fmt::KerchunkJSON) -> VirtualGroup
+    load(path, fmt::KerchunkJSON) -> ChunkManifest
 
 Read a kerchunk JSON reference-set document from `path` into a
-[`VirtualGroup`](@ref).
+[`ChunkManifest`](@ref).
 
 Accepts all four `refs` entry shapes (`[url, offset, length]`, `[url]`,
 a plain string, and a `"base64:..."` string) and substitutes `templates`
@@ -281,9 +281,9 @@ function load(path::AbstractString, ::KerchunkJSON)
         "$path: top-level kerchunk document must be a JSON object, got $(typeof(doc))"
     ))
     haskey(doc, "version") || throw(ArgumentError("$path: missing required \"version\" key"))
-    doc["version"] == 1 || throw(ArgumentError(
+    doc["version"] == KERCHUNK_REFERENCE_VERSION || throw(ArgumentError(
         "$path: unsupported kerchunk reference-set version $(repr(doc["version"])); " *
-        "only version 1 is supported",
+        "only version $KERCHUNK_REFERENCE_VERSION is supported",
     ))
     haskey(doc, "gen") && throw(ArgumentError(
         "$path: \"gen\" (programmatic reference generation) is not supported; " *
@@ -316,7 +316,7 @@ function load(path::AbstractString, ::KerchunkJSON)
     end
 
     table = PathTable()
-    arrays = Dict{String,VirtualArray}()
+    arrays = Dict{String,ManifestArray}()
     for (arraypath, zarraydoc) in zarraydocs
         leaves = get(chunkleaves, arraypath, Pair{String,Any}[])
         zattrsdoc = get(zattrsdocs, arraypath, nothing)
@@ -324,5 +324,5 @@ function load(path::AbstractString, ::KerchunkJSON)
     end
 
     provenance = Dict{String,Any}("format" => "KerchunkJSON", "path" => String(path))
-    return VirtualGroup(; arrays, attrs=rootattrs, provenance)
+    return ChunkManifest(; arrays, attrs=rootattrs, provenance)
 end

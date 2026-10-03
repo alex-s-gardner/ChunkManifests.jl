@@ -22,7 +22,7 @@ original value rather than saturate or throw. Julia's fixed-width integer
 
 Registered with Zarr.jl under the filter id `"tiff_predictor"`, a name this
 package invented: it is not part of the Zarr or numcodecs specifications. A
-`.zarray` document naming it is readable by VirtualZarr.jl but not by Python
+`.zarray` document naming it is readable by ChunkManifests.jl but not by Python
 `zarr`/`numcodecs` or any other Zarr implementation.
 """
 struct TIFFPredictor{T} <: Zarr.Filter{T,T}
@@ -143,14 +143,14 @@ function tiffpredictor_config(predictor::Integer, ::Type{T}, width::Integer, sam
     predictor == 1 && return nothing
     predictor == 2 && return JSON.lower(TIFFPredictor{T}(width, samplesperpixel))
     predictor == 3 && throw(ArgumentError(
-        "TIFF Predictor 3 (floating-point) is not implemented in VirtualZarr; its decode " *
+        "TIFF Predictor 3 (floating-point) is not implemented in ChunkManifests; its decode " *
         "has not been verified against a known answer, so it is refused rather than risk " *
         "silently corrupting floating-point data"
     ))
     throw(ArgumentError("unknown TIFF Predictor value $predictor; TIFF defines only 1, 2 and 3"))
 end
 
-# Called from VirtualZarr.__init__ to register the codec with Zarr.
+# Called from ChunkManifests.__init__ to register the codec with Zarr.
 function _register_tiff_predictor!()
     haskey(Zarr.filterdict, "tiff_predictor") && return nothing
     Zarr.filterdict["tiff_predictor"] = TIFFPredictor

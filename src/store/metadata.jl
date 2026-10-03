@@ -29,7 +29,7 @@ function zarr_dtype_string(::Type{T}) where {T}
 end
 
 """
-    zarray_json(va::VirtualArray) -> Vector{UInt8}
+    zarray_json(va::ManifestArray) -> Vector{UInt8}
 
 Zarr v2 `.zarray` document for `va`.
 
@@ -40,7 +40,7 @@ This looks like a transposition bug to anyone unaware of the convention, but
 it is exactly what makes Zarr.jl's own parser — which reverses `shape` and
 `chunks` again on read — recover the original Julia-order sizes.
 """
-function zarray_json(va::VirtualArray{T,N}) where {T,N}
+function zarray_json(va::ManifestArray{T,N}) where {T,N}
     filters = filtersof(va)
     doc = Dict{String,Any}(
         "zarr_format" => 2,
@@ -56,7 +56,7 @@ function zarray_json(va::VirtualArray{T,N}) where {T,N}
 end
 
 """
-    zattrs_json(va::VirtualArray) -> Vector{UInt8}
+    zattrs_json(va::ManifestArray) -> Vector{UInt8}
 
 Zarr `.zattrs` document for `va`: the source attributes plus a derived
 `_ARRAY_DIMENSIONS` entry.
@@ -66,7 +66,7 @@ reverses it to recover dimension names for `Rasters.jl`/`DimensionalData.jl`.
 That entry is derived from `va.dimnames` here, in Zarr's C order, rather than
 read from `va.attrs`, so the two cannot disagree.
 """
-function zattrs_json(va::VirtualArray)
+function zattrs_json(va::ManifestArray)
     doc = copy(attrsof(va))
     doc["_ARRAY_DIMENSIONS"] = reverse(dimnamesof(va))
     return Vector{UInt8}(JSON.json(doc))
@@ -80,16 +80,16 @@ Zarr v2 `.zgroup` document.
 zgroup_json() = Vector{UInt8}(JSON.json(Dict{String,Any}("zarr_format" => 2)))
 
 """
-    chunkkey(va::VirtualArray{T,N}, I::CartesianIndex{N}) -> String
+    chunkkey(va::ManifestArray{T,N}, I::CartesianIndex{N}) -> String
 
 Zarr v2 chunk key for the 1-based Julia chunk index `I`.
 """
-function chunkkey(::VirtualArray{T,N}, I::CartesianIndex{N}) where {T,N}
+function chunkkey(::ManifestArray{T,N}, I::CartesianIndex{N}) where {T,N}
     return Zarr.citostring(_V2_CHUNK_KEY_ENCODING, I)
 end
 
 """
-    parse_chunkkey(va::VirtualArray{T,N}, key::AbstractString) -> Union{Nothing,CartesianIndex{N}}
+    parse_chunkkey(va::ManifestArray{T,N}, key::AbstractString) -> Union{Nothing,CartesianIndex{N}}
 
 Inverse of [`chunkkey`](@ref): the 1-based Julia chunk index that `key`
 encodes, or `nothing` if `key` is not a valid chunk key for `va`'s chunk
@@ -98,7 +98,7 @@ an index outside the chunk grid. Returning `nothing` rather than throwing
 lets a store distinguish chunk keys from metadata keys (`.zarray`, `.zattrs`,
 ...) without special-casing them first.
 """
-function parse_chunkkey(va::VirtualArray{T,N}, key::AbstractString) where {T,N}
+function parse_chunkkey(va::ManifestArray{T,N}, key::AbstractString) where {T,N}
     if N == 0
         return key == "0" ? CartesianIndex() : nothing
     end

@@ -2,7 +2,7 @@
 # LocalTransport, it adds no fetchranges override of its own.
 struct DummyTransport <: AbstractTransport end
 
-function VirtualZarr.fetchrange(::DummyTransport, uri::AbstractString, r::ByteRange)
+function ChunkManifests.fetchrange(::DummyTransport, uri::AbstractString, r::ByteRange)
     path = startswith(uri, "file://") ? chop(uri; head=7, tail=0) : uri
     isfile(path) || throw(ArgumentError("no such file: $path"))
     sz = filesize(path)
@@ -42,7 +42,7 @@ end
         BR = ByteRange
 
         @testset "single range" begin
-            merged, mapping = VirtualZarr.coalesce_ranges(
+            merged, mapping = ChunkManifests.coalesce_ranges(
                 [BR(10, 5)]; maxgap=64, maxblock=1024
             )
             @test merged == [BR(10, 5)]
@@ -50,7 +50,7 @@ end
         end
 
         @testset "empty input" begin
-            merged, mapping = VirtualZarr.coalesce_ranges(
+            merged, mapping = ChunkManifests.coalesce_ranges(
                 BR[]; maxgap=64, maxblock=1024
             )
             @test merged == BR[]
@@ -59,52 +59,52 @@ end
 
         @testset "adjacent ranges merge" begin
             ranges = [BR(0, 10), BR(10, 10)]
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=64, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=64, maxblock=1024)
             @test merged == [BR(0, 20)]
             @test mapping == [(1, UInt64(0)), (1, UInt64(10))]
         end
 
         @testset "gap within maxgap merges" begin
             ranges = [BR(0, 10), BR(20, 10)] # gap of 10
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=10, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=10, maxblock=1024)
             @test merged == [BR(0, 30)]
             @test mapping == [(1, UInt64(0)), (1, UInt64(20))]
         end
 
         @testset "gap beyond maxgap does not merge" begin
             ranges = [BR(0, 10), BR(21, 10)] # gap of 11
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=10, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=10, maxblock=1024)
             @test merged == [BR(0, 10), BR(21, 10)]
             @test mapping == [(1, UInt64(0)), (2, UInt64(0))]
         end
 
         @testset "gap exactly maxgap is a boundary that merges" begin
             ranges = [BR(0, 10), BR(20, 10)] # gap of 10, maxgap = 10
-            merged, _ = VirtualZarr.coalesce_ranges(ranges; maxgap=10, maxblock=1024)
+            merged, _ = ChunkManifests.coalesce_ranges(ranges; maxgap=10, maxblock=1024)
             @test merged == [BR(0, 30)]
 
             ranges2 = [BR(0, 10), BR(21, 10)] # gap of 11, maxgap = 10: just over
-            merged2, _ = VirtualZarr.coalesce_ranges(ranges2; maxgap=10, maxblock=1024)
+            merged2, _ = ChunkManifests.coalesce_ranges(ranges2; maxgap=10, maxblock=1024)
             @test merged2 == [BR(0, 10), BR(21, 10)]
         end
 
         @testset "maxblock forces a split despite a zero gap" begin
             ranges = [BR(0, 60), BR(60, 60)] # contiguous, total 120 bytes
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=64, maxblock=100)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=64, maxblock=100)
             @test merged == [BR(0, 60), BR(60, 60)]
             @test mapping == [(1, UInt64(0)), (2, UInt64(0))]
         end
 
         @testset "a single range larger than maxblock is kept whole" begin
             ranges = [BR(0, 200)]
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=64, maxblock=100)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=64, maxblock=100)
             @test merged == [BR(0, 200)]
             @test mapping == [(1, UInt64(0))]
         end
 
         @testset "unsorted input preserves caller order in mapping" begin
             ranges = [BR(50, 10), BR(0, 10), BR(25, 10)]
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=5, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=5, maxblock=1024)
             # all three are far enough apart not to merge with maxgap=5
             @test length(merged) == 3
             # mapping[k] must still describe ranges[k], regardless of internal sort order
@@ -118,35 +118,35 @@ end
 
         @testset "overlapping ranges merge" begin
             ranges = [BR(0, 10), BR(5, 10)] # overlap 5..10
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
             @test merged == [BR(0, 15)]
             @test mapping == [(1, UInt64(0)), (1, UInt64(5))]
         end
 
         @testset "duplicate ranges merge" begin
             ranges = [BR(10, 5), BR(10, 5)]
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
             @test merged == [BR(10, 5)]
             @test mapping == [(1, UInt64(0)), (1, UInt64(0))]
         end
 
         @testset "zero-length ranges" begin
             ranges = [BR(10, 0), BR(10, 5), BR(15, 0)]
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
             @test merged == [BR(10, 5)]
             @test mapping[1] == (1, UInt64(0))
             @test mapping[2] == (1, UInt64(0))
             @test mapping[3] == (1, UInt64(5))
 
             # a lone zero-length range produces a zero-length merged block
-            merged2, mapping2 = VirtualZarr.coalesce_ranges([BR(7, 0)]; maxgap=0, maxblock=1024)
+            merged2, mapping2 = ChunkManifests.coalesce_ranges([BR(7, 0)]; maxgap=0, maxblock=1024)
             @test merged2 == [BR(7, 0)]
             @test mapping2 == [(1, UInt64(0))]
         end
 
         @testset "mapping axes match non-1-based input axes" begin
             ranges = _TestOffsetVector([BR(0, 5), BR(10, 5)], 0) # indices 0:1
-            merged, mapping = VirtualZarr.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
+            merged, mapping = ChunkManifests.coalesce_ranges(ranges; maxgap=0, maxblock=1024)
             @test axes(mapping) == axes(ranges)
             for k in eachindex(ranges)
                 bi, off = mapping[k]
@@ -155,16 +155,16 @@ end
         end
 
         @testset "invalid maxgap/maxblock fail fast" begin
-            @test_throws "maxgap" VirtualZarr.coalesce_ranges([BR(0, 1)]; maxgap=-1, maxblock=10)
-            @test_throws "maxblock" VirtualZarr.coalesce_ranges([BR(0, 1)]; maxgap=0, maxblock=0)
+            @test_throws "maxgap" ChunkManifests.coalesce_ranges([BR(0, 1)]; maxgap=-1, maxblock=10)
+            @test_throws "maxblock" ChunkManifests.coalesce_ranges([BR(0, 1)]; maxgap=0, maxblock=0)
         end
     end
 
     @testset "trait defaults" begin
         t = LocalTransport()
-        @test VirtualZarr.maxgap(t) == 64 * 1024
-        @test VirtualZarr.maxblock(t) == 256 * 1024 * 1024
-        @test VirtualZarr.concurrency(t) == 4
+        @test ChunkManifests.maxgap(t) == 64 * 1024
+        @test ChunkManifests.maxblock(t) == 256 * 1024 * 1024
+        @test ChunkManifests.concurrency(t) == 4
     end
 
     @testset "fetchrange generic fallback throws" begin

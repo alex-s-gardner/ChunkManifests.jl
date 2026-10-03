@@ -14,10 +14,10 @@
 #                                 one entry per array: its shape, chunkshape,
 #                                 dtype, fill value, compressor, filters,
 #                                 attrs and dimnames (all in Julia dimension
-#                                 order, as VirtualArray stores them), plus
+#                                 order, as ManifestArray stores them), plus
 #                                 its manifest: a PathTable, and either an
-#                                 AffineManifest's handful of fields or a
-#                                 ChunkManifest's chunk grid size, inline-chunk
+#                                 AffineChunkMap's handful of fields or a
+#                                 ExplicitChunkMap's chunk grid size, inline-chunk
 #                                 bytes, and the name of its column directory.
 #     arrays/<n>/index/        -- Zarr v2 array of UInt32 over the chunk grid.
 #     arrays/<n>/offset/       -- Zarr v2 array of UInt64, delta-filtered.
@@ -27,7 +27,7 @@
 # manifest.json as each array's "dir", rather than derived from the array's
 # own Zarr path: that path may be "" or nest ("grp/sub/c"), which is not safe
 # to reuse directly as a directory name alongside sibling arrays. An
-# AffineManifest array has no `arrays/<n>/` directory at all: its fields are
+# AffineChunkMap array has no `arrays/<n>/` directory at all: its fields are
 # O(1) and live entirely in manifest.json.
 #
 # The three column arrays share one array's chunk grid shape, addressed in
@@ -91,7 +91,7 @@ function _cartesian_from_key(key::AbstractString, N::Integer)
     return CartesianIndex(ntuple(d -> parse(Int, parts[d]), N))
 end
 
-function _save_chunkmanifest(dir::AbstractString, manifest::ChunkManifest{N}, fmt::ZarrManifest) where {N}
+function _save_chunkmanifest(dir::AbstractString, manifest::ExplicitChunkMap{N}, fmt::ZarrManifest) where {N}
     gridaxes = chunkgridaxes(manifest)
     gridsize = chunkgridsize(manifest)
 
@@ -140,11 +140,12 @@ function _save_chunkmanifest(dir::AbstractString, manifest::ChunkManifest{N}, fm
     )
 end
 
-function _save_affinemanifest(manifest::AffineManifest)
+function _save_affinemanifest(manifest::AffineChunkMap)
     return Dict{String,Any}(
         "kind" => "affine",
         "gridsize" => collect(manifest.gridsize),
         "pathtable" => _pathtable_to_json(manifest.table),
+        "fileindex" => manifest.fileindex,
         "base" => manifest.base,
         "strides" => collect(manifest.strides),
         "chunkbytes" => manifest.chunkbytes,
@@ -152,12 +153,12 @@ function _save_affinemanifest(manifest::AffineManifest)
 end
 
 """
-    save(path, group::VirtualGroup, fmt::ZarrManifest) -> String
+    save(path, group::ChunkManifest, fmt::ZarrManifest) -> String
 
 Write `group` to the directory `path` (created if needed) as a [`ZarrManifest`](@ref).
 Returns `path`.
 """
-function save(path::AbstractString, group::VirtualGroup, fmt::ZarrManifest)
+function save(path::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
     mkpath(path)
     arraysdir = joinpath(path, _ZARR_MANIFEST_ARRAYS_DIR)
 
@@ -165,7 +166,7 @@ function save(path::AbstractString, group::VirtualGroup, fmt::ZarrManifest)
     dircounter = 0
     for key in sort!(collect(keys(arraysof(group))))
         va = arraysof(group)[key]
-        manifest = manifestof(va)
+        manifest = chunkmapof(va)
 
         doc = Dict{String,Any}(
             "path" => key,
@@ -179,12 +180,12 @@ function save(path::AbstractString, group::VirtualGroup, fmt::ZarrManifest)
             "dimnames" => dimnamesof(va),
         )
 
-        if manifest isa ChunkManifest
+        if manifest isa ExplicitChunkMap
             dirname = string(dircounter)
             dircounter += 1
             doc["dir"] = dirname
             doc["manifest"] = _save_chunkmanifest(joinpath(arraysdir, dirname), manifest, fmt)
-        elseif manifest isa AffineManifest
+        elseif manifest isa AffineChunkMap
             doc["dir"] = nothing
             doc["manifest"] = _save_affinemanifest(manifest)
         else
@@ -226,7 +227,7 @@ function _load_chunkmanifest(dir::AbstractString, table::PathTable, gridsize::NT
         inline[_cartesian_from_key(keystr, N)] = Base64.base64decode(b64)
     end
 
-    return ChunkManifest(table, index, offset, nbytes; inline)
+    return ExplicitChunkMap(table, index, offset, nbytes; inline)
 end
 
 function _load_manifestpart(path::AbstractString, arraydoc)
@@ -244,7 +245,10 @@ function _load_manifestpart(path::AbstractString, arraydoc)
         return _load_chunkmanifest(dir, table, gridsize, mdoc)
     elseif kind == "affine"
         strides = NTuple{length(mdoc["strides"]),UInt64}(mdoc["strides"])
-        return AffineManifest(table, gridsize, UInt64(mdoc["base"]), strides, UInt32(mdoc["chunkbytes"]))
+        return AffineChunkMap(
+            table, gridsize, UInt64(mdoc["base"]), strides, UInt32(mdoc["chunkbytes"]);
+            fileindex=mdoc["fileindex"],
+        )
     else
         throw(ArgumentError(
             "load: unrecognized manifest kind $(repr(kind)) for array $(repr(arraydoc["path"]))"
@@ -253,10 +257,10 @@ function _load_manifestpart(path::AbstractString, arraydoc)
 end
 
 """
-    load(path, fmt::ZarrManifest) -> VirtualGroup
+    load(path, fmt::ZarrManifest) -> ChunkManifest
 
-Read a [`VirtualGroup`](@ref) previously written by [`save`](@ref) to
-the directory `path`. A `ChunkManifest`'s columns are opened as `Zarr.ZArray`s
+Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
+the directory `path`. A `ExplicitChunkMap`'s columns are opened as `Zarr.ZArray`s
 rather than materialized, so a manifest larger than memory can be read back
 lazily.
 """
@@ -276,7 +280,7 @@ function load(path::AbstractString, fmt::ZarrManifest)
         "load: \"$jsonpath\" has format_version $(repr(version)), expected $MANIFEST_FORMAT_VERSION",
     ))
 
-    arrays = Dict{String,VirtualArray}()
+    arrays = Dict{String,ManifestArray}()
     for arraydoc in doc["arrays"]
         key = arraydoc["path"]::AbstractString
         T = Zarr.typestr(arraydoc["dtype"]::AbstractString)
@@ -284,7 +288,7 @@ function load(path::AbstractString, fmt::ZarrManifest)
         shape = Tuple(arraydoc["shape"])
         chunkshape = Tuple(arraydoc["chunkshape"])
 
-        arrays[key] = VirtualArray{T}(
+        arrays[key] = ManifestArray{T}(
             manifest, shape, chunkshape;
             fillvalue=arraydoc["fillvalue"],
             compressor=arraydoc["compressor"],
@@ -294,7 +298,7 @@ function load(path::AbstractString, fmt::ZarrManifest)
         )
     end
 
-    return VirtualGroup(;
+    return ChunkManifest(;
         arrays,
         attrs=Dict{String,Any}(doc["group_attrs"]),
         provenance=Dict{String,Any}(doc["provenance"]),

@@ -29,20 +29,20 @@ import Zarr
             offset = zeros(UInt64, gridsize)
             nbytes = zeros(UInt64, gridsize)
             for I in CartesianIndices(gridsize)
-                fname = joinpath(dir, Zarr.citostring(VirtualZarr._V2_CHUNK_KEY_ENCODING, I))
+                fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
                 index[I] = push_uri!(table, fname)
                 nbytes[I] = filesize(fname)
             end
-            manifest = ChunkManifest(table, index, offset, nbytes)
-            va = VirtualArray{Float64}(manifest, shape, chunkshape; fillvalue, compressor, dimnames)
-            group = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}("arr" => va),
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{Float64}(manifest, shape, chunkshape; fillvalue, compressor, dimnames)
+            group = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("arr" => va),
                 attrs=Dict{String,Any}("title" => "roundtrip"),
             )
 
             manifestpath = joinpath(dir, "refs.json")
-            VirtualZarr.save(manifestpath, group, KerchunkJSON())
-            loaded = VirtualZarr.load(manifestpath, KerchunkJSON())
+            ChunkManifests.save(manifestpath, group, KerchunkJSON())
+            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
 
             @test attrsof(loaded) == attrsof(group)
             va2 = arraysof(loaded)["arr"]
@@ -55,7 +55,7 @@ import Zarr
             @test dimnamesof(va2) == dimnamesof(va)
             @test attrsof(va2) == attrsof(va)
 
-            m2 = manifestof(va2)
+            m2 = chunkmapof(va2)
             for I in CartesianIndices(chunkgridaxes(manifest))
                 @test chunkstate(manifest, I) == chunkstate(m2, I)
                 if chunkstate(manifest, I) == VIRTUAL_CHUNK
@@ -63,8 +63,8 @@ import Zarr
                 end
             end
 
-            zv1 = Zarr.zopen(ManifestStore(group))["arr"]
-            zv2 = Zarr.zopen(ManifestStore(loaded))["arr"]
+            zv1 = Zarr.zopen(group)["arr"]
+            zv2 = Zarr.zopen(loaded)["arr"]
             @test zv1[:, :, :] == data
             @test zv2[:, :, :] == data
             @test zv1[:, :, :] == zv2[:, :, :]
@@ -100,7 +100,7 @@ import Zarr
             manifestpath = joinpath(dir, "fixture.json")
             write(manifestpath, fixturejson)
 
-            group = VirtualZarr.load(manifestpath, KerchunkJSON())
+            group = ChunkManifests.load(manifestpath, KerchunkJSON())
             @test attrsof(group) == Dict{String,Any}("title" => "fixture")
 
             va = arraysof(group)["arr"]
@@ -110,7 +110,7 @@ import Zarr
             @test fillvalueof(va) == UInt8(255)
             @test dimnamesof(va) == ["x"]
 
-            m = manifestof(va)
+            m = chunkmapof(va)
             expecteduri = "$dir/data.bin"
 
             @test chunkstate(m, CartesianIndex(1)) == VIRTUAL_CHUNK
@@ -127,7 +127,7 @@ import Zarr
             uri1, off1, len1 = chunklocation(m, CartesianIndex(2))
             @test uri1 == expecteduri
             @test off1 == 0
-            @test len1 == VirtualZarr._WHOLE_OBJECT_NBYTES
+            @test len1 == ChunkManifests._WHOLE_OBJECT_NBYTES
             @test_throws "exceeds size" fetchrange(LocalTransport(), uri1, ByteRange(off1, len1))
 
             @test chunkstate(m, CartesianIndex(3)) == INLINE_CHUNK
@@ -138,7 +138,7 @@ import Zarr
 
             @test chunkstate(m, CartesianIndex(5)) == MISSING_CHUNK
 
-            zv = Zarr.zopen(ManifestStore(group))["arr"]
+            zv = Zarr.zopen(group)["arr"]
             @test zv[1] == 42
             @test zv[3] == 0x41
             @test zv[4] == 0x00
@@ -154,24 +154,24 @@ import Zarr
             table = PathTable()
             idx = push_uri!(table, path)
             gridsize = (4,)
-            index = UInt32[idx, VirtualZarr.MISSING_INDEX, idx, idx]
+            index = UInt32[idx, ChunkManifests.MISSING_INDEX, idx, idx]
             offset = UInt64[0, 0, 2, 3]
             nbytes = fill(UInt64(1), gridsize)
-            manifest = ChunkManifest(table, index, offset, nbytes)
-            va = VirtualArray{UInt8}(manifest, (4,), (1,); fillvalue=UInt8(9), dimnames=["i"])
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("arr" => va))
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{UInt8}(manifest, (4,), (1,); fillvalue=UInt8(9), dimnames=["i"])
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("arr" => va))
 
             manifestpath = joinpath(dir, "refs.json")
-            VirtualZarr.save(manifestpath, group, KerchunkJSON())
+            ChunkManifests.save(manifestpath, group, KerchunkJSON())
 
             doc = JSON.parse(read(manifestpath, String))
             @test haskey(doc["refs"], "arr/0")
             @test !haskey(doc["refs"], "arr/1")
 
-            loaded = VirtualZarr.load(manifestpath, KerchunkJSON())
-            @test chunkstate(manifestof(arraysof(loaded)["arr"]), CartesianIndex(2)) == MISSING_CHUNK
+            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
+            @test chunkstate(chunkmapof(arraysof(loaded)["arr"]), CartesianIndex(2)) == MISSING_CHUNK
 
-            zv = Zarr.zopen(ManifestStore(loaded))["arr"]
+            zv = Zarr.zopen(loaded)["arr"]
             @test zv[1] == 1
             @test zv[2] == 9
             @test zv[3] == 3
@@ -191,26 +191,26 @@ import Zarr
             index = fill(idx, gridsize)
             offset = UInt64[0, 1, 2, 3, 4, 5]
             nbytes = fill(UInt64(1), gridsize)
-            manifest = ChunkManifest(table, index, offset, nbytes)
-            va = VirtualArray{UInt8}(manifest, (6,), (1,); dimnames=["i"])
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("arr" => va))
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{UInt8}(manifest, (6,), (1,); dimnames=["i"])
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("arr" => va))
 
             manifestpath = joinpath(dir, "refs.json")
-            VirtualZarr.save(manifestpath, group, KerchunkJSON(; inlinethreshold=2))
+            ChunkManifests.save(manifestpath, group, KerchunkJSON(; inlinethreshold=2))
 
             doc = JSON.parse(read(manifestpath, String))
             for k in 0:5
                 @test startswith(doc["refs"]["arr/$k"], "base64:")
             end
 
-            loaded = VirtualZarr.load(manifestpath, KerchunkJSON())
-            m2 = manifestof(arraysof(loaded)["arr"])
+            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
+            m2 = chunkmapof(arraysof(loaded)["arr"])
             for I in CartesianIndices(gridsize)
                 @test chunkstate(m2, I) == INLINE_CHUNK
                 @test inlinebytes(m2, I) == [vals[I[1]]]
             end
 
-            zv = Zarr.zopen(ManifestStore(loaded))["arr"]
+            zv = Zarr.zopen(loaded)["arr"]
             @test zv[:] == vals
         end
     end
@@ -228,23 +228,23 @@ import Zarr
                 index = UInt32[push_uri!(table, u) for u in uris]
                 offset = zeros(UInt64, n)
                 nbytes = fill(UInt64(1), n)
-                manifest = ChunkManifest(table, index, offset, nbytes)
-                return VirtualArray{UInt8}(manifest, (n,), (1,); dimnames=["i"])
+                manifest = ExplicitChunkMap(table, index, offset, nbytes)
+                return ManifestArray{UInt8}(manifest, (n,), (1,); dimnames=["i"])
             end
 
             va_a = _onebytearray([pathA, pathA, pathB, pathB])
             va_b = _onebytearray([pathB, pathA, pathA, pathB])
-            group = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}("a" => va_a, "grp/b" => va_b)
+            group = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("a" => va_a, "grp/b" => va_b)
             )
 
             manifestpath = joinpath(dir, "refs.json")
-            VirtualZarr.save(manifestpath, group, KerchunkJSON())
-            loaded = VirtualZarr.load(manifestpath, KerchunkJSON())
+            ChunkManifests.save(manifestpath, group, KerchunkJSON())
+            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
 
             @test Set(keys(arraysof(loaded))) == Set(["a", "grp/b"])
-            table_a = pathtable(manifestof(arraysof(loaded)["a"]))
-            table_b = pathtable(manifestof(arraysof(loaded)["grp/b"]))
+            table_a = pathtable(chunkmapof(arraysof(loaded)["a"]))
+            table_b = pathtable(chunkmapof(arraysof(loaded)["grp/b"]))
             @test table_a === table_b
             @test length(table_a) == 2
         end
@@ -258,13 +258,13 @@ import Zarr
                 return path
             end
 
-            @test_throws "missing required \"version\"" VirtualZarr.load(
+            @test_throws "missing required \"version\"" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}("refs" => Dict{String,Any}()))), KerchunkJSON()
             )
-            @test_throws "unsupported kerchunk reference-set version" VirtualZarr.load(
+            @test_throws "unsupported kerchunk reference-set version" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}("version" => 2, "refs" => Dict{String,Any}()))), KerchunkJSON()
             )
-            @test_throws "programmatic reference generation" VirtualZarr.load(
+            @test_throws "programmatic reference generation" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}("version" => 1, "gen" => [], "refs" => Dict{String,Any}()))),
                 KerchunkJSON(),
             )
@@ -278,14 +278,14 @@ import Zarr
                 "compressor" => nothing, "fill_value" => nothing, "order" => "C", "filters" => nothing,
             ))
 
-            @test_throws "no faithful round trip" VirtualZarr.load(
+            @test_throws "no faithful round trip" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1, "refs" => Dict{String,Any}("arr/.zarray" => badzarray)
                 ))),
                 KerchunkJSON(),
             )
 
-            @test_throws "does not parse for array" VirtualZarr.load(
+            @test_throws "does not parse for array" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1,
                     "refs" => Dict{String,Any}("arr/.zarray" => okzarray, "arr/notachunk" => "unused"),
@@ -293,7 +293,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "1 or 3 elements" VirtualZarr.load(
+            @test_throws "1 or 3 elements" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1,
                     "refs" => Dict{String,Any}("arr/.zarray" => okzarray, "arr/0" => [1, 2, 3, 4]),
@@ -301,7 +301,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "a reference value must be" VirtualZarr.load(
+            @test_throws "a reference value must be" ChunkManifests.load(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1,
                     "refs" => Dict{String,Any}("arr/.zarray" => okzarray, "arr/0" => 42),

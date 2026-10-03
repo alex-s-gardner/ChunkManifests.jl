@@ -1,4 +1,4 @@
-name = "VirtualZarr"
+name = "ChunkManifests"
 uuid = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
 version = "0.1.0-DEV"
 authors = ["Alex S. Gardner, JPL/NASA"]
@@ -24,9 +24,9 @@ PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 TiffImages = "731e570b-9d59-4bfa-96dc-6df516fadf69"
 
 [extensions]
-VirtualZarrAWSS3Ext = "AWSS3"
-VirtualZarrParquet2Ext = ["Parquet2", "PooledArrays"]
-VirtualZarrTiffImagesExt = "TiffImages"
+ChunkManifestsAWSS3Ext = "AWSS3"
+ChunkManifestsParquet2Ext = ["Parquet2", "PooledArrays"]
+ChunkManifestsTiffImagesExt = "TiffImages"
 
 [compat]
 AWSS3 = "0.10, 0.11"

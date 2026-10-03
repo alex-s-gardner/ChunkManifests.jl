@@ -1,12 +1,13 @@
-using VirtualZarr
+using ChunkManifests
 using Test
 
-@testset "VirtualZarr.jl" begin
+@testset verbose=true "ChunkManifests.jl" begin
     include("pathtable.jl")
-    include("manifest.jl")
-    include("virtualarray.jl")
+    include("chunkmap.jl")
+    include("manifestarray.jl")
     include("transport.jl")
     include("http.jl")
+    include("containers.jl")
     include("metadata.jl")
     include("store.jl")
     include("readahead.jl")

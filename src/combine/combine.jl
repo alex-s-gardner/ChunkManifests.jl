@@ -2,35 +2,17 @@
 #
 # Three independent operations, each usable on its own: concat(::Manifest...)
 # does pure grid stacking with no knowledge of what the grid means; concat(::
-# VirtualArray...) validates that the arrays describe compatible Zarr
+# ManifestArray...) validates that the arrays describe compatible Zarr
 # metadata and then calls the manifest-level operation; concat(::
-# VirtualGroup...) applies the array-level operation per array key. None of
+# ChunkManifest...) applies the array-level operation per array key. None of
 # the three orders inputs or inspects coordinates — a caller who wants files
 # in a particular order sorts them before calling.
 
-_manifestndims(::AbstractManifest{N}) where {N} = N
-
-# Table index 0 (MISSING_INDEX) and typemax(UInt32) (INLINE_INDEX) mark a
-# chunk's state rather than naming a row of the path table. Remapping them
-# through the merged table's numbering would turn a missing or inline chunk
-# into a reference to whatever file lands at that row.
-_remapindex(idx::UInt32, remap::Vector{UInt32}) =
-    (idx == MISSING_INDEX || idx == INLINE_INDEX) ? idx : remap[idx]
-
-# Adds every entry of `t` to `merged`, returning a vector mapping `t`'s own
-# 1-based row numbers to their row in `merged`.
-function _remaptable!(merged::PathTable, t::PathTable)
-    remap = Vector{UInt32}(undef, length(t))
-    for i in eachindex(remap)
-        entry = t[i]
-        remap[i] = push_uri!(merged, entry.uri; etag=entry.etag, size=entry.size, mtime=entry.mtime)
-    end
-    return remap
-end
+_manifestndims(::AbstractChunkMap{N}) where {N} = N
 
 # Explicit, 1-based chunk columns for one manifest, with its index column
 # already remapped into the merged path table's numbering.
-function _materialize(m::ChunkManifest{N}, remap::Vector{UInt32}) where {N}
+function _materialize(m::ExplicitChunkMap{N}, remap::Vector{UInt32}) where {N}
     ax = chunkgridaxes(m)
     dims = map(length, ax)
     index = Array{UInt32,N}(undef, dims)
@@ -47,17 +29,17 @@ function _materialize(m::ChunkManifest{N}, remap::Vector{UInt32}) where {N}
     return index, offset, nbytes, inline
 end
 
-# An AffineManifest's path table holds exactly one entry (it describes one
-# regular file), so concatenating several of them, generally over different
-# files, cannot stay in that closed form; this expands one into explicit
-# chunk columns so it can be merged like any other manifest.
-function _materialize(m::AffineManifest{N}, remap::Vector{UInt32}) where {N}
+# Every chunk of an AffineChunkMap lives in one file, table[fileindex], so
+# concatenating several of them, generally over different files, cannot stay
+# in that closed form; this expands one into explicit chunk columns so it can
+# be merged like any other chunk map.
+function _materialize(m::AffineChunkMap{N}, remap::Vector{UInt32}) where {N}
     ax = chunkgridaxes(m)
     dims = map(length, ax)
     index = Array{UInt32,N}(undef, dims)
     offset = Array{UInt64,N}(undef, dims)
     nbytes = Array{UInt64,N}(undef, dims)
-    tableidx = remap[1]
+    tableidx = remap[m.fileindex]
     for (Iout, Isrc) in zip(CartesianIndices(index), CartesianIndices(ax))
         _, off, nb = chunklocation(m, Isrc)
         index[Iout] = tableidx
@@ -68,10 +50,10 @@ function _materialize(m::AffineManifest{N}, remap::Vector{UInt32}) where {N}
 end
 
 """
-    concat(ms; dims::Integer) -> ChunkManifest
+    concat(ms; dims::Integer) -> ExplicitChunkMap
 
 Stack the chunk grids of `ms` (an `AbstractVector` or `Tuple` of
-[`AbstractManifest`](@ref)s) along dimension `dims`, in the order given.
+[`AbstractChunkMap`](@ref)s) along dimension `dims`, in the order given.
 
 Every input's chunk grid must agree on every dimension other than `dims`.
 Each manifest's path table is merged into one and its index column remapped
@@ -80,8 +62,9 @@ inline chunk bytes, pass through unchanged. A single input is returned
 unchanged; an empty collection throws.
 """
 function concat(
-    ms::Union{AbstractVector{<:AbstractManifest},Tuple{Vararg{AbstractManifest}}};
+    ms::Union{AbstractVector{<:AbstractChunkMap},Tuple{Vararg{AbstractChunkMap}}};
     dims::Integer,
+    table::PathTable=PathTable(),
 )
     isempty(ms) && throw(ArgumentError("concat: no manifests given"))
     length(ms) == 1 && return first(ms)
@@ -110,7 +93,7 @@ function concat(
         end
     end
 
-    merged = PathTable()
+    merged = table
     indices = Vector{Array{UInt32,N}}(undef, length(ms))
     offsets = Vector{Array{UInt64,N}}(undef, length(ms))
     nbyteses = Vector{Array{UInt64,N}}(undef, length(ms))
@@ -133,7 +116,7 @@ function concat(
     mergedindex = cat(indices...; dims)
     mergedoffset = cat(offsets...; dims)
     mergednbytes = cat(nbyteses...; dims)
-    return ChunkManifest(merged, mergedindex, mergedoffset, mergednbytes; inline=mergedinline)
+    return ExplicitChunkMap(merged, mergedindex, mergedoffset, mergednbytes; inline=mergedinline)
 end
 
 # Merges attrs's entries into merged, throwing if a key already present
@@ -155,9 +138,9 @@ function _mergeattrs!(merged::Dict{String,Any}, attrs::Dict{String,Any}, context
 end
 
 """
-    concat(xs; dims::Integer) -> VirtualArray
+    concat(xs; dims::Integer) -> ManifestArray
 
-Concatenate [`VirtualArray`](@ref)s `xs` (an `AbstractVector` or `Tuple`)
+Concatenate [`ManifestArray`](@ref)s `xs` (an `AbstractVector` or `Tuple`)
 along dimension `dims`, in the order given.
 
 Validates that every input shares the same number of dimensions, element
@@ -170,8 +153,9 @@ unable to line up with the next input. A single input is returned unchanged;
 an empty collection throws.
 """
 function concat(
-    xs::Union{AbstractVector{<:VirtualArray},Tuple{Vararg{VirtualArray}}};
+    xs::Union{AbstractVector{<:ManifestArray},Tuple{Vararg{ManifestArray}}};
     dims::Integer,
+    table::PathTable=PathTable(),
 )
     isempty(xs) && throw(ArgumentError("concat: no arrays given"))
     length(xs) == 1 && return first(xs)
@@ -237,11 +221,11 @@ function concat(
         _mergeattrs!(mergedattrs, attrsof(a), "array $i's")
     end
 
-    mergedmanifest = concat(collect(AbstractManifest, manifestof.(xs)); dims)
+    mergedmanifest = concat(collect(AbstractChunkMap, chunkmapof.(xs)); dims, table)
 
     mergedshape = ntuple(d -> d == dims ? sum(shapeof(a)[dims] for a in xs) : shapeof(ref)[d], N)
 
-    return VirtualArray{eltype(ref)}(
+    return ManifestArray{eltype(ref)}(
         mergedmanifest,
         mergedshape,
         chunkshapeof(ref);
@@ -254,9 +238,9 @@ function concat(
 end
 
 """
-    concat(gs; dims::Integer) -> VirtualGroup
+    concat(gs; dims::Integer) -> ChunkManifest
 
-Concatenate [`VirtualGroup`](@ref)s `gs` (an `AbstractVector` or `Tuple`)
+Concatenate [`ChunkManifest`](@ref)s `gs` (an `AbstractVector` or `Tuple`)
 along dimension `dims` by concatenating the arrays under each shared key, in
 the order given.
 
@@ -264,9 +248,15 @@ Every input must have exactly the same set of array keys. Group attributes
 merge across inputs under the same conflict rule as array attributes, and the
 result's `provenance` records that it came from concatenation and how many
 inputs. A single input is returned unchanged; an empty collection throws.
+
+All of the result's arrays share one merged [`PathTable`](@ref), and its
+transport is a fresh [`TransportContainers`](@ref) that resolves each URI by
+scheme — concatenating a local scan with a remote one yields a manifest whose
+files span both. Use `ChunkManifest(result; transport=...)` to supply
+credentials or restrict what may be fetched.
 """
 function concat(
-    gs::Union{AbstractVector{<:VirtualGroup},Tuple{Vararg{VirtualGroup}}};
+    gs::Union{AbstractVector{<:ChunkManifest},Tuple{Vararg{ChunkManifest}}};
     dims::Integer,
 )
     isempty(gs) && throw(ArgumentError("concat: no groups given"))
@@ -283,10 +273,14 @@ function concat(
         ))
     end
 
-    mergedarrays = Dict{String,VirtualArray}()
+    # One table for the whole result: every array of a ChunkManifest shares its
+    # path table, so a file that several arrays reference is one entry and one
+    # edit rather than one per array.
+    mergedtable = PathTable()
+    mergedarrays = Dict{String,ManifestArray}()
     for k in sort(collect(refkeys))
         try
-            mergedarrays[k] = concat([arraysof(g)[k] for g in gs]; dims)
+            mergedarrays[k] = concat([arraysof(g)[k] for g in gs]; dims, table=mergedtable)
         catch e
             e isa ArgumentError || rethrow()
             throw(ArgumentError("concat: array \"$k\": $(e.msg)"))
@@ -299,5 +293,12 @@ function concat(
     end
 
     provenance = Dict{String,Any}("driver" => "concat", "ninputs" => length(gs))
-    return VirtualGroup(; arrays=mergedarrays, attrs=mergedattrs, provenance)
+    # The result gets a fresh scheme-resolving transport rather than any one
+    # input's: concatenating a local scan with a remote one produces a manifest
+    # whose files span both, and carrying over a single input's transport would
+    # leave the other's chunks unreadable. A caller needing specific
+    # credentials rebuilds with ChunkManifest(result; transport=...).
+    return ChunkManifest(;
+        arrays=mergedarrays, table=mergedtable, attrs=mergedattrs, provenance,
+    )
 end

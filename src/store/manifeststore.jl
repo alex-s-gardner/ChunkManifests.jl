@@ -1,27 +1,13 @@
-# ManifestStore: the Zarr.AbstractStore implementation that serves source-file
-# bytes as Zarr chunks.
+# The Zarr.AbstractStore implementation that serves source-file bytes as Zarr
+# chunks. A ChunkManifest is itself that store.
 #
 # Keys are "/"-separated Zarr v2 paths: an array path optionally followed by
 # "/.zarray", "/.zattrs" or a chunk key, or a bare metadata key at a group
 # path. Resolution always splits a key into (prefix, leaf) and asks whether
-# `prefix` names one of `arraysof(group)`'s arrays, the root group (""), or
+# `prefix` names one of `arraysof(manifest)`'s arrays, the root group (""), or
 # an intermediate group implied by some array path having `prefix` as a
 # "/"-separated ancestor; nothing recognizable at the final step means
 # "absent", which `Zarr.jl` reads as "not initialized" rather than an error.
-
-"""
-    ManifestStore(group::VirtualGroup; transport=LocalTransport())
-
-Build a [`ManifestStore`](@ref) over `group`, fetching chunk bytes through
-`transport`.
-"""
-function ManifestStore(
-    group::VirtualGroup;
-    transport::AbstractTransport=LocalTransport(),
-    readahead::ReadaheadCache=ReadaheadCache(),
-)
-    return ManifestStore{typeof(transport)}(group, transport, readahead)
-end
 
 function _splitkey(key::AbstractString)
     i = findlast('/', key)
@@ -31,13 +17,13 @@ end
 
 # True when `p` is a "/"-separated ancestor of some array's path, i.e. a
 # group that exists only implicitly because an array lives under it.
-function _isgrouppath(g::VirtualGroup, p::AbstractString)
+function _isgrouppath(g::ChunkManifest, p::AbstractString)
     return any(path -> startswith(path, p * "/"), keys(arraysof(g)))
 end
 
 # Direct children of `p` across every array path, the way a directory
 # listing would report both subgroups and array directories.
-function _children(g::VirtualGroup, p::AbstractString)
+function _children(g::ChunkManifest, p::AbstractString)
     children = Set{String}()
     for path in keys(arraysof(g))
         if p == ""
@@ -54,13 +40,14 @@ function _children(g::VirtualGroup, p::AbstractString)
 end
 
 function _arrayitem(
-    va::VirtualArray, leaf::AbstractString, transport::AbstractTransport, readahead::ReadaheadCache
+    va::ManifestArray, leaf::AbstractString, transport::AbstractTransport,
+    readahead::ReadaheadCache,
 )
     leaf == ".zarray" && return zarray_json(va)
     leaf == ".zattrs" && return zattrs_json(va)
     I = parse_chunkkey(va, leaf)
     I === nothing && return nothing
-    m = manifestof(va)
+    m = chunkmapof(va)
     state = chunkstate(m, I)
     state == MISSING_CHUNK && return nothing
     state == INLINE_CHUNK && return inlinebytes(m, I)
@@ -69,64 +56,65 @@ function _arrayitem(
 end
 
 """
-    getindex(s::ManifestStore, key::AbstractString) -> Union{Nothing,Vector{UInt8}}
+    getindex(s::ChunkManifest, key::AbstractString) -> Union{Nothing,Vector{UInt8}}
 
 Resolve `key` to a synthesized metadata document, a chunk's bytes, or
 `nothing` for a missing chunk or an unrecognized key — `nothing` is Zarr.jl's
 own convention for "absent, fill with fill_value", not an error.
 """
-function Base.getindex(s::ManifestStore, key::AbstractString)
+function Base.getindex(s::ChunkManifest, key::AbstractString)
     prefix, leaf = _splitkey(key)
-    g = s.group
 
-    haskey(arraysof(g), prefix) &&
-        return _arrayitem(arraysof(g)[prefix], leaf, s.transport, s.readahead)
+    haskey(arraysof(s), prefix) &&
+        return _arrayitem(arraysof(s)[prefix], leaf, s.transport, s.readahead)
 
-    if prefix == "" || _isgrouppath(g, prefix)
+    if prefix == "" || _isgrouppath(s, prefix)
         leaf == ".zgroup" && return zgroup_json()
-        leaf == ".zattrs" && return Vector{UInt8}(JSON.json(prefix == "" ? attrsof(g) : Dict{String,Any}()))
+        leaf == ".zattrs" && return Vector{UInt8}(JSON.json(prefix == "" ? attrsof(s) : Dict{String,Any}()))
     end
     return nothing
 end
 
 """
-    setindex!(s::ManifestStore, v, key::AbstractString)
+    setindex!(s::ChunkManifest, v, key::AbstractString)
 
-Always throws: a [`ManifestStore`](@ref) answers from a scanned
-[`VirtualGroup`](@ref) and never writes to the files it describes.
+Always throws: a [`ChunkManifest`](@ref) serves bytes from the files it
+describes and never writes to them.
 """
-function Base.setindex!(::ManifestStore, v, key::AbstractString)
+function Base.setindex!(::ChunkManifest, v, key::AbstractString)
     throw(ArgumentError(
-        "ManifestStore is read-only: cannot set key \"$key\"; it serves bytes " *
-        "from a scanned VirtualGroup and never persists writes",
+        "ChunkManifest is read-only: cannot set key \"$key\"; it serves bytes " *
+        "from the scanned source files and never persists writes",
     ))
 end
 
 """
-    Zarr.storefromstring(::Type{<:ManifestStore}, s, create)
+    Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
 
-Always throws: a [`ManifestStore`](@ref) is built from a scanned
-[`VirtualGroup`](@ref) via [`ManifestStore`](@ref)`(group; transport)`, never
-sniffed from a URL or path string.
+Always throws. A [`ChunkManifest`](@ref) is built from a path with
+`ChunkManifest(path)`, which detects whether `path` holds a saved manifest or a
+source file to scan; `Zarr.zopen` is then called on the resulting manifest
+object. Nothing registers a URL pattern for this store, so Zarr.jl never
+reaches this method on its own.
 """
-function Zarr.storefromstring(::Type{<:ManifestStore}, s, create)
+function Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
     throw(ArgumentError(
-        "ManifestStore cannot be constructed from the string \"$s\"; build one " *
-        "explicitly with ManifestStore(group; transport) from a scanned VirtualGroup",
+        "ChunkManifest cannot be constructed from inside Zarr.zopen(\"$s\"); " *
+        "build it first with ChunkManifest(\"$s\") and pass that object, as in " *
+        "Zarr.zopen(ChunkManifest(\"$s\"))",
     ))
 end
 
 """
-    Zarr.storagesize(s::ManifestStore, p::AbstractString) -> Int
+    Zarr.storagesize(s::ChunkManifest, p::AbstractString) -> Int
 
 Total bytes backing the array at path `p`: the sum of each chunk's byte
 range for virtual chunks and each chunk's byte length for inline chunks.
 Missing chunks contribute nothing.
 """
-function Zarr.storagesize(s::ManifestStore, p::AbstractString)
-    g = s.group
-    haskey(arraysof(g), p) || throw(ArgumentError("storagesize: no array at path \"$p\""))
-    m = manifestof(arraysof(g)[p])
+function Zarr.storagesize(s::ChunkManifest, p::AbstractString)
+    haskey(arraysof(s), p) || throw(ArgumentError("storagesize: no array at path \"$p\""))
+    m = chunkmapof(arraysof(s)[p])
     total = 0
     for I in CartesianIndices(chunkgridaxes(m))
         state = chunkstate(m, I)
@@ -140,53 +128,51 @@ function Zarr.storagesize(s::ManifestStore, p::AbstractString)
 end
 
 """
-    Zarr.subdirs(s::ManifestStore, p::AbstractString) -> Vector{String}
+    Zarr.subdirs(s::ChunkManifest, p::AbstractString) -> Vector{String}
 
 Names of the groups and arrays directly under path `p`.
 """
-function Zarr.subdirs(s::ManifestStore, p::AbstractString)
-    g = s.group
-    haskey(arraysof(g), p) && return String[]
-    (p == "" || _isgrouppath(g, p)) || return String[]
-    return sort!(collect(_children(g, p)))
+function Zarr.subdirs(s::ChunkManifest, p::AbstractString)
+    haskey(arraysof(s), p) && return String[]
+    (p == "" || _isgrouppath(s, p)) || return String[]
+    return sort!(collect(_children(s, p)))
 end
 
 """
-    Zarr.subkeys(s::ManifestStore, p::AbstractString) -> Vector{String}
+    Zarr.subkeys(s::ChunkManifest, p::AbstractString) -> Vector{String}
 
 Metadata and chunk keys directly present at path `p`: `.zarray`/`.zattrs`
 plus every non-missing chunk key when `p` is an array, or `.zgroup`/`.zattrs`
 when `p` is a group.
 """
-function Zarr.subkeys(s::ManifestStore, p::AbstractString)
-    g = s.group
-    if haskey(arraysof(g), p)
-        va = arraysof(g)[p]
-        m = manifestof(va)
+function Zarr.subkeys(s::ChunkManifest, p::AbstractString)
+    if haskey(arraysof(s), p)
+        va = arraysof(s)[p]
+        m = chunkmapof(va)
         ks = [".zarray", ".zattrs"]
         for I in CartesianIndices(chunkgridaxes(m))
             chunkstate(m, I) == MISSING_CHUNK && continue
             push!(ks, chunkkey(va, I))
         end
         return ks
-    elseif p == "" || _isgrouppath(g, p)
+    elseif p == "" || _isgrouppath(s, p)
         return [".zgroup", ".zattrs"]
     end
     return String[]
 end
 
 """
-    Zarr.store_read_strategy(s::ManifestStore) -> Zarr.ConcurrentRead
+    Zarr.store_read_strategy(s::ChunkManifest) -> Zarr.ConcurrentRead
 
 Reports [`concurrency`](@ref)`(s.transport)` so Zarr.jl sizes the read
 channel's buffer to match; the actual reads happen through the
 [`Zarr.read_items!`](@ref) override below, not through this strategy's
 generic consumer.
 """
-Zarr.store_read_strategy(s::ManifestStore) = Zarr.ConcurrentRead(concurrency(s.transport))
+Zarr.store_read_strategy(s::ChunkManifest) = Zarr.ConcurrentRead(concurrency(s.transport))
 
 """
-    Zarr.read_items!(s::ManifestStore, c::AbstractChannel,
+    Zarr.read_items!(s::ChunkManifest, c::AbstractChannel,
                       e::Zarr.AbstractChunkKeyEncoding, p, i)
 
 Resolve every chunk index in `i` (a `CartesianIndices` into array `p`'s chunk
@@ -205,11 +191,10 @@ cache does not change that: each index still resolves to exactly one `put!`,
 either from the cache or from the fetch loop below.
 """
 function Zarr.read_items!(
-    s::ManifestStore, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
+    s::ChunkManifest, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
 )
-    g = s.group
-    va = arraysof(g)[p]
-    m = manifestof(va)
+    va = arraysof(s)[p]
+    m = chunkmapof(va)
     readahead = s.readahead
     caching = readahead.maxbytes > 0
     IdxT = eltype(i)

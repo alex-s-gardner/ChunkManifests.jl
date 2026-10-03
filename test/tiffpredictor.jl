@@ -5,7 +5,7 @@ import Random
 @testset "TIFFPredictor" begin
 
     @testset "known-answer: single row, UInt8" begin
-        f = VirtualZarr.TIFFPredictor(UInt8, 4, 1)
+        f = ChunkManifests.TIFFPredictor(UInt8, 4, 1)
         original = UInt8[10, 12, 11, 200]
         encoded = UInt8[10, 2, 255, 189]  # 10; 12-10; 11-12 mod 256; 200-11
         @test Zarr.zencode(original, f) == encoded
@@ -13,7 +13,7 @@ import Random
     end
 
     @testset "known-answer: single row, Int16" begin
-        f = VirtualZarr.TIFFPredictor(Int16, 4, 1)
+        f = ChunkManifests.TIFFPredictor(Int16, 4, 1)
         original = Int16[1000, 1050, 900, 905]
         encoded = Int16[1000, 50, -150, 5]  # 1000; 1050-1000; 900-1050; 905-900
         @test Zarr.zencode(original, f) == encoded
@@ -21,7 +21,7 @@ import Random
     end
 
     @testset "known-answer: several rows, reset at row boundary" begin
-        f = VirtualZarr.TIFFPredictor(UInt8, 3, 1)
+        f = ChunkManifests.TIFFPredictor(UInt8, 3, 1)
         # Row 1: 5, 7, 3.  Row 2: 200, 100, 250.
         encoded = UInt8[5, 2, 252, 200, 156, 150]
         expected = UInt8[5, 7, 3, 200, 100, 250]
@@ -34,7 +34,7 @@ import Random
     end
 
     @testset "known-answer: interleaved bands, samplesperpixel=3" begin
-        f = VirtualZarr.TIFFPredictor(UInt8, 3, 3)
+        f = ChunkManifests.TIFFPredictor(UInt8, 3, 3)
         # Three RGB pixels: (10,20,30), (15,25,35), (12,22,255).
         original = UInt8[10, 20, 30, 15, 25, 35, 12, 22, 255]
         # Per-band (stride 3) differences: R: 10,5,-3; G: 20,5,-3; B: 30,5,220.
@@ -47,13 +47,13 @@ import Random
     end
 
     @testset "wrapping arithmetic" begin
-        f8 = VirtualZarr.TIFFPredictor(UInt8, 2, 1)
+        f8 = ChunkManifests.TIFFPredictor(UInt8, 2, 1)
         original8 = UInt8[250, 10]
         encoded8 = UInt8[250, 16]  # 10 - 250 mod 256 == 16
         @test Zarr.zencode(original8, f8) == encoded8
         @test Zarr.zdecode(encoded8, f8) == original8
 
-        f16 = VirtualZarr.TIFFPredictor(Int16, 2, 1)
+        f16 = ChunkManifests.TIFFPredictor(Int16, 2, 1)
         original16 = Int16[32767, -32768]
         encoded16 = Int16[32767, 1]  # -32768 - 32767 mod 65536 == 1
         @test Zarr.zencode(original16, f16) == encoded16
@@ -66,7 +66,7 @@ import Random
             for (width, samplesperpixel, nrows) in (
                 (1, 1, 5), (1, 4, 3), (5, 3, 2), (7, 1, 4), (4, 2, 6),
             )
-                f = VirtualZarr.TIFFPredictor(T, width, samplesperpixel)
+                f = ChunkManifests.TIFFPredictor(T, width, samplesperpixel)
                 n = width * samplesperpixel * nrows
                 x = rand(T, n)
                 encoded = Zarr.zencode(x, f)
@@ -76,10 +76,10 @@ import Random
     end
 
     @testset "argument validation" begin
-        @test_throws "width must be at least 1" VirtualZarr.TIFFPredictor(UInt8, 0, 1)
-        @test_throws "samplesperpixel must be at least 1" VirtualZarr.TIFFPredictor(UInt8, 4, 0)
+        @test_throws "width must be at least 1" ChunkManifests.TIFFPredictor(UInt8, 0, 1)
+        @test_throws "samplesperpixel must be at least 1" ChunkManifests.TIFFPredictor(UInt8, 4, 0)
 
-        f = VirtualZarr.TIFFPredictor(UInt8, 4, 1)
+        f = ChunkManifests.TIFFPredictor(UInt8, 4, 1)
         @test_throws "not a multiple of width" Zarr.zdecode(UInt8[1, 2, 3], f)
         @test_throws "not a multiple of width" Zarr.zencode(UInt8[1, 2, 3], f)
 
@@ -87,15 +87,15 @@ import Random
     end
 
     @testset "predictor 1 and 3 handling" begin
-        @test VirtualZarr.tiffpredictor_config(1, UInt8, 4, 1) === nothing
-        @test VirtualZarr.tiffpredictor_config(2, Int16, 4, 1) == JSON.lower(VirtualZarr.TIFFPredictor(Int16, 4, 1))
-        @test_throws "Predictor 3" VirtualZarr.tiffpredictor_config(3, Float32, 4, 1)
-        @test_throws "unknown TIFF Predictor" VirtualZarr.tiffpredictor_config(7, UInt8, 4, 1)
+        @test ChunkManifests.tiffpredictor_config(1, UInt8, 4, 1) === nothing
+        @test ChunkManifests.tiffpredictor_config(2, Int16, 4, 1) == JSON.lower(ChunkManifests.TIFFPredictor(Int16, 4, 1))
+        @test_throws "Predictor 3" ChunkManifests.tiffpredictor_config(3, Float32, 4, 1)
+        @test_throws "unknown TIFF Predictor" ChunkManifests.tiffpredictor_config(7, UInt8, 4, 1)
     end
 
     @testset "registration" begin
         @test haskey(Zarr.filterdict, "tiff_predictor")
-        @test Zarr.filterdict["tiff_predictor"] === VirtualZarr.TIFFPredictor
+        @test Zarr.filterdict["tiff_predictor"] === ChunkManifests.TIFFPredictor
 
         # Pre-existing Zarr.jl filters are untouched.
         @test Zarr.filterdict["shuffle"] === Zarr.ShuffleFilter
@@ -109,7 +109,7 @@ import Random
     end
 
     @testset "JSON.lower and getfilter round trip" begin
-        f = VirtualZarr.TIFFPredictor(Int16, 7, 3)
+        f = ChunkManifests.TIFFPredictor(Int16, 7, 3)
         d = JSON.lower(f)
         @test d == Dict(
             "id" => "tiff_predictor",
@@ -118,21 +118,21 @@ import Random
             "width" => 7,
             "samplesperpixel" => 3,
         )
-        f2 = Zarr.getfilter(VirtualZarr.TIFFPredictor, d)
-        @test f2 isa VirtualZarr.TIFFPredictor{Int16}
+        f2 = Zarr.getfilter(ChunkManifests.TIFFPredictor, d)
+        @test f2 isa ChunkManifests.TIFFPredictor{Int16}
         @test f2.width == f.width
         @test f2.samplesperpixel == f.samplesperpixel
         @test f2 == f
 
         @test_throws "only implements TIFF Predictor 2" Zarr.getfilter(
-            VirtualZarr.TIFFPredictor, Dict("predictor" => 3, "dtype" => "<f4", "width" => 4, "samplesperpixel" => 1)
+            ChunkManifests.TIFFPredictor, Dict("predictor" => 3, "dtype" => "<f4", "width" => 4, "samplesperpixel" => 1)
         )
     end
 
     @testset "through a real ZArray" begin
         store = Zarr.DictStore()
         width, samplesperpixel = 3, 1
-        f = VirtualZarr.TIFFPredictor(Int16, width, samplesperpixel)
+        f = ChunkManifests.TIFFPredictor(Int16, width, samplesperpixel)
         z = Zarr.zcreate(
             Int16, store, width;
             chunks=(width,), compressor=Zarr.NoCompressor(), filters=(f,), zarr_format=2,

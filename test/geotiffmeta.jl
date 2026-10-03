@@ -1,4 +1,4 @@
-using VirtualZarr:
+using ChunkManifests:
     decode_geokeys,
     identify_crs,
     geotransform,

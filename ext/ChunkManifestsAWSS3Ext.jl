@@ -1,6 +1,6 @@
-module VirtualZarrAWSS3Ext
+module ChunkManifestsAWSS3Ext
 
-using VirtualZarr
+using ChunkManifests
 using AWSS3
 
 # Wraps an AWS config together with extra HTTP headers (currently just the
@@ -24,19 +24,19 @@ Construct an [`S3Transport`](@ref) for `bucket`. `aws` defaults to
 `x-amz-request-payer: requester` with every request, as NASA/ESA archive
 buckets commonly require.
 """
-function VirtualZarr.S3Transport(
+function ChunkManifests.S3Transport(
     bucket::AbstractString; aws=nothing, requesterpays::Bool=false
 )
     config = aws === nothing ? AWSS3.AWS.current_aws_config() : aws
     wrapped = requesterpays ? _S3Config(config, Dict("x-amz-request-payer" => "requester")) : config
-    return VirtualZarr.S3Transport(String(bucket), wrapped)
+    return ChunkManifests.S3Transport(String(bucket), wrapped)
 end
 
 # A bare key is read from `t.bucket`. A full `s3://bucket/key` uri is read
 # from the bucket it names, which may differ from `t.bucket` — a manifest's
 # PathTable can legitimately span buckets. A malformed `s3://` uri (no key
 # component) throws rather than guessing.
-function _s3_bucket_key(t::VirtualZarr.S3Transport, uri::AbstractString)
+function _s3_bucket_key(t::ChunkManifests.S3Transport, uri::AbstractString)
     if startswith(uri, "s3://")
         rest = chop(uri; head=5, tail=0)
         parts = split(rest, '/'; limit=2)
@@ -52,7 +52,7 @@ end
 # AWSS3.s3_get's byte_range is 1-based inclusive on both ends; ByteRange is
 # 0-based half-open, so the last byte offset+nbytes-1 becomes offset+nbytes
 # once shifted onto that convention.
-_awss3_byterange(r::VirtualZarr.ByteRange) = (r.offset + 1):(r.offset + r.nbytes)
+_awss3_byterange(r::ChunkManifests.ByteRange) = (r.offset + 1):(r.offset + r.nbytes)
 
 """
     fetchrange(t::S3Transport, uri, r::ByteRange) -> Vector{UInt8}
@@ -62,8 +62,8 @@ Read `r` from the S3 object named by `uri` (a bare key resolved against
 the object is missing, access is denied, or the response is shorter than
 `r.nbytes`; never substitutes empty or truncated bytes for a failed read.
 """
-function VirtualZarr.fetchrange(
-    t::VirtualZarr.S3Transport, uri::AbstractString, r::VirtualZarr.ByteRange
+function ChunkManifests.fetchrange(
+    t::ChunkManifests.S3Transport, uri::AbstractString, r::ChunkManifests.ByteRange
 )
     r.nbytes == 0 && return UInt8[]
 
@@ -95,7 +95,7 @@ end
 Size of the object at `uri` from its `Content-Length`, via a HEAD request that
 transfers no object data.
 """
-function VirtualZarr.objectsize(t::VirtualZarr.S3Transport, uri::AbstractString)
+function ChunkManifests.objectsize(t::ChunkManifests.S3Transport, uri::AbstractString)
     bucket, key = _s3_bucket_key(t, uri)
     headers = try
         AWSS3.s3_get_meta(_awsconfig(t.aws), bucket, key)
@@ -109,4 +109,4 @@ function VirtualZarr.objectsize(t::VirtualZarr.S3Transport, uri::AbstractString)
     return parse(UInt64, string(len))
 end
 
-end # module VirtualZarrAWSS3Ext
+end # module ChunkManifestsAWSS3Ext

@@ -4,14 +4,14 @@ import Zarr
 function _cc_dummymanifest(shape::NTuple{N,Int}, chunkshape::NTuple{N,Int}, uri) where {N}
     table = PathTable()
     push_uri!(table, uri)
-    return AffineManifest(
+    return AffineChunkMap(
         table, cld.(shape, chunkshape), UInt64(0), ntuple(_ -> UInt64(1), N), UInt32(0)
     )
 end
 
 function _cc_dummyva(::Type{T}, shape, chunkshape, uri; kwargs...) where {T}
     m = _cc_dummymanifest(shape, chunkshape, uri)
-    return VirtualArray{T}(m, shape, chunkshape; kwargs...)
+    return ManifestArray{T}(m, shape, chunkshape; kwargs...)
 end
 _cc_dummyva(shape, chunkshape, uri; kwargs...) = _cc_dummyva(Float64, shape, chunkshape, uri; kwargs...)
 
@@ -43,8 +43,8 @@ end
         @test shapeof(merged) == (4, 15)
         @test chunkshapeof(merged) == (2, 3)
 
-        group = VirtualGroup(; arrays=Dict{String,VirtualArray}("" => merged))
-        z = Zarr.zopen(ManifestStore(group))
+        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => merged))
+        z = Zarr.zopen(group)
         full = hcat(dataA, dataB)
 
         @test z[:, :] == full
@@ -52,7 +52,7 @@ end
         # B (7:9), so this one read must resolve chunks from both files.
         @test z[:, 5:8] == full[:, 5:8]
 
-        m = manifestof(merged)
+        m = chunkmapof(merged)
         agridcols = cld(size(dataA, 2), 3)
         for I in CartesianIndices(chunkgridaxes(m))
             uri, _, _ = chunklocation(m, I)
@@ -66,11 +66,11 @@ end
             t1 = PathTable()
             push_uri!(t1, "f1.bin")
             push_uri!(t1, "f2.bin")
-            index1 = UInt32[1 VirtualZarr.MISSING_INDEX; 2 VirtualZarr.INLINE_INDEX]
+            index1 = UInt32[1 ChunkManifests.MISSING_INDEX; 2 ChunkManifests.INLINE_INDEX]
             offset1 = UInt64[10 0; 20 0]
             nbytes1 = UInt64[5 0; 7 0]
             inline1 = Dict(CartesianIndex(2, 2) => UInt8[1, 2, 3])
-            m1 = ChunkManifest(t1, index1, offset1, nbytes1; inline=inline1)
+            m1 = ExplicitChunkMap(t1, index1, offset1, nbytes1; inline=inline1)
 
             # f3.bin/f4.bin reuse table rows 1 and 2 within their own
             # manifest; if the merge forgot to remap, these would resolve
@@ -78,14 +78,14 @@ end
             t2 = PathTable()
             push_uri!(t2, "f3.bin")
             push_uri!(t2, "f4.bin")
-            index2 = UInt32[1 2; VirtualZarr.MISSING_INDEX VirtualZarr.INLINE_INDEX]
+            index2 = UInt32[1 2; ChunkManifests.MISSING_INDEX ChunkManifests.INLINE_INDEX]
             offset2 = UInt64[30 40; 0 0]
             nbytes2 = UInt64[9 11; 0 0]
             inline2 = Dict(CartesianIndex(2, 2) => UInt8[9, 9])
-            m2 = ChunkManifest(t2, index2, offset2, nbytes2; inline=inline2)
+            m2 = ExplicitChunkMap(t2, index2, offset2, nbytes2; inline=inline2)
 
             merged = concat([m1, m2]; dims=1)
-            @test merged isa ChunkManifest
+            @test merged isa ExplicitChunkMap
             @test chunkgridsize(merged) == (4, 2)
 
             @test chunkstate(merged, CartesianIndex(1, 1)) == VIRTUAL_CHUNK
@@ -105,16 +105,16 @@ end
             @test inlinebytes(merged, CartesianIndex(4, 2)) == UInt8[9, 9]
         end
 
-        @testset "AffineManifest inputs materialize to ChunkManifest" begin
+        @testset "AffineChunkMap inputs materialize to ExplicitChunkMap" begin
             ta = PathTable()
             push_uri!(ta, "aff1.bin")
-            ma = AffineManifest(ta, (2, 3), UInt64(0), (UInt64(4), UInt64(100)), UInt32(4))
+            ma = AffineChunkMap(ta, (2, 3), UInt64(0), (UInt64(4), UInt64(100)), UInt32(4))
             tb = PathTable()
             push_uri!(tb, "aff2.bin")
-            mb = AffineManifest(tb, (2, 3), UInt64(0), (UInt64(4), UInt64(100)), UInt32(4))
+            mb = AffineChunkMap(tb, (2, 3), UInt64(0), (UInt64(4), UInt64(100)), UInt32(4))
 
             merged = concat([ma, mb]; dims=1)
-            @test merged isa ChunkManifest
+            @test merged isa ExplicitChunkMap
             @test chunkgridsize(merged) == (4, 3)
             for I in CartesianIndices((2, 3))
                 _, off, len = chunklocation(ma, I)
@@ -139,7 +139,7 @@ end
         @testset "single input and empty input" begin
             m1 = _cc_dummymanifest((4, 6), (2, 3), "s1.bin")
             @test concat([m1]; dims=1) === m1
-            @test_throws "no manifests given" concat(AbstractManifest[]; dims=1)
+            @test_throws "no manifests given" concat(AbstractChunkMap[]; dims=1)
         end
     end
 
@@ -150,7 +150,7 @@ end
             a3 = _cc_dummyva((4, 3), (2, 3), "t3.bin")
             merged = concat([a1, a2, a3]; dims=2)
             @test shapeof(merged) == (4, 15)
-            @test chunkgridsize(manifestof(merged)) == (2, 5)
+            @test chunkgridsize(chunkmapof(merged)) == (2, 5)
         end
 
         @testset "rejections" begin
@@ -252,22 +252,22 @@ end
         @testset "single input and empty input" begin
             a1 = _cc_dummyva((4, 6), (2, 3), "e1.bin")
             @test concat([a1]; dims=1) === a1
-            @test_throws "no arrays given" concat(VirtualArray[]; dims=1)
+            @test_throws "no arrays given" concat(ManifestArray[]; dims=1)
         end
     end
 
     @testset "group level" begin
         @testset "multiple arrays and nested keys" begin
-            g1 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}(
+            g1 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}(
                     "root" => _cc_dummyva((4, 6), (2, 3), "g1root.bin"),
                     "nested/arr" => _cc_dummyva((4, 6), (2, 3), "g1nested.bin"),
                 ),
                 attrs=Dict{String,Any}("title" => "t"),
                 provenance=Dict{String,Any}("driver" => "HDF5Driver"),
             )
-            g2 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}(
+            g2 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}(
                     "root" => _cc_dummyva((4, 6), (2, 3), "g2root.bin"),
                     "nested/arr" => _cc_dummyva((4, 6), (2, 3), "g2nested.bin"),
                 ),
@@ -284,14 +284,14 @@ end
         end
 
         @testset "mismatched array keys rejected" begin
-            g1 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}(
+            g1 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}(
                     "a" => _cc_dummyva((4, 6), (2, 3), "m1a.bin"),
                     "b" => _cc_dummyva((4, 6), (2, 3), "m1b.bin"),
                 ),
             )
-            g2 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}(
+            g2 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}(
                     "a" => _cc_dummyva((4, 6), (2, 3), "m2a.bin"),
                     "c" => _cc_dummyva((4, 6), (2, 3), "m2c.bin"),
                 ),
@@ -300,21 +300,21 @@ end
         end
 
         @testset "per-array rejection names the array key" begin
-            g1 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}("a" => _cc_dummyva((4, 6), (2, 3), "k1.bin")),
+            g1 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("a" => _cc_dummyva((4, 6), (2, 3), "k1.bin")),
             )
-            g2 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}("a" => _cc_dummyva((4, 6), (1, 3), "k2.bin")),
+            g2 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("a" => _cc_dummyva((4, 6), (1, 3), "k2.bin")),
             )
             @test_throws "array \"a\"" concat([g1, g2]; dims=1)
         end
 
         @testset "single input and empty input" begin
-            g1 = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}("a" => _cc_dummyva((4, 6), (2, 3), "se1.bin")),
+            g1 = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("a" => _cc_dummyva((4, 6), (2, 3), "se1.bin")),
             )
             @test concat([g1]; dims=1) === g1
-            @test_throws "no groups given" concat(VirtualGroup[]; dims=1)
+            @test_throws "no groups given" concat(ChunkManifest[]; dims=1)
         end
     end
 end

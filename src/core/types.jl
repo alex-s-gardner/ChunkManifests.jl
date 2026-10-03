@@ -1,8 +1,16 @@
 # Type and interface contract. Implementations live in the sibling files listed
-# in VirtualZarr.jl. Struct fields are internal: everything outside this package
+# in ChunkManifests.jl. Struct fields are internal: everything outside this package
 # goes through the accessor functions declared at the bottom of this file.
 
-const MANIFEST_FORMAT_VERSION = 1
+# Version of this package's own native on-disk format ([`ZarrManifest`](@ref)),
+# incremented whenever that layout changes.
+const MANIFEST_FORMAT_VERSION = 2
+
+# Version of kerchunk's reference-set schema, which this package reads and
+# writes but does not define. Fixed at 1 by kerchunk; it is not ours to
+# increment, and emitting anything else makes the document unreadable by
+# fsspec's ReferenceFileSystem.
+const KERCHUNK_REFERENCE_VERSION = 1
 
 """
     ChunkState
@@ -44,35 +52,35 @@ struct PathTable
 end
 
 """
-    AbstractManifest{N}
+    AbstractChunkMap{N}
 
 Maps each cell of an `N`-dimensional chunk grid to the bytes backing it.
 Subtypes implement [`chunkgridaxes`](@ref), [`chunkstate`](@ref),
 [`chunklocation`](@ref) and [`pathtable`](@ref).
 """
-abstract type AbstractManifest{N} end
+abstract type AbstractChunkMap{N} end
 
 """
-    ChunkManifest{N}
+    ExplicitChunkMap{N}
 
-Manifest holding one explicit entry per chunk as parallel columns shaped like
+Chunk map holding one explicit entry per chunk as parallel columns shaped like
 the chunk grid. The column types are free: `Array` for an in-memory manifest,
 a constant-valued array when every chunk shares one file, or a `Zarr.ZArray`
 to page a manifest too large to materialize.
 """
-struct ChunkManifest{
+struct ExplicitChunkMap{
     N,
     TI<:AbstractArray{UInt32,N},
     TO<:AbstractArray{UInt64,N},
     TL<:AbstractArray{<:Unsigned,N},
-} <: AbstractManifest{N}
+} <: AbstractChunkMap{N}
     table::PathTable
     index::TI
     offset::TO
     nbytes::TL
     inline::Dict{CartesianIndex{N},Vector{UInt8}}
 
-    function ChunkManifest{N,TI,TO,TL}(
+    function ExplicitChunkMap{N,TI,TO,TL}(
         table, index, offset, nbytes, inline
     ) where {N,TI,TO,TL}
         return new{N,TI,TO,TL}(table, index, offset, nbytes, inline)
@@ -80,28 +88,34 @@ struct ChunkManifest{
 end
 
 """
-    AffineManifest{N}
+    AffineChunkMap{N}
 
-Manifest for a source whose chunk offsets are a closed-form function of the
+Chunk map for a source whose chunk offsets are a closed-form function of the
 chunk index, as produced by contiguous HDF5 datasets and uncompressed striped
 TIFFs. Storage is constant in the number of chunks.
+
+Every chunk lives in one file, `table[fileindex]`. `table` may hold other
+entries: the arrays of one [`ChunkManifest`](@ref) share a single table, so a
+map's own file is identified by index rather than by being the table's only
+entry.
 """
-struct AffineManifest{N} <: AbstractManifest{N}
+struct AffineChunkMap{N} <: AbstractChunkMap{N}
     table::PathTable
+    fileindex::UInt32
     gridsize::NTuple{N,Int}
     base::UInt64
     strides::NTuple{N,UInt64}
     chunkbytes::UInt32
 
-    function AffineManifest{N}(
-        table, gridsize, base, strides, chunkbytes
+    function AffineChunkMap{N}(
+        table, fileindex, gridsize, base, strides, chunkbytes
     ) where {N}
-        return new{N}(table, gridsize, base, strides, chunkbytes)
+        return new{N}(table, fileindex, gridsize, base, strides, chunkbytes)
     end
 end
 
 """
-    VirtualArray{T,N}
+    ManifestArray{T,N}
 
 A manifest plus the Zarr v2 metadata needed to decode it. `shape`,
 `chunkshape` and `dimnames` are in Julia order and are reversed only when
@@ -113,7 +127,7 @@ serialized. `compressor` and `filters` are Zarr v2 codec configurations, with
 `dimnames` during serialization rather than stored here, so the two cannot
 disagree.
 """
-struct VirtualArray{T,N,M<:AbstractManifest{N}}
+struct ManifestArray{T,N,M<:AbstractChunkMap{N}}
     manifest::M
     shape::NTuple{N,Int}
     chunkshape::NTuple{N,Int}
@@ -123,25 +137,13 @@ struct VirtualArray{T,N,M<:AbstractManifest{N}}
     attrs::Dict{String,Any}
     dimnames::Vector{String}
 
-    function VirtualArray{T,N,M}(
+    function ManifestArray{T,N,M}(
         manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
     ) where {T,N,M}
         return new{T,N,M}(
             manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
         )
     end
-end
-
-"""
-    VirtualGroup
-
-Tree of [`VirtualArray`](@ref)s keyed by full Zarr path (`"gt1l/h_li"`), plus
-group attributes and a record of which driver produced the scan.
-"""
-struct VirtualGroup
-    arrays::Dict{String,VirtualArray}
-    attrs::Dict{String,Any}
-    provenance::Dict{String,Any}
 end
 
 """
@@ -221,27 +223,37 @@ function ReadaheadCache(; maxbytes::Integer=64 * 1024 * 1024, chunks::Integer=32
 end
 
 """
-    ManifestStore(group; transport=LocalTransport(), readahead=ReadaheadCache())
+    ChunkManifest
 
-Read-only `Zarr.AbstractStore` that answers metadata keys from synthesized
-Zarr v2 documents and chunk keys with the source files' raw, still-encoded
-bytes. Decoding is Zarr.jl's job: this store never decompresses, so the bytes
-it returns are byte-for-byte those of the original file.
+Tree of [`ManifestArray`](@ref)s keyed by full Zarr path (`"gt1l/h_li"`), plus
+group attributes and a record of which driver produced the scan.
+
+A `ChunkManifest` *is* a read-only `Zarr.AbstractStore`: it answers metadata
+keys from synthesized Zarr v2 documents and chunk keys with the source files'
+raw, still-encoded bytes, so `Zarr.zopen(manifest)` is all that stands between
+a scan and an array. Decoding is Zarr.jl's job — this store never
+decompresses, so the bytes it returns are byte-for-byte those of the original
+file.
+
+Every array shares one `table`, so repointing a file is a single edit however
+many arrays reference it, and [`validate`](@ref) costs one request per file
+rather than per chunk. `transport` resolves those URIs: a
+[`TransportContainers`](@ref) routes each URI to the backend that can read it,
+while a single transport reads every URI the same way.
 """
-struct ManifestStore{T<:AbstractTransport} <: Zarr.AbstractStore
-    group::VirtualGroup
-    transport::T
+struct ChunkManifest <: Zarr.AbstractStore
+    arrays::Dict{String,ManifestArray}
+    table::PathTable
+    attrs::Dict{String,Any}
+    provenance::Dict{String,Any}
+    transport::AbstractTransport
     readahead::ReadaheadCache
-
-    function ManifestStore{T}(group, transport, readahead) where {T}
-        return new{T}(group, transport, readahead)
-    end
 end
 
 """
     ManifestFormat
 
-An on-disk representation of a [`VirtualGroup`](@ref). Formats are types rather
+An on-disk representation of a [`ChunkManifest`](@ref). Formats are types rather
 than flags so a new one is a new subtype plus [`save`](@ref) and
 [`load`](@ref) methods, never an edit to a central dispatch function.
 """

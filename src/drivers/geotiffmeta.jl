@@ -343,7 +343,7 @@ function parse_gdal_nodata(::Type{T}, s::AbstractString) where {T<:Real}
     end
     value = tryparse(Float64, str)
     value === nothing && throw(ArgumentError(
-        "GDAL_NODATA tag value $(repr(s)) is not a number VirtualZarr can parse"
+        "GDAL_NODATA tag value $(repr(s)) is not a number ChunkManifests can parse"
     ))
     return T(value)
 end

@@ -9,16 +9,16 @@ struct _vl_CountingTransport <: AbstractTransport
 end
 _vl_CountingTransport() = _vl_CountingTransport(LocalTransport(), Dict{String,Int}())
 
-function VirtualZarr.objectsize(t::_vl_CountingTransport, uri)
+function ChunkManifests.objectsize(t::_vl_CountingTransport, uri)
     t.counts[uri] = get(t.counts, uri, 0) + 1
-    return VirtualZarr.objectsize(t.inner, uri)
+    return ChunkManifests.objectsize(t.inner, uri)
 end
 
 # Errors if ever asked for a size, to prove a code path never touches the
 # network (used under strict=true, where a consistency failure must short
 # circuit before the per-file loop runs).
 struct _vl_ExplodingTransport <: AbstractTransport end
-function VirtualZarr.objectsize(::_vl_ExplodingTransport, uri)
+function ChunkManifests.objectsize(::_vl_ExplodingTransport, uri)
     error("_vl_ExplodingTransport: objectsize must not have been called for $uri")
 end
 
@@ -48,7 +48,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             index = reshape(idxs, 3, 1)
             offset = zeros(UInt64, 3, 1)
             nbytes = UInt64.(reshape(sizes, 3, 1))
-            m = ChunkManifest(t, index, offset, nbytes)
+            m = ExplicitChunkMap(t, index, offset, nbytes)
 
             report = validate(m)
             @test Set(report.verified) == Set(paths)
@@ -56,7 +56,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             @test isempty(report.missing_files)
             @test isempty(report.mismatched)
             @test isempty(report.consistency)
-            @test VirtualZarr.passed(report)
+            @test ChunkManifests.passed(report)
         end
     end
 
@@ -73,7 +73,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             index = reshape(idxs, 3, 1)
             offset = zeros(UInt64, 3, 1)
             nbytes = UInt64.(reshape(sizes, 3, 1))
-            m = ChunkManifest(t, index, offset, nbytes)
+            m = ExplicitChunkMap(t, index, offset, nbytes)
 
             truncated = paths[2]
             open(truncated, "r+") do io
@@ -86,7 +86,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             @test report.mismatched[1].uri == truncated
             @test occursin("recorded size 20", report.mismatched[1].reason)
             @test isempty(report.missing_files)
-            @test !VirtualZarr.passed(report)
+            @test !ChunkManifests.passed(report)
         end
     end
 
@@ -103,7 +103,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             index = reshape(idxs, 2, 1)
             offset = zeros(UInt64, 2, 1)
             nbytes = UInt64.(reshape(sizes, 2, 1))
-            m = ChunkManifest(t, index, offset, nbytes)
+            m = ExplicitChunkMap(t, index, offset, nbytes)
 
             rm(paths[1])
 
@@ -112,7 +112,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             @test report.missing_files[1].uri == paths[1]
             @test isempty(report.mismatched)
             @test report.verified == [paths[2]]
-            @test !VirtualZarr.passed(report)
+            @test !ChunkManifests.passed(report)
         end
     end
 
@@ -123,7 +123,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
 
             t = PathTable()
             idx = push_uri!(t, p)  # no size recorded
-            m = ChunkManifest(
+            m = ExplicitChunkMap(
                 t, reshape(UInt32[idx], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[10], 1, 1)
             )
 
@@ -134,7 +134,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             @test isempty(report.missing_files)
             @test isempty(report.mismatched)
             # Nothing was actually checked, so this must not read as a pass.
-            @test !VirtualZarr.passed(report)
+            @test !ChunkManifests.passed(report)
         end
     end
 
@@ -155,11 +155,11 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             end
             offset = zeros(UInt64, n)
             nbytes = fill(UInt64(10), n)
-            m = ChunkManifest(t, index, offset, nbytes)
+            m = ExplicitChunkMap(t, index, offset, nbytes)
 
             ct = _vl_CountingTransport()
             report = validate(m, ct)
-            @test VirtualZarr.passed(report)
+            @test ChunkManifests.passed(report)
             @test length(ct.counts) == 3
             @test all(==(1), values(ct.counts))
         end
@@ -172,7 +172,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             t = PathTable()
             idx = push_uri!(t, p; size=10)
             # Claims bytes [5, 15), past the recorded 10-byte size.
-            m = ChunkManifest(
+            m = ExplicitChunkMap(
                 t, reshape(UInt32[idx], 1, 1), reshape(UInt64[5], 1, 1), reshape(UInt64[10], 1, 1)
             )
 
@@ -188,7 +188,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "validate: consistency - out-of-range path table index" begin
         t = PathTable()
         push_uri!(t, "only.bin"; size=10)
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[99], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[1], 1, 1)
         )
 
@@ -203,8 +203,8 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "validate: consistency - inline chunk with no bytes" begin
         t = PathTable()
         push_uri!(t, "unused.bin")
-        m = ChunkManifest(
-            t, reshape(UInt32[VirtualZarr.INLINE_INDEX], 1, 1),
+        m = ExplicitChunkMap(
+            t, reshape(UInt32[ChunkManifests.INLINE_INDEX], 1, 1),
             reshape(UInt64[0], 1, 1), reshape(UInt64[0], 1, 1),
         )
 
@@ -218,7 +218,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "validate: transport without objectsize degrades clearly" begin
         t = PathTable()
         push_uri!(t, "whatever.bin"; size=10)
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
 
@@ -236,7 +236,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
         index = UInt32[i1 i1; i2 i2]
         offset = UInt64[0 10; 0 10]
         nbytes = UInt64[4 4; 4 4]
-        m = ChunkManifest(t, index, offset, nbytes)
+        m = ExplicitChunkMap(t, index, offset, nbytes)
 
         others = CartesianIndex(1, 2), CartesianIndex(2, 1), CartesianIndex(2, 2)
         before = Dict(I => chunklocation(m, I) for I in others)
@@ -253,7 +253,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "setchunk!: reusing an existing uri does not grow the table" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
 
@@ -265,7 +265,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "setchunk!: adding a new uri grows the table by exactly one" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
 
@@ -277,7 +277,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "setchunk!: set missing" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
 
@@ -288,7 +288,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "setchunk!: set inline" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
 
@@ -300,17 +300,17 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
     @testset "setchunk!: a bare ChunkState other than MISSING_CHUNK is rejected" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
         @test_throws "MISSING_CHUNK" setchunk!(m, CartesianIndex(1, 1), VIRTUAL_CHUNK)
     end
 
-    @testset "setchunk!: AffineManifest rejected by name" begin
+    @testset "setchunk!: AffineChunkMap rejected by name" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        am = AffineManifest(t, (2,), UInt64(0), (UInt64(4),), UInt32(4))
-        @test_throws "AffineManifest" setchunk!(am, CartesianIndex(1), "b.bin", 0, 4)
+        am = AffineChunkMap(t, (2,), UInt64(0), (UInt64(4),), UInt32(4))
+        @test_throws "AffineChunkMap" setchunk!(am, CartesianIndex(1), "b.bin", 0, 4)
     end
 
     @testset "setchunk!: an immutable column fails with a clear message" begin
@@ -319,7 +319,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
         index = _vl_ImmutableCol(reshape(UInt32[1], 1, 1))
         offset = reshape(UInt64[0], 1, 1)
         nbytes = reshape(UInt64[4], 1, 1)
-        m = ChunkManifest(t, index, offset, nbytes)
+        m = ExplicitChunkMap(t, index, offset, nbytes)
 
         @test_throws "does not support" setchunk!(m, CartesianIndex(1, 1), "b.bin", 0, 4)
     end

@@ -8,9 +8,9 @@ struct ReadaheadCountingTransport <: AbstractTransport
 end
 ReadaheadCountingTransport() = ReadaheadCountingTransport(LocalTransport(), Threads.Atomic{Int}(0))
 
-function VirtualZarr.fetchrange(t::ReadaheadCountingTransport, uri::AbstractString, r::ByteRange)
+function ChunkManifests.fetchrange(t::ReadaheadCountingTransport, uri::AbstractString, r::ByteRange)
     Threads.atomic_add!(t.count, 1)
-    return VirtualZarr.fetchrange(t.inner, uri, r)
+    return ChunkManifests.fetchrange(t.inner, uri, r)
 end
 
 # A transport whose fetchrange always fails for one specific chunk, used to
@@ -21,14 +21,14 @@ struct FlakyTransport <: AbstractTransport
     badoffset::UInt64
 end
 
-function VirtualZarr.fetchrange(t::FlakyTransport, uri::AbstractString, r::ByteRange)
+function ChunkManifests.fetchrange(t::FlakyTransport, uri::AbstractString, r::ByteRange)
     r.offset <= t.badoffset < r.offset + r.nbytes &&
         throw(ErrorException("simulated I/O failure at offset $(t.badoffset)"))
-    return VirtualZarr.fetchrange(t.inner, uri, r)
+    return ChunkManifests.fetchrange(t.inner, uri, r)
 end
 
 # One file of `nchunks` byte-adjacent `Float64` chunks, each one element,
-# plus the manifest and VirtualArray describing it.
+# plus the manifest and ManifestArray describing it.
 function _contig_va(dir::AbstractString, nchunks::Int; fname="contig.bin")
     chunkbytes = sizeof(Float64)
     path = joinpath(dir, fname)
@@ -41,8 +41,8 @@ function _contig_va(dir::AbstractString, nchunks::Int; fname="contig.bin")
     index = fill(idx, gridsize)
     offset = UInt64[(k - 1) * chunkbytes for k in 1:nchunks]
     nbytes = fill(UInt64(chunkbytes), gridsize)
-    manifest = ChunkManifest(table, index, offset, nbytes)
-    va = VirtualArray{Float64}(manifest, (nchunks,), (1,); dimnames=["x"])
+    manifest = ExplicitChunkMap(table, index, offset, nbytes)
+    va = ManifestArray{Float64}(manifest, (nchunks,), (1,); dimnames=["x"])
     return va, path, vals
 end
 
@@ -54,8 +54,8 @@ end
             va, _, vals = _contig_va(dir, nchunks)
 
             counting = ReadaheadCountingTransport()
-            mstore = ManifestStore(
-                VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va));
+            mstore = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("" => va),
                 transport=counting,
             )
             za = Zarr.zopen(mstore)
@@ -86,8 +86,8 @@ end
             va, _, vals = _contig_va(dir, nchunks)
 
             counting = ReadaheadCountingTransport()
-            mstore = ManifestStore(
-                VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va));
+            mstore = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("" => va),
                 transport=counting,
                 readahead=ReadaheadCache(; maxbytes=0),
             )
@@ -119,18 +119,18 @@ end
             offset = zeros(UInt64, gridsize)
             nbytes = zeros(UInt64, gridsize)
             for I in CartesianIndices(gridsize)
-                fname = joinpath(dir, Zarr.citostring(VirtualZarr._V2_CHUNK_KEY_ENCODING, I))
+                fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
                 index[I] = push_uri!(table, fname)
                 nbytes[I] = filesize(fname)
             end
-            manifest = ChunkManifest(table, index, offset, nbytes)
-            va = VirtualArray{Float64}(
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{Float64}(
                 manifest, shape, chunkshape; fillvalue, compressor, dimnames
             )
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va))
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
 
-            za_cached = Zarr.zopen(ManifestStore(group; readahead=ReadaheadCache()))
-            za_uncached = Zarr.zopen(ManifestStore(group; readahead=ReadaheadCache(; maxbytes=0)))
+            za_cached = Zarr.zopen(ChunkManifest(group; readahead=ReadaheadCache()))
+            za_uncached = Zarr.zopen(ChunkManifest(group; readahead=ReadaheadCache(; maxbytes=0)))
 
             @test za_cached[:, :, :] == za_uncached[:, :, :]
             @test sum(za_cached) == sum(za_uncached)
@@ -153,13 +153,13 @@ end
             gridsize = (3,)
             index = fill(idx, gridsize)
             offset = UInt64[0, sizes[1], sizes[1] + sizes[2]]
-            manifest = ChunkManifest(table, index, offset, sizes)
-            va = VirtualArray{UInt8}(manifest, (3,), (1,); dimnames=["x"])
-            mstore = ManifestStore(VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va)))
+            manifest = ExplicitChunkMap(table, index, offset, sizes)
+            va = ManifestArray{UInt8}(manifest, (3,), (1,); dimnames=["x"])
+            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
 
             for I in CartesianIndices(gridsize)
                 uri, off, n = chunklocation(manifest, I)
-                got = VirtualZarr._readahead_fetch(
+                got = ChunkManifests._readahead_fetch(
                     mstore.readahead, mstore.transport, manifest, I, uri, off, n
                 )
                 @test got == bytes_by_chunk[I[1]]
@@ -182,12 +182,12 @@ end
             index = UInt32[k <= 6 ? idxA : idxB for k in 1:12]
             offset = UInt64[(mod(k - 1, 6)) * chunkbytes for k in 1:12]
             nbytes = fill(UInt64(chunkbytes), gridsize)
-            manifest = ChunkManifest(table, index, offset, nbytes)
-            va = VirtualArray{Float64}(manifest, (12,), (1,); dimnames=["x"])
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{Float64}(manifest, (12,), (1,); dimnames=["x"])
 
             counting = ReadaheadCountingTransport()
-            mstore = ManifestStore(
-                VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va)); transport=counting
+            mstore = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("" => va), transport=counting
             )
             za = Zarr.zopen(mstore)
 
@@ -204,23 +204,23 @@ end
         mktempdir() do dir
             nchunks = 8
             va, _, vals = _contig_va(dir, nchunks)
-            manifest = manifestof(va)
+            manifest = chunkmapof(va)
             table = pathtable(manifest)
 
             index = fill(UInt32(1), (nchunks,))
             offset = UInt64[(k - 1) * sizeof(Float64) for k in 1:nchunks]
             nbytes = fill(UInt64(sizeof(Float64)), (nchunks,))
-            index[3] = VirtualZarr.MISSING_INDEX
-            index[4] = VirtualZarr.INLINE_INDEX
+            index[3] = ChunkManifests.MISSING_INDEX
+            index[4] = ChunkManifests.INLINE_INDEX
             inline_bytes = collect(reinterpret(UInt8, [vals[4]]))
 
             fillvalue = -1.0
-            manifest2 = ChunkManifest(
+            manifest2 = ExplicitChunkMap(
                 table, index, offset, nbytes; inline=Dict(CartesianIndex(4) => inline_bytes)
             )
-            va2 = VirtualArray{Float64}(manifest2, (nchunks,), (1,); dimnames=["x"], fillvalue=fillvalue)
+            va2 = ManifestArray{Float64}(manifest2, (nchunks,), (1,); dimnames=["x"], fillvalue=fillvalue)
 
-            mstore = ManifestStore(VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va2)))
+            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va2))
             za = Zarr.zopen(mstore)
 
             expected = copy(vals)
@@ -234,8 +234,8 @@ end
             nchunks = 20
             va, _, vals = _contig_va(dir, nchunks)
             cache = ReadaheadCache(; maxbytes=3 * sizeof(Float64), chunks=32)
-            mstore = ManifestStore(
-                VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va)); readahead=cache
+            mstore = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("" => va), readahead=cache
             )
             za = Zarr.zopen(mstore)
 
@@ -248,7 +248,7 @@ end
         mktempdir() do dir
             nchunks = 16
             va, _, vals = _contig_va(dir, nchunks)
-            mstore = ManifestStore(VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va)))
+            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
             za = Zarr.zopen(mstore)
 
             results = asyncmap(1:nchunks; ntasks=8) do k
@@ -262,7 +262,7 @@ end
         mktempdir() do dir
             nchunks = 6
             va, _, vals = _contig_va(dir, nchunks)
-            manifest = manifestof(va)
+            manifest = chunkmapof(va)
             chunkbytes = sizeof(Float64)
 
             # Chunk 2 (offset 1*chunkbytes) is the bad one; a readahead
@@ -271,14 +271,14 @@ end
             I1 = CartesianIndex(1)
             uri, offset, nbytes = chunklocation(manifest, I1)
             cache = ReadaheadCache()
-            got = VirtualZarr._readahead_fetch(cache, flaky, manifest, I1, uri, offset, nbytes)
+            got = ChunkManifests._readahead_fetch(cache, flaky, manifest, I1, uri, offset, nbytes)
             @test only(reinterpret(Float64, got)) == vals[1]
 
             # The requested chunk itself failing must still throw.
             I2 = CartesianIndex(2)
             uri2, offset2, nbytes2 = chunklocation(manifest, I2)
             cache2 = ReadaheadCache()
-            @test_throws "simulated I/O failure" VirtualZarr._readahead_fetch(
+            @test_throws "simulated I/O failure" ChunkManifests._readahead_fetch(
                 cache2, flaky, manifest, I2, uri2, offset2, nbytes2
             )
         end

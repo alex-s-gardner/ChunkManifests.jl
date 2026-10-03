@@ -15,20 +15,20 @@ const _IT_ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/
 
 # Counts fetchrange calls, as in test/store.jl and test/readahead.jl, so a
 # laziness test can assert the number of actual I/O calls rather than only
-# correctness. A method on VirtualZarr.fetchrange, not a new `fetchrange` in
-# Main, since this file only has `using VirtualZarr`.
+# correctness. A method on ChunkManifests.fetchrange, not a new `fetchrange` in
+# Main, since this file only has `using ChunkManifests`.
 struct _IT_CountingTransport <: AbstractTransport
     inner::LocalTransport
     count::Threads.Atomic{Int}
 end
 _IT_CountingTransport() = _IT_CountingTransport(LocalTransport(), Threads.Atomic{Int}(0))
-function VirtualZarr.fetchrange(t::_IT_CountingTransport, uri::AbstractString, r::ByteRange)
+function ChunkManifests.fetchrange(t::_IT_CountingTransport, uri::AbstractString, r::ByteRange)
     Threads.atomic_add!(t.count, 1)
-    return VirtualZarr.fetchrange(t.inner, uri, r)
+    return ChunkManifests.fetchrange(t.inner, uri, r)
 end
 
 # A named top-level array ("data"), not the "" key test/store.jl uses: a
-# VirtualGroup with an array at "" makes Zarr.zopen return that array
+# ChunkManifest with an array at "" makes Zarr.zopen return that array
 # directly, whereas ZarrDatasets.ZarrDataset needs an actual ZGroup to walk.
 function _it_named_group(; shape, chunkshape, dimnames, fillvalue=nothing, attrs=Dict{String,Any}())
     gridsize = cld.(shape, chunkshape)
@@ -47,16 +47,16 @@ function _it_named_group(; shape, chunkshape, dimnames, fillvalue=nothing, attrs
     offset = zeros(UInt64, gridsize)
     nbytes = zeros(UInt64, gridsize)
     for I in CartesianIndices(gridsize)
-        fname = joinpath(dir, Zarr.citostring(VirtualZarr._V2_CHUNK_KEY_ENCODING, I))
+        fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
         index[I] = push_uri!(table, fname)
         nbytes[I] = filesize(fname)
     end
-    manifest = ChunkManifest(table, index, offset, nbytes)
-    va = VirtualArray{Float64}(
+    manifest = ExplicitChunkMap(table, index, offset, nbytes)
+    va = ManifestArray{Float64}(
         manifest, shape, chunkshape; fillvalue, compressor, dimnames, attrs
     )
-    group = VirtualGroup(;
-        arrays=Dict{String,VirtualArray}("data" => va),
+    group = ChunkManifest(;
+        arrays=Dict{String,ManifestArray}("data" => va),
         attrs=Dict{String,Any}("title" => "demo"),
     )
     return group, data
@@ -64,7 +64,7 @@ end
 
 @testset "integration" begin
 
-    @testset "ZarrDatasets.ZarrDataset over ManifestStore" begin
+    @testset "ZarrDatasets.ZarrDataset over ChunkManifest" begin
         # Distinct shape, chunk shape and dimension lengths: ZarrDatasets
         # reverses _ARRAY_DIMENSIONS to undo Zarr's C order against Julia's
         # column-major order, so a name paired with the wrong axis only shows
@@ -77,7 +77,7 @@ end
         group, data = _it_named_group(;
             shape, chunkshape, dimnames, fillvalue, attrs=Dict{String,Any}("units" => "m")
         )
-        mstore = ManifestStore(group)
+        mstore = group
         ds = ZarrDatasets.ZarrDataset(mstore)
 
         @testset "variable listing and dimension name/length pairing" begin
@@ -117,7 +117,7 @@ end
         group, data = _it_named_group(; shape, chunkshape, dimnames)
 
         counting = _IT_CountingTransport()
-        mstore = ManifestStore(group; transport=counting)
+        mstore = ChunkManifest(group; transport=counting)
         za = Zarr.zopen(mstore).arrays["data"]
 
         @test za isa _IT_DiskArrays.AbstractDiskArray
@@ -138,7 +138,7 @@ end
 
             for (name, dimnames_expected) in (("grounded", ("x", "y")),)
                 group = scan(HDF5Driver(), _IT_ITSLIVE_PATH; group="/$name")
-                mstore = ManifestStore(group)
+                mstore = group
                 ds = ZarrDatasets.ZarrDataset(mstore)
                 v = _IT_CDM.variable(ds, name)
 
@@ -157,7 +157,7 @@ end
     @testset "real HDF5 granule: single-dataset scan through ZarrDataset matches HDF5.jl" begin
         if isfile(_IT_ATL06_PATH)
             group = scan(HDF5Driver(), _IT_ATL06_PATH; group="/gt1l/land_ice_segments/h_li")
-            mstore = ManifestStore(group)
+            mstore = group
             ds = ZarrDatasets.ZarrDataset(mstore)
             v = _IT_CDM.variable(ds, "h_li")
 
@@ -178,7 +178,7 @@ end
             nchunks = prod(gridsize)
 
             counting = _IT_CountingTransport()
-            mstore = ManifestStore(group; transport=counting)
+            mstore = ChunkManifest(group; transport=counting)
             za = Zarr.zopen(mstore).arrays["grounded"]
 
             counting.count[] = 0

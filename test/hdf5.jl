@@ -7,33 +7,33 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
 @testset "HDF5Driver" begin
     @testset "candrive" begin
         if isfile(ATL06_PATH)
-            @test VirtualZarr.candrive(HDF5Driver(), ATL06_PATH)
+            @test ChunkManifests.candrive(HDF5Driver(), ATL06_PATH)
         end
-        @test !VirtualZarr.candrive(HDF5Driver(), joinpath(mktempdir(), "missing.h5"))
+        @test !ChunkManifests.candrive(HDF5Driver(), joinpath(mktempdir(), "missing.h5"))
         mktemp() do path, io
             write(io, "not an hdf5 file")
             close(io)
-            @test !VirtualZarr.candrive(HDF5Driver(), path)
+            @test !ChunkManifests.candrive(HDF5Driver(), path)
         end
     end
 
     @testset "codec registry" begin
-        @test VirtualZarr.lookup_codec(HDF5Driver, 1) !== nothing
-        @test VirtualZarr.lookup_codec(HDF5Driver, 999) === nothing
-        @test occursin("szip", VirtualZarr.rejection_reason(HDF5Driver, 4))
-        @test occursin("nbit", VirtualZarr.rejection_reason(HDF5Driver, 5))
-        @test occursin("fixedscaleoffset", VirtualZarr.rejection_reason(HDF5Driver, 6))
+        @test ChunkManifests.lookup_codec(HDF5Driver, 1) !== nothing
+        @test ChunkManifests.lookup_codec(HDF5Driver, 999) === nothing
+        @test occursin("szip", ChunkManifests.rejection_reason(HDF5Driver, 4))
+        @test occursin("nbit", ChunkManifests.rejection_reason(HDF5Driver, 5))
+        @test occursin("fixedscaleoffset", ChunkManifests.rejection_reason(HDF5Driver, 6))
 
-        compressor, filters = VirtualZarr.build_codecs(HDF5Driver, [(1, [6])], 4; context="ctx")
+        compressor, filters = ChunkManifests.build_codecs(HDF5Driver, [(1, [6])], 4; context="ctx")
         @test compressor == Dict{String,Any}("id" => "zlib", "level" => 6)
         @test isempty(filters)
 
-        compressor2, filters2 = VirtualZarr.build_codecs(HDF5Driver, [(2, [4]), (1, [5])], 4; context="ctx")
+        compressor2, filters2 = ChunkManifests.build_codecs(HDF5Driver, [(2, [4]), (1, [5])], 4; context="ctx")
         @test compressor2 == Dict{String,Any}("id" => "zlib", "level" => 5)
         @test filters2 == [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)]
 
         # fletcher32 after the compressor stays after it once the compressor is extracted.
-        compressor3, filters3 = VirtualZarr.build_codecs(
+        compressor3, filters3 = ChunkManifests.build_codecs(
             HDF5Driver, [(2, [4]), (1, [5]), (3, Int[])], 4; context="ctx"
         )
         @test compressor3 == Dict{String,Any}("id" => "zlib", "level" => 5)
@@ -42,24 +42,24 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             Dict{String,Any}("id" => "fletcher32"),
         ]
 
-        @test_throws "ctx" VirtualZarr.build_codecs(HDF5Driver, [(4, Int[])], 4; context="ctx")
-        @test_throws "szip" VirtualZarr.build_codecs(HDF5Driver, [(4, Int[])], 4; context="ctx")
-        @test_throws "ctx" VirtualZarr.build_codecs(HDF5Driver, [(32000, Int[])], 4; context="ctx")
-        @test_throws "ctx" VirtualZarr.build_codecs(HDF5Driver, [(32004, Int[])], 4; context="ctx")
-        @test_throws "ctx" VirtualZarr.build_codecs(HDF5Driver, [(32008, Int[])], 4; context="ctx")
-        @test_throws "no Zarr v2 codec" VirtualZarr.build_codecs(HDF5Driver, [(99999, Int[])], 4; context="ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(4, Int[])], 4; context="ctx")
+        @test_throws "szip" ChunkManifests.build_codecs(HDF5Driver, [(4, Int[])], 4; context="ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32000, Int[])], 4; context="ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32004, Int[])], 4; context="ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32008, Int[])], 4; context="ctx")
+        @test_throws "no Zarr v2 codec" ChunkManifests.build_codecs(HDF5Driver, [(99999, Int[])], 4; context="ctx")
 
-        @test_throws "more than one" VirtualZarr.build_codecs(
+        @test_throws "more than one" ChunkManifests.build_codecs(
             HDF5Driver, [(1, [5]), (32015, [5])], 4; context="ctx"
         )
 
         # Blosc/Zstd mapping, exercised directly: the HDF5 plugins for either
         # are not installed in this environment, so no real file can carry them.
-        bloscconfig, _ = VirtualZarr.build_codecs(HDF5Driver, [(32001, [2, 1, 4, 400, 5, 1, 2])], 4; context="ctx")
+        bloscconfig, _ = ChunkManifests.build_codecs(HDF5Driver, [(32001, [2, 1, 4, 400, 5, 1, 2])], 4; context="ctx")
         @test bloscconfig ==
             Dict{String,Any}("id" => "blosc", "cname" => "lz4hc", "clevel" => 5, "shuffle" => 1, "blocksize" => 0)
 
-        zstdconfig, _ = VirtualZarr.build_codecs(HDF5Driver, [(32015, [7])], 4; context="ctx")
+        zstdconfig, _ = ChunkManifests.build_codecs(HDF5Driver, [(32015, [7])], 4; context="ctx")
         @test zstdconfig == Dict{String,Any}("id" => "zstd", "level" => 7)
     end
 
@@ -67,26 +67,26 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
         # Whether a trailing bytes-to-bytes filter is accepted depends on the
         # resolved Zarr.jl, so assert against the same probe the driver uses
         # rather than hardcoding one outcome.
-        if VirtualZarr.zarr_decodes_byte_filters()
-            @test VirtualZarr.check_last_filter_multibyte(
+        if ChunkManifests.zarr_decodes_byte_filters()
+            @test ChunkManifests.check_last_filter_multibyte(
                 [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
             ) === nothing
-            @test VirtualZarr.check_last_filter_multibyte(
+            @test ChunkManifests.check_last_filter_multibyte(
                 [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
             ) === nothing
         else
-            @test_throws "decoder limitation" VirtualZarr.check_last_filter_multibyte(
+            @test_throws "decoder limitation" ChunkManifests.check_last_filter_multibyte(
                 [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
             )
-            @test_throws "decoder limitation" VirtualZarr.check_last_filter_multibyte(
+            @test_throws "decoder limitation" ChunkManifests.check_last_filter_multibyte(
                 [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
             )
         end
-        @test VirtualZarr.check_last_filter_multibyte(
+        @test ChunkManifests.check_last_filter_multibyte(
             [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)], Int8, "ctx"
         ) === nothing
-        @test VirtualZarr.check_last_filter_multibyte(Dict{String,Any}[], Int32, "ctx") === nothing
-        @test VirtualZarr.check_last_filter_multibyte(
+        @test ChunkManifests.check_last_filter_multibyte(Dict{String,Any}[], Int32, "ctx") === nothing
+        @test ChunkManifests.check_last_filter_multibyte(
             [Dict{String,Any}("id" => "zlib", "level" => 5)], Int32, "ctx"
         ) === nothing
     end
@@ -109,7 +109,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
                     for ci in HDF5.get_chunk_info_all(dset)
                         @test ci.filter_mask == 0
                         I = CartesianIndex(ntuple(d -> ci.offset[d] ÷ 10000 + 1, 1))
-                        uri, off, len = chunklocation(manifestof(h_li), I)
+                        uri, off, len = chunklocation(chunkmapof(h_li), I)
                         @test off == UInt64(ci.addr)
                         @test len == UInt64(ci.size)
                         _, buf = HDF5.do_read_chunk(dset, collect(Int, ci.offset) .+ 1)
@@ -134,7 +134,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
 
             @testset "n_fit_photons: Int32 shuffle+deflate, multi-byte" begin
                 path = "/gt1l/land_ice_segments/fit_statistics/n_fit_photons"
-                if VirtualZarr.zarr_decodes_byte_filters()
+                if ChunkManifests.zarr_decodes_byte_filters()
                     g = scan(HDF5Driver(), ATL06_PATH; group=path)
                     a = arraysof(g)["n_fit_photons"]
                     @test eltype(a) == Int32
@@ -143,7 +143,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
                     @test compressorof(a) == Dict{String,Any}("id" => "zlib", "level" => 6)
 
                     # The values this dataset's filters made unreadable.
-                    z = Zarr.zopen(ManifestStore(g))["n_fit_photons"]
+                    z = Zarr.zopen(g)["n_fit_photons"]
                     truth = h5open(ATL06_PATH, "r") do f
                         read(f[lstrip(path, '/')])
                     end
@@ -264,7 +264,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
                     dset = f["deflate_$level"]
                     for ci in HDF5.get_chunk_info_all(dset)
                         I = CartesianIndex(ci.offset[1] ÷ 5 + 1, ci.offset[2] ÷ 10 + 1)
-                        uri, off, len = chunklocation(manifestof(a), I)
+                        uri, off, len = chunklocation(chunkmapof(a), I)
                         @test len == UInt64(ci.size)
                         _, buf = HDF5.do_read_chunk(dset, collect(Int, ci.offset) .+ 1)
                         @test buf[1:ci.size] == open(io -> (seek(io, off); read(io, len)), uri, "r")
@@ -286,7 +286,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             @test filtersof(a1) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
             @test compressorof(a1) == Dict{String,Any}("id" => "zlib", "level" => 5)
 
-            if VirtualZarr.zarr_decodes_byte_filters()
+            if ChunkManifests.zarr_decodes_byte_filters()
                 g2 = scan(HDF5Driver(), fn; group="/shuffle_multi")
                 a2 = arraysof(g2)["shuffle_multi"]
                 @test filtersof(a2) ==
@@ -299,14 +299,14 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             end
         end
 
-        @testset "contiguous dataset -> AffineManifest" begin
+        @testset "contiguous dataset -> AffineChunkMap" begin
             g = scan(HDF5Driver(), fn; group="/contig")
             a = arraysof(g)["contig"]
-            @test manifestof(a) isa AffineManifest
-            @test chunkgridsize(manifestof(a)) == (1, 1)
+            @test chunkmapof(a) isa AffineChunkMap
+            @test chunkgridsize(chunkmapof(a)) == (1, 1)
             @test compressorof(a) === nothing
             @test isempty(filtersof(a))
-            uri, off, len = chunklocation(manifestof(a), CartesianIndex(1, 1))
+            uri, off, len = chunklocation(chunkmapof(a), CartesianIndex(1, 1))
             h5open(fn, "r") do f
                 d = f["contig"]
                 @test off == UInt64(HDF5.API.h5d_get_offset(d))
@@ -318,7 +318,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
         @testset "unallocated chunks -> MISSING_INDEX" begin
             g = scan(HDF5Driver(), fn; group="/partial")
             a = arraysof(g)["partial"]
-            m = manifestof(a)
+            m = chunkmapof(a)
             @test chunkstate(m, 1, 1) == VIRTUAL_CHUNK
             missingcount = 0
             for I in CartesianIndices(chunkgridaxes(m))
@@ -330,7 +330,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
 
             g2 = scan(HDF5Driver(), fn; group="/empty")
             a2 = arraysof(g2)["empty"]
-            m2 = manifestof(a2)
+            m2 = chunkmapof(a2)
             @test all(I -> chunkstate(m2, I) == MISSING_CHUNK, CartesianIndices(chunkgridaxes(m2)))
         end
 
@@ -346,7 +346,7 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
                 d = f["cube"]
                 for ci in HDF5.get_chunk_info_all(d)
                     I = CartesianIndex(ntuple(dim -> ci.offset[dim] ÷ (3, 4, 5)[dim] + 1, 3))
-                    uri, off, len = chunklocation(manifestof(a), I)
+                    uri, off, len = chunklocation(chunkmapof(a), I)
                     @test off == UInt64(ci.addr)
                     @test len == UInt64(ci.size)
                 end
