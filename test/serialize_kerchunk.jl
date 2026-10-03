@@ -311,4 +311,34 @@ import Zarr
         end
     end
 
+    @testset "store-agnostic: round trip through an in-memory Zarr.DictStore" begin
+        # `save`/`load` reach the filesystem only by resolving `path` to a
+        # store and a key within it; a `DictStore` round trip proves the
+        # document itself never touches a file path.
+        mktempdir() do dir
+            path = joinpath(dir, "data.bin")
+            write(path, collect(UInt8, 1:4))
+
+            table = PathTable()
+            idx = push_uri!(table, path)
+            gridsize = (4,)
+            index = fill(idx, gridsize)
+            offset = UInt64[0, 1, 2, 3]
+            nbytes = fill(UInt64(1), gridsize)
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{UInt8}(manifest, (4,), (1,); dimnames=["i"])
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("arr" => va))
+
+            store = Zarr.DictStore()
+            ChunkManifests.save(store, "refs.json", group, KerchunkJSON())
+            @test store["refs.json"] !== nothing
+
+            loaded = ChunkManifests.load(store, "refs.json", KerchunkJSON())
+            m2 = chunkmapof(arraysof(loaded)["arr"])
+            for I in CartesianIndices(gridsize)
+                @test chunklocation(m2, I) == chunklocation(manifest, I)
+            end
+        end
+    end
+
 end

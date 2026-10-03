@@ -1,3 +1,4 @@
+import HTTP
 import JSON
 import Zarr
 
@@ -319,6 +320,104 @@ end
                 doc["arrays"][1]["manifest"]["gridsize"] = [2]
                 write(jsonpath, JSON.json(doc))
                 @test_throws "chunk grid" ChunkManifests.load(outdir, fmt)
+            end
+        end
+    end
+
+    @testset "store-agnostic: round trip through an in-memory Zarr.DictStore" begin
+        # `save`/`load` reach the filesystem only by resolving `path` to a
+        # store; a `DictStore` round trip proves the native format itself
+        # never touches a file, directory, or path string.
+        mktempdir() do dir
+            va, _ = _contig_zarr_va(dir, 4)
+            manifest = chunkmapof(va)
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            fmt = ZarrManifest()
+
+            store = Zarr.DictStore()
+            ChunkManifests.save(store, "", group, fmt)
+            @test store["manifest.json"] !== nothing
+            @test store["arrays/0/index/.zarray"] !== nothing
+
+            group2 = ChunkManifests.load(store, "", fmt)
+            manifest2 = chunkmapof(arraysof(group2)["a"])
+            for I in CartesianIndices(chunkgridaxes(manifest))
+                @test chunklocation(manifest2, I) == chunklocation(manifest, I)
+            end
+        end
+    end
+
+    @testset "store-agnostic: round trip under a nonempty key prefix in one Zarr.DictStore" begin
+        # Proves a manifest need not own the whole store: `save`/`load`
+        # address everything through `prefix`, so two manifests can share one
+        # store at different prefixes without colliding.
+        mktempdir() do dir
+            va, _ = _contig_zarr_va(dir, 5)
+            manifest = chunkmapof(va)
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            fmt = ZarrManifest()
+
+            store = Zarr.DictStore()
+            ChunkManifests.save(store, "scans/one", group, fmt)
+            @test store["scans/one/manifest.json"] !== nothing
+
+            group2 = ChunkManifests.load(store, "scans/one", fmt)
+            manifest2 = chunkmapof(arraysof(group2)["a"])
+            for I in CartesianIndices(chunkgridaxes(manifest))
+                @test chunklocation(manifest2, I) == chunklocation(manifest, I)
+            end
+        end
+    end
+
+    @testset "store-agnostic: read through Zarr.HTTPStore" begin
+        # Zarr.HTTPStore issues one plain GET per key (no Range header), so a
+        # server that answers whole-file GETs by relative path is enough to
+        # read a manifest saved locally, by the same `load(store, prefix,
+        # fmt)` method a DictStore round trip uses above.
+        mktempdir() do dir
+            va, _ = _contig_zarr_va(dir, 4)
+            manifest = chunkmapof(va)
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            fmt = ZarrManifest()
+            outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
+
+            files = Dict{String,Vector{UInt8}}()
+            for (root, _, fnames) in walkdir(outdir)
+                for fname in fnames
+                    fpath = joinpath(root, fname)
+                    files[replace(relpath(fpath, outdir), '\\' => '/')] = read(fpath)
+                end
+            end
+
+            server = HTTP.serve!("127.0.0.1", 0) do req
+                bytes = get(files, lstrip(req.target, '/'), nothing)
+                bytes === nothing ? HTTP.Response(404, "no such key") : HTTP.Response(200, bytes)
+            end
+            try
+                url = "http://127.0.0.1:$(HTTP.port(server))"
+                group2 = ChunkManifests.load(Zarr.HTTPStore(url), "", fmt)
+                manifest2 = chunkmapof(arraysof(group2)["a"])
+                for I in CartesianIndices(chunkgridaxes(manifest))
+                    @test chunklocation(manifest2, I) == chunklocation(manifest, I)
+                end
+
+                # The public entry point takes the URI itself: Zarr.jl resolves
+                # an http(s) string to a store, warning and falling back to a
+                # plain HTTPStore when no consolidated metadata is present,
+                # which a manifest directory does not have. Publishing a
+                # manifest for others to read depends on this path working, not
+                # only on the store-based method above.
+                group3 = ChunkManifests.load(url, fmt)
+                manifest3 = chunkmapof(arraysof(group3)["a"])
+                for I in CartesianIndices(chunkgridaxes(manifest))
+                    @test chunklocation(manifest3, I) == chunklocation(manifest, I)
+                end
+                # The references still name the original source file, so the
+                # manifest reads real data after a round trip through a remote
+                # store rather than merely parsing.
+                @test Array(Zarr.zopen(group3)["a"][:]) == collect(Float64, 1:4)
+            finally
+                close(server)
             end
         end
     end

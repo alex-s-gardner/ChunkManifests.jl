@@ -81,6 +81,20 @@ Formats are types, so adding one is a new subtype rather than an edit to a dispa
 `save` and `load` are deliberately **not** exported; call them as
 `ChunkManifests.save(path, cm, ZarrManifest())`.
 
+A manifest may be saved to and loaded from object storage, not just a local directory. The
+path is resolved through `Zarr.storefromstring`, so `s3://`, `gs://`, `http://` and
+`https://` all work by the same code that handles a local path — a producer can scan an
+archive and publish the manifests next to the data for others to read:
+
+```julia
+ChunkManifests.save("s3://bucket/manifests/granule", cm, ZarrManifest())
+cm = ChunkManifests.load("s3://bucket/manifests/granule", ZarrManifest())
+```
+
+An `s3://` path needs AWS credentials at the point the store is constructed, before any
+request is made. Reading over plain `http(s)` logs one warning about absent consolidated
+metadata, which a manifest directory does not have, and then proceeds.
+
 The kerchunk formats are reimplementations of the published schema. Nothing here calls
 Python, and neither `kerchunk` nor `fsspec` is a dependency.
 

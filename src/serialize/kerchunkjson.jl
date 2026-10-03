@@ -226,7 +226,11 @@ end
 """
     save(path, group::ChunkManifest, fmt::KerchunkJSON; transport=LocalTransport())
 
-Write `group` as a kerchunk JSON reference-set document to `path`.
+Write `group` as a kerchunk JSON reference-set document to `path`. `path`
+names one document, not a directory: it is resolved to a store through
+`Zarr.storefromstring`, the same mechanism [`save(path, group, fmt::ZarrManifest)`](@ref)
+uses, so `path` may equally be a local file path or an `s3://`, `gs://`,
+`http://`, or `https://` URI.
 
 Every array's `.zarray`/`.zattrs` and every group's `.zgroup`/`.zattrs` are
 written as JSON-encoded string values under `refs`, matching the schema.
@@ -238,6 +242,23 @@ section is written, matching real kerchunk drivers.
 """
 function save(
     path::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
+    transport::AbstractTransport=LocalTransport(),
+)
+    store, key = _resolvefilestore(path, true)
+    save(store, key, group, fmt; transport)
+    return nothing
+end
+
+"""
+    save(store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON; transport=LocalTransport())
+
+Write `group` as a kerchunk JSON reference-set document into `store` under
+`key`, exactly as `save(path, group, fmt)` does once it has resolved `path`
+to a store. Not part of the public interface; exists so a manifest's
+store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
+"""
+function save(
+    store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
     transport::AbstractTransport=LocalTransport(),
 )
     arrays = arraysof(group)
@@ -257,7 +278,7 @@ function save(
     end
 
     doc = Dict{String,Any}("version" => KERCHUNK_REFERENCE_VERSION, "refs" => refs)
-    write(path, JSON.json(doc))
+    store[key] = Vector{UInt8}(codeunits(JSON.json(doc)))
     return nothing
 end
 
@@ -265,7 +286,9 @@ end
     load(path, fmt::KerchunkJSON) -> ChunkManifest
 
 Read a kerchunk JSON reference-set document from `path` into a
-[`ChunkManifest`](@ref).
+[`ChunkManifest`](@ref). `path` names one document, not a directory: it is
+resolved to a store through `Zarr.storefromstring`, so `path` may equally be
+a local file path or an `s3://`, `gs://`, `http://`, or `https://` URI.
 
 Accepts all four `refs` entry shapes (`[url, offset, length]`, `[url]`,
 a plain string, and a `"base64:..."` string) and substitutes `templates`
@@ -275,21 +298,40 @@ present in `refs` that does not parse against its array's chunk grid, and a
 `.zarray` dtype with no faithful Julia type, both throw naming the file and
 the offending key.
 """
-function load(path::AbstractString, ::KerchunkJSON)
-    doc = JSON.parsefile(path)
+function load(path::AbstractString, fmt::KerchunkJSON)
+    store, key = _resolvefilestore(path, false)
+    return _load_kerchunkjson(store, key, path, fmt)
+end
+
+"""
+    load(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON) -> ChunkManifest
+
+Read a kerchunk JSON reference-set document from `store` under `key`,
+exactly as `load(path, fmt)` does once it has resolved `path` to a store.
+Not part of the public interface; exists so a manifest's store-agnosticism
+can be exercised directly against any `Zarr.AbstractStore`.
+"""
+function load(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON)
+    return _load_kerchunkjson(store, key, key, fmt)
+end
+
+function _load_kerchunkjson(store::Zarr.AbstractStore, key::AbstractString, label::AbstractString, ::KerchunkJSON)
+    bytes = store[key]
+    bytes === nothing && throw(ArgumentError("load: \"$label\" does not exist"))
+    doc = JSON.parse(String(bytes))
     doc isa AbstractDict || throw(ArgumentError(
-        "$path: top-level kerchunk document must be a JSON object, got $(typeof(doc))"
+        "$label: top-level kerchunk document must be a JSON object, got $(typeof(doc))"
     ))
-    haskey(doc, "version") || throw(ArgumentError("$path: missing required \"version\" key"))
+    haskey(doc, "version") || throw(ArgumentError("$label: missing required \"version\" key"))
     doc["version"] == KERCHUNK_REFERENCE_VERSION || throw(ArgumentError(
-        "$path: unsupported kerchunk reference-set version $(repr(doc["version"])); " *
+        "$label: unsupported kerchunk reference-set version $(repr(doc["version"])); " *
         "only version $KERCHUNK_REFERENCE_VERSION is supported",
     ))
     haskey(doc, "gen") && throw(ArgumentError(
-        "$path: \"gen\" (programmatic reference generation) is not supported; " *
+        "$label: \"gen\" (programmatic reference generation) is not supported; " *
         "expand it to explicit refs before loading",
     ))
-    haskey(doc, "refs") || throw(ArgumentError("$path: missing required \"refs\" key"))
+    haskey(doc, "refs") || throw(ArgumentError("$label: missing required \"refs\" key"))
     refs = doc["refs"]
     templates = get(doc, "templates", Dict{String,Any}())
 
@@ -298,15 +340,15 @@ function load(path::AbstractString, ::KerchunkJSON)
     zattrsdocs = Dict{String,Any}()
     chunkleaves = Dict{String,Vector{Pair{String,Any}}}()
 
-    for (key, value) in refs
-        prefix, leaf = _splitkey(key)
+    for (refkey, value) in refs
+        prefix, leaf = _splitkey(refkey)
         if leaf == ".zarray"
-            zarraydocs[prefix] = _parsejsonstring(value, path, key)
+            zarraydocs[prefix] = _parsejsonstring(value, label, refkey)
         elseif leaf == ".zattrs"
             if prefix == ""
-                rootattrs = Dict{String,Any}(_parsejsonstring(value, path, key))
+                rootattrs = Dict{String,Any}(_parsejsonstring(value, label, refkey))
             else
-                zattrsdocs[prefix] = _parsejsonstring(value, path, key)
+                zattrsdocs[prefix] = _parsejsonstring(value, label, refkey)
             end
         elseif leaf == ".zgroup"
             continue
@@ -320,9 +362,9 @@ function load(path::AbstractString, ::KerchunkJSON)
     for (arraypath, zarraydoc) in zarraydocs
         leaves = get(chunkleaves, arraypath, Pair{String,Any}[])
         zattrsdoc = get(zattrsdocs, arraypath, nothing)
-        arrays[arraypath] = _buildarray(path, arraypath, zarraydoc, zattrsdoc, leaves, table, templates)
+        arrays[arraypath] = _buildarray(label, arraypath, zarraydoc, zattrsdoc, leaves, table, templates)
     end
 
-    provenance = Dict{String,Any}("format" => "KerchunkJSON", "path" => String(path))
+    provenance = Dict{String,Any}("format" => "KerchunkJSON", "path" => String(label))
     return ChunkManifest(; arrays, attrs=rootattrs, provenance)
 end
