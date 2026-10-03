@@ -258,7 +258,9 @@ end
 # endpoint URL, and the region one resolves to cannot be recovered from the URI,
 # so a caller wanting it in place passes the https:// form explicitly.
 function _remoteaccess(::HDF5Driver, uri::AbstractString)
-    HDF5.has_ros3() && startswith(uri, "https://") && return ROS3Access()
+    if HDF5.has_ros3() && (startswith(uri, "https://") || startswith(uri, "http://"))
+        return ROS3Access()
+    end
     return DownloadAccess()
 end
 
@@ -272,11 +274,11 @@ function _scan_hdf5(
         "that driver, or scan with DownloadAccess(), which fetches the object " *
         "once and works anywhere",
     ))
-    startswith(uri, "https://") || throw(ArgumentError(
-        "ROS3Access needs an https:// endpoint, got $(repr(uri)). libhdf5's " *
-        "read-only S3 driver addresses objects by endpoint URL, and the region " *
-        "an s3:// URI resolves to is not recoverable from the URI alone — give " *
-        "the https:// form, or scan with DownloadAccess()",
+    (startswith(uri, "https://") || startswith(uri, "http://")) || throw(ArgumentError(
+        "ROS3Access needs an http:// or https:// endpoint, got $(repr(uri)). " *
+        "libhdf5's read-only S3 driver addresses objects by endpoint URL, and the " *
+        "region an s3:// URI resolves to is not recoverable from the URI alone — " *
+        "give the endpoint form, or scan with DownloadAccess()",
     ))
     h5driver = access.aws === nothing ? HDF5.Drivers.ROS3() : access.aws
     return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group)

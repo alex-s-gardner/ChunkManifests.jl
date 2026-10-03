@@ -120,9 +120,40 @@ end
         )
     end
 
-    @testset "ROS3Access reports what is missing" begin
+    @testset "ROS3Access" begin
         if HDF5.has_ros3()
-            @test_skip "this libhdf5 has the ros3 driver; the unavailable path cannot run"
+            # Only reachable on a libhdf5 built with the driver, which the
+            # HDF5_jll binaries are not. Given no credentials, ros3 issues
+            # unauthenticated ranged GETs, so a local endpoint is enough to
+            # read a real file through it and confirm the driver is wired up
+            # rather than merely present.
+            _acc_withserver(read(src), "src.h5") do url
+                cm = ChunkManifests.scan(HDF5Driver(), url; access=ROS3Access())
+                @test sort(collect(keys(arraysof(cm)))) == ["data"]
+                @test Array(Zarr.zopen(cm)["data"][:]) == expected
+
+                m = chunkmapof(arraysof(cm)["data"])
+                for I in CartesianIndices(chunkgridaxes(m))
+                    @test chunklocation(m, I)[1] == url
+                end
+                # Nothing was fetched whole, so no size is recorded for the
+                # entry; see _scan_hdf5 for ROS3Access.
+                @test pathtable(cm)[1].size === nothing
+            end
+
+            # On such a build AutoAccess prefers reading in place.
+            @test ChunkManifests.resolve_access(
+                AutoAccess(), HDF5Driver(), "https://h/k.h5"
+            ) isa ROS3Access
+
+            # An s3:// URI still cannot be addressed: the region is not
+            # recoverable from the URI, so it falls back to fetching.
+            @test ChunkManifests.resolve_access(
+                AutoAccess(), HDF5Driver(), "s3://b/k.h5"
+            ) isa DownloadAccess
+            @test_throws "endpoint form" ChunkManifests.scan(
+                HDF5Driver(), "s3://b/k.h5"; access=ROS3Access()
+            )
         else
             # The binaries shipped by HDF5_jll are built without the driver, so
             # the message has to name the alternative rather than just fail.
