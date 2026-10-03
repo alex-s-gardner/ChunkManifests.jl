@@ -8,6 +8,7 @@ using Test
     include("transport.jl")
     include("http.jl")
     include("containers.jl")
+    include("frompath.jl")
     include("metadata.jl")
     include("store.jl")
     include("readahead.jl")

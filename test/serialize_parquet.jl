@@ -303,4 +303,26 @@ end
         end
     end
 
+    @testset "ChunkManifest(path) detects and reads a .parq directory" begin
+        # The counterpart in frompath.jl runs before Parquet2 is loaded, so it
+        # can only check that the directory is identified and the absent reader
+        # reported. Here the round trip runs for real.
+        dir = mktempdir()
+        n = 6
+        va = _pq2_contig_va(dir, n)
+        cm = ChunkManifest(; arrays=Dict{String,ManifestArray}("d" => va))
+        root = joinpath(dir, "refs.parq")
+        ChunkManifests.save(root, cm, KerchunkParquet())
+
+        @test ChunkManifests._savedformat(root) isa KerchunkParquet
+        back = ChunkManifest(root)
+        @test back isa ChunkManifest
+        @test sort(collect(keys(arraysof(back)))) == ["d"]
+        @test Array(Zarr.zopen(back)["d"][:]) == collect(Float64, 1:n)
+        # Loading must leave every array on the manifest's own table.
+        for a in values(arraysof(back))
+            @test pathtable(chunkmapof(a)) === pathtable(back)
+        end
+    end
+
 end

@@ -26,6 +26,7 @@ include("drivers/geotiffmeta.jl")
 include("serialize/zarrnative.jl")
 include("serialize/kerchunkjson.jl")
 include("combine/combine.jl")
+include("frompath.jl")
 
 export AbstractChunkMap, ExplicitChunkMap, AffineChunkMap
 export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
