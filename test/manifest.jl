@@ -142,4 +142,24 @@
         am = AffineManifest(t, (1,), UInt64(0), (UInt64(4),), UInt32(4))
         @test occursin("AffineManifest", sprint(show, am))
     end
+
+    @testset "ChunkManifest from AffineManifest" begin
+        t = PathTable()
+        push_uri!(t, "a.bin")
+        am = AffineManifest(t, (2, 3), UInt64(100), (UInt64(8), UInt64(64)), UInt32(8))
+        cm = ChunkManifest(am)
+
+        @test cm isa ChunkManifest
+        @test chunkgridsize(cm) == chunkgridsize(am)
+        for I in CartesianIndices(chunkgridsize(am))
+            @test chunklocation(cm, I) == chunklocation(am, I)
+            @test chunkstate(cm, I) == VIRTUAL_CHUNK
+        end
+
+        # The point of converting: an affine manifest cannot be repointed, an
+        # explicit one can, and only the chunk asked for changes.
+        setchunk!(cm, CartesianIndex(1, 1), "b.bin", UInt64(0), UInt64(8))
+        @test chunklocation(cm, CartesianIndex(1, 1)) == ("b.bin", UInt64(0), UInt64(8))
+        @test chunklocation(cm, CartesianIndex(2, 1)) == chunklocation(am, CartesianIndex(2, 1))
+    end
 end

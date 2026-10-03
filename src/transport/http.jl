@@ -92,3 +92,39 @@ function fetchrange(t::HTTPTransport, uri::AbstractString, r::ByteRange)
     ))
     return body
 end
+
+"""
+    objectsize(t::HTTPTransport, uri) -> UInt64
+
+Total size of the object at `uri`, from the `Content-Range` of a one-byte
+ranged request.
+
+A `HEAD` would be the obvious route, but some archive hosts answer it with
+`Content-Length: 0` after a redirect, which would silently report an empty
+object. Asking for `bytes=0-0` costs one byte and makes the server state the
+total it is serving.
+"""
+function objectsize(t::HTTPTransport, uri::AbstractString)
+    url = _httpuri(uri)
+    resp = try
+        HTTP.get(
+            url, ["Range" => "bytes=0-0"];
+            client=t.client, retries=t.retries, status_exception=false,
+        )
+    catch err
+        error("HTTP request failed sizing $(repr(uri)): $err")
+    end
+
+    resp.status == 206 || error(
+        "HTTP $(resp.status) sizing $(repr(uri)): expected 206 with a Content-Range " *
+        "header; a server that ignores Range cannot report a total size this way",
+    )
+
+    contentrange = HTTP.header(resp, "Content-Range", "")
+    m = match(r"^bytes\s+\d+-\d+/(\d+)$", contentrange)
+    m === nothing && error(
+        "sizing $(repr(uri)): could not read a total from Content-Range " *
+        repr(contentrange),
+    )
+    return parse(UInt64, m[1])
+end

@@ -296,4 +296,27 @@ end
             end
         end
     end
+
+    @testset "objectsize reads the total from Content-Range" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/sized.bin", content)
+            @test objectsize(HTTPTransport(), base * "/sized.bin") == UInt64(nbytes)
+        end
+    end
+
+    @testset "objectsize fails when the server ignores Range" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/whole.bin", content; ignorerange=true)
+            @test_throws "cannot report a total size" objectsize(
+                HTTPTransport(), base * "/whole.bin"
+            )
+        end
+    end
+
+    @testset "objectsize on a missing route fails naming the uri" begin
+        _withserver() do ts, base
+            uri = base * "/absent.bin"
+            @test_throws "404" objectsize(HTTPTransport(), uri)
+        end
+    end
 end

@@ -89,4 +89,24 @@ function VirtualZarr.fetchrange(
     return body
 end
 
+"""
+    objectsize(t::S3Transport, uri) -> UInt64
+
+Size of the object at `uri` from its `Content-Length`, via a HEAD request that
+transfers no object data.
+"""
+function VirtualZarr.objectsize(t::VirtualZarr.S3Transport, uri::AbstractString)
+    bucket, key = _s3_bucket_key(t, uri)
+    headers = try
+        AWSS3.s3_get_meta(_awsconfig(t.aws), bucket, key)
+    catch e
+        error("failed to size s3://$bucket/$key: $e")
+    end
+    len = get(headers, "Content-Length", get(headers, "content-length", nothing))
+    len === nothing && error(
+        "sizing s3://$bucket/$key: response carried no Content-Length header",
+    )
+    return parse(UInt64, string(len))
+end
+
 end # module VirtualZarrAWSS3Ext

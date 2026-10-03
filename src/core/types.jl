@@ -363,6 +363,22 @@ function replace_prefix! end
 # "wait for a Task", and overloading it for I/O would conflate the two.
 function fetchrange end
 function fetchranges end
+
+"""
+    objectsize(t::AbstractTransport, uri) -> UInt64
+
+Size in bytes of the object at `uri`, without reading its contents.
+
+[`validate`](@ref) compares this against the size recorded when a manifest was
+scanned, which only pays off if it costs one metadata request rather than a
+download.
+"""
+function objectsize end
+
+# Combining and integrity.
+function concat end
+function validate end
+function setchunk! end
 function coalesce_ranges end
 function maxgap end
 function maxblock end

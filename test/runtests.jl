@@ -17,5 +17,8 @@ using Test
     include("serialize_zarr.jl")
     include("serialize_kerchunk.jl")
     include("serialize_parquet.jl")
+    include("combine.jl")
+    include("validate.jl")
+    include("integration.jl")
     include("s3.jl")
 end

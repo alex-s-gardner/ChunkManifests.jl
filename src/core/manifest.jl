@@ -138,3 +138,27 @@ end
 function Base.show(io::IO, m::AffineManifest{N}) where {N}
     print(io, "AffineManifest{$N}(grid=", chunkgridsize(m), ", files=", length(m.table), ")")
 end
+
+"""
+    ChunkManifest(m::AffineManifest)
+
+Materialize `m` as an explicit per-chunk manifest.
+
+An [`AffineManifest`](@ref) computes offsets from a closed form and keeps no
+per-chunk storage, so individual chunks cannot be repointed. Converting is the
+way to edit one: it trades constant size for the ability to call
+[`setchunk!`](@ref).
+"""
+function ChunkManifest(m::AffineManifest{N}) where {N}
+    gridaxes = chunkgridaxes(m)
+    index = fill(UInt32(1), map(length, gridaxes))
+    offset = Array{UInt64,N}(undef, size(index))
+    nbytes = Array{UInt64,N}(undef, size(index))
+    for I in CartesianIndices(gridaxes)
+        _, off, len = chunklocation(m, I)
+        J = CartesianIndex(map((i, ax) -> i - first(ax) + 1, Tuple(I), gridaxes))
+        offset[J] = off
+        nbytes[J] = len
+    end
+    return ChunkManifest(pathtable(m), index, offset, nbytes)
+end

@@ -10,6 +10,7 @@ include("core/types.jl")
 include("core/pathtable.jl")
 include("core/manifest.jl")
 include("core/virtualarray.jl")
+include("core/validate.jl")
 include("codecs/mapping.jl")
 include("codecs/tiffpredictor.jl")
 include("transport/transport.jl")
@@ -23,6 +24,7 @@ include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")
 include("serialize/zarrnative.jl")
 include("serialize/kerchunkjson.jl")
+include("combine/combine.jl")
 
 export AbstractManifest, ChunkManifest, AffineManifest
 export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
@@ -34,7 +36,8 @@ export FileEntry, PathTable, VirtualArray, VirtualGroup
 export chunkgridaxes, chunkgridsize, chunkstate, chunklocation, inlinebytes
 export manifestversion, pathtable
 export uriof, push_uri!, seturi!, replace_prefix!
-export fetchrange, fetchranges
+export fetchrange, fetchranges, objectsize
+export concat, validate, setchunk!
 export manifestof, shapeof, chunkshapeof, fillvalueof, compressorof, filtersof
 export attrsof, dimnamesof, arraysof, provenanceof
 
