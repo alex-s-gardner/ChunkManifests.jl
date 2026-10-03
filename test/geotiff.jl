@@ -92,13 +92,15 @@ function _gt_writetiff(
     return path
 end
 
-function _gt_basetags(; width, height, bits, compression, sampleformat=1, samplesperpixel=1, planarconfig=1)
+function _gt_basetags(;
+    width, height, bits, compression, sampleformat=1, samplesperpixel=1, planarconfig=1, photometric=1,
+)
     return [
         _gt_entry(256, _GT_LONG, [UInt32(width)]),           # IMAGEWIDTH
         _gt_entry(257, _GT_LONG, [UInt32(height)]),          # IMAGELENGTH
         _gt_entry(258, _GT_SHORT, [UInt16(bits)]),           # BITSPERSAMPLE
         _gt_entry(259, _GT_SHORT, [UInt16(compression)]),    # COMPRESSION
-        _gt_entry(262, _GT_SHORT, [UInt16(1)]),               # PHOTOMETRIC = MinIsBlack
+        _gt_entry(262, _GT_SHORT, [UInt16(photometric)]),     # PHOTOMETRIC
         _gt_entry(277, _GT_SHORT, [UInt16(samplesperpixel)]), # SAMPLESPERPIXEL
         _gt_entry(284, _GT_SHORT, [UInt16(planarconfig)]),    # PLANARCONFIG
         _gt_entry(339, _GT_SHORT, [UInt16(sampleformat)]),    # SAMPLEFORMAT
@@ -107,12 +109,13 @@ end
 
 function _gt_striped(
     path; width, height, rowsperstrip, bits, compression=1, predictor=1, sampleformat=1,
+    samplesperpixel=1, planarconfig=1, photometric=1,
     payload, gapbefore=zeros(Int, length(payload)),
 )
     nstrips = length(payload)
     bytecounts = UInt32.(length.(payload))
     tags = vcat(
-        _gt_basetags(; width, height, bits, compression, sampleformat),
+        _gt_basetags(; width, height, bits, compression, sampleformat, samplesperpixel, planarconfig, photometric),
         [
             _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),      # ROWSPERSTRIP
             _gt_entry(273, _GT_LONG, zeros(UInt32, nstrips)),      # STRIPOFFSETS (patched)
@@ -124,12 +127,13 @@ function _gt_striped(
 end
 
 function _gt_tiled(
-    path; width, height, tilewidth, tilelength, bits, compression=1, predictor=1, sampleformat=1, payload,
+    path; width, height, tilewidth, tilelength, bits, compression=1, predictor=1, sampleformat=1,
+    samplesperpixel=1, planarconfig=1, photometric=1, payload,
 )
     ntiles = length(payload)
     bytecounts = UInt32.(length.(payload))
     tags = vcat(
-        _gt_basetags(; width, height, bits, compression, sampleformat),
+        _gt_basetags(; width, height, bits, compression, sampleformat, samplesperpixel, planarconfig, photometric),
         [
             _gt_entry(322, _GT_LONG, [UInt32(tilewidth)]),   # TILEWIDTH
             _gt_entry(323, _GT_LONG, [UInt32(tilelength)]),  # TILELENGTH
@@ -139,6 +143,45 @@ function _gt_tiled(
         ],
     )
     return _gt_writetiff(path, tags, 324, payload)
+end
+
+# Splits a Julia-order (band, x, y) chunky array into row-groups of
+# `rowsperstrip` rows: band is dimension 1, so slicing then `vec`ing already
+# yields TIFF's own band-fastest, then-x, then-y byte run for that row group.
+function _gt_chunkyrows(data::AbstractArray{T,3}, rowsperstrip::Integer) where {T}
+    height = size(data, 3)
+    return [
+        Vector{UInt8}(reinterpret(UInt8, vec(data[:, :, r:min(r + rowsperstrip - 1, height)])))
+        for r in 1:rowsperstrip:height
+    ]
+end
+
+# Pads a Julia-order (band, x, y) chunky array to whole tiles and splits it
+# into per-tile raw byte blocks, row-major in (tx, ty) to match TIFF's tile
+# ordering.
+function _gt_chunkytiles(data::AbstractArray{T,3}, tilewidth::Integer, tilelength::Integer) where {T}
+    nsp, width, height = size(data)
+    gridx, gridy = cld(width, tilewidth), cld(height, tilelength)
+    padded = zeros(T, nsp, gridx * tilewidth, gridy * tilelength)
+    padded[:, 1:width, 1:height] .= data
+    payload = Vector{UInt8}[]
+    for ty in 1:gridy, tx in 1:gridx
+        block = padded[:, (tx - 1) * tilewidth + 1:tx * tilewidth, (ty - 1) * tilelength + 1:ty * tilelength]
+        push!(payload, Vector{UInt8}(reinterpret(UInt8, vec(block))))
+    end
+    return payload
+end
+
+# Raw strip bytes for a Julia-order (x, y, band) planar array, in the
+# sample-major entry order PLANARCONFIG=2 stores: every strip of band 1,
+# then every strip of band 2, and so on.
+function _gt_planarpayload(data::AbstractArray{T,3}, rowsperstrip::Integer) where {T}
+    nsp = size(data, 3)
+    payload = Vector{UInt8}[]
+    for band in 1:nsp
+        append!(payload, _gt_striprows(data[:, :, band], rowsperstrip))
+    end
+    return payload
 end
 
 # Splits a Julia-order (x, y) array into row-groups of `rowsperstrip` rows
@@ -334,34 +377,22 @@ end
             end
         end
 
-        @testset "PLANARCONFIG=2 is rejected" begin
+        @testset "PLANARCONFIG=2 with a single band stays 2-D (x,y), same as chunky" begin
             width, height, rowsperstrip = 4, 4, 4
-            path = joinpath(dir, "planar.tif")
-            tags = vcat(
-                _gt_basetags(; width, height, bits=16, compression=1, samplesperpixel=1, planarconfig=2),
-                [
-                    _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
-                    _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
-                    _gt_entry(279, _GT_LONG, UInt32[width * height * 2]),
-                ],
+            data = rand(UInt16, width, height)
+            path = joinpath(dir, "planar_singleband.tif")
+            _gt_striped(
+                path; width, height, rowsperstrip, bits=16, samplesperpixel=1, planarconfig=2,
+                payload=_gt_striprows(data, rowsperstrip),
             )
-            _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            @test_throws "PLANARCONFIG=2" VirtualZarr.scan(GeoTIFFDriver(), path)
-        end
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            va = VirtualZarr.arraysof(group)["0"]
+            @test shapeof(va) == (width, height)
+            @test dimnamesof(va) == ["x", "y"]
 
-        @testset "SAMPLESPERPIXEL>1 is rejected" begin
-            width, height, rowsperstrip = 4, 4, 4
-            path = joinpath(dir, "multiband.tif")
-            tags = vcat(
-                _gt_basetags(; width, height, bits=16, compression=1, samplesperpixel=3, planarconfig=1),
-                [
-                    _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
-                    _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
-                    _gt_entry(279, _GT_LONG, UInt32[width * height * 2 * 3]),
-                ],
-            )
-            _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2 * 3)])
-            @test_throws "SAMPLESPERPIXEL=3" VirtualZarr.scan(GeoTIFFDriver(), path)
+            store = ManifestStore(group)
+            z = Zarr.zopen(store; path="0")
+            @test Array(z[:, :]) == data
         end
 
         @testset "ModelPixelScale + ModelTiepoint decode into a GeoTransform and x/y coordinates" begin
@@ -444,6 +475,148 @@ end
             _gt_writetiff(path, tags1, 273, [rand(UInt8, width * height * 2)])
             group = VirtualZarr.scan(GeoTIFFDriver(), path)
             @test collect(keys(arraysof(group))) == ["0"]
+        end
+
+        @testset "chunky RGB uncompressed: shape (band,x,y), per-band values, independent decode" begin
+            width, height, nsp = 5, 3, 3
+            data3 = Array{Float32}(undef, nsp, width, height)
+            for y in 1:height, x in 1:width, b in 1:nsp
+                data3[b, x, y] = Float32(100y + 10x + b)
+            end
+            path = joinpath(dir, "rgb_chunky.tif")
+            _gt_striped(
+                path; width, height, rowsperstrip=height, bits=32, sampleformat=3,
+                samplesperpixel=nsp, planarconfig=1, photometric=2,
+                payload=[Vector{UInt8}(reinterpret(UInt8, vec(data3)))],
+            )
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            va = VirtualZarr.arraysof(group)["0"]
+            @test shapeof(va) == (nsp, width, height)
+            @test chunkshapeof(va) == (nsp, width, height)
+            @test dimnamesof(va) == ["band", "x", "y"]
+            @test manifestof(va) isa AffineManifest
+
+            store = ManifestStore(group)
+            z = Zarr.zopen(store; path="0")
+            result = Array(z[:, :, :])
+            @test result == data3
+            for b in 1:nsp
+                @test result[b, :, :] == data3[b, :, :]
+            end
+
+            img = TiffImages.load(path)
+            decoded = permutedims(convert(Array, img))
+            @test [p.r for p in decoded] == data3[1, :, :]
+            @test [p.g for p in decoded] == data3[2, :, :]
+            @test [p.b for p in decoded] == data3[3, :, :]
+        end
+
+        @testset "chunky RGB tiled DEFLATE with edge tiles: padding plus a band dimension" begin
+            width, height, tilewidth, tilelength, nsp = 11, 7, 4, 3, 3
+            data3 = Array{UInt16}(undef, nsp, width, height)
+            for y in 1:height, x in 1:width, b in 1:nsp
+                data3[b, x, y] = UInt16(1000b + 10y + x)
+            end
+            payload = [
+                Zarr.zcompress(block, Zarr.ZlibCompressor())
+                for block in _gt_chunkytiles(data3, tilewidth, tilelength)
+            ]
+
+            path = joinpath(dir, "rgb_tiled_deflate.tif")
+            _gt_tiled(
+                path; width, height, tilewidth, tilelength, bits=16, compression=8,
+                samplesperpixel=nsp, planarconfig=1, photometric=2, payload,
+            )
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            va = VirtualZarr.arraysof(group)["0"]
+            @test shapeof(va) == (nsp, width, height)
+            @test chunkshapeof(va) == (nsp, tilewidth, tilelength)
+            @test manifestof(va) isa ChunkManifest
+
+            store = ManifestStore(group)
+            z = Zarr.zopen(store; path="0")
+            result = Array(z[:, :, :])
+            @test result == data3
+            for b in 1:nsp
+                @test result[b, :, :] == data3[b, :, :]
+            end
+        end
+
+        @testset "chunky multi-band PREDICTOR=2: end-to-end pixel-exact with the real samplesperpixel stride" begin
+            width, height, nsp = 7, 3, 3
+            data3 = Array{UInt16}(undef, nsp, width, height)
+            for y in 1:height, x in 1:width, b in 1:nsp
+                data3[b, x, y] = UInt16(1000b + 10y + x)
+            end
+            f = VirtualZarr.TIFFPredictor(UInt16, width, nsp)
+            encoded = Zarr.zencode(vec(data3), f)
+            compressed = Zarr.zcompress(encoded, Zarr.ZlibCompressor())
+
+            path = joinpath(dir, "rgb_predictor.tif")
+            _gt_striped(
+                path; width, height, rowsperstrip=height, bits=16, compression=8, predictor=2,
+                samplesperpixel=nsp, planarconfig=1,
+                payload=[compressed],
+            )
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            va = VirtualZarr.arraysof(group)["0"]
+            @test length(filtersof(va)) == 1
+            @test filtersof(va)[1]["samplesperpixel"] == nsp
+
+            store = ManifestStore(group)
+            z = Zarr.zopen(store; path="0")
+            @test Array(z[:, :, :]) == data3
+        end
+
+        @testset "planar multi-band: shape (x,y,band), sample-major entry order, per-band values" begin
+            width, height, rowsperstrip, nsp = 5, 6, 2, 3
+            data3 = Array{UInt16}(undef, width, height, nsp)
+            for y in 1:height, x in 1:width, b in 1:nsp
+                data3[x, y, b] = UInt16(1000b + 10y + x)
+            end
+            path = joinpath(dir, "planar_multiband.tif")
+            _gt_striped(
+                path; width, height, rowsperstrip, bits=16, samplesperpixel=nsp, planarconfig=2,
+                payload=_gt_planarpayload(data3, rowsperstrip),
+            )
+
+            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            va = VirtualZarr.arraysof(group)["0"]
+            @test shapeof(va) == (width, height, nsp)
+            @test chunkshapeof(va) == (width, rowsperstrip, 1)
+            @test dimnamesof(va) == ["x", "y", "band"]
+            @test manifestof(va) isa ChunkManifest
+
+            store = ManifestStore(group)
+            z = Zarr.zopen(store; path="0")
+            result = Array(z[:, :, :])
+            @test result == data3
+            for b in 1:nsp
+                @test result[:, :, b] == data3[:, :, b]
+            end
+        end
+
+        @testset "non-uniform BITSPERSAMPLE rejected by name" begin
+            width, height, rowsperstrip, nsp = 4, 4, 4, 3
+            path = joinpath(dir, "nonuniform_bits.tif")
+            tags = [
+                _gt_entry(256, _GT_LONG, [UInt32(width)]),
+                _gt_entry(257, _GT_LONG, [UInt32(height)]),
+                _gt_entry(258, _GT_SHORT, UInt16[16, 8, 16]),  # BITSPERSAMPLE, non-uniform
+                _gt_entry(259, _GT_SHORT, [UInt16(1)]),
+                _gt_entry(262, _GT_SHORT, [UInt16(2)]),
+                _gt_entry(277, _GT_SHORT, [UInt16(nsp)]),
+                _gt_entry(284, _GT_SHORT, [UInt16(1)]),
+                _gt_entry(339, _GT_SHORT, [UInt16(1)]),
+                _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
+                _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
+                _gt_entry(279, _GT_LONG, UInt32[width * height * nsp * 2]),
+            ]
+            _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * nsp * 2)])
+            @test_throws "BITSPERSAMPLE must be the same for every band" VirtualZarr.scan(GeoTIFFDriver(), path)
         end
     end
 

@@ -10,6 +10,21 @@ import TiffImages
 # the file's declared (slow-to-fast) dimension order. `zarray_json` reverses
 # this to (y, x) on serialization, which is numpy's/GDAL's own (row, col)
 # convention.
+#
+# A single-band image keeps that 2-D (x, y) shape. A multi-band image adds a
+# "band" dimension whose position depends on PLANARCONFIG, because the bytes
+# handed to Zarr must stay byte-for-byte identical to the file and cannot be
+# transposed to a prettier order:
+#
+# - PLANARCONFIG=1 (chunky, band-interleaved): a TIFF tile or strip runs
+#   row-major over (row, col, band) with band fastest. Reproducing that byte
+#   order forces Julia shape `(samples, width, height)` — band is dimension
+#   1, ahead of x — which looks backwards for a raster but is exactly what
+#   makes the stored chunk bytes match the file.
+# - PLANARCONFIG=2 (planar, band-separate): each band's strips or tiles sit
+#   contiguously, so one chunk holds exactly one band and band is the
+#   slowest dimension, giving the natural Julia shape `(width, height,
+#   samples)`.
 
 const _GT_SHORT = UInt16(3)
 const _GT_LONG = UInt16(4)
@@ -37,6 +52,21 @@ end
 _gt_asvector(x::AbstractVector) = x
 _gt_asvector(x) = [x]
 
+# TiffImages.bitspersample/rawtype read only the first per-sample value, but
+# TIFF permits BitsPerSample and SampleFormat to differ between bands while
+# Zarr has a single dtype per array. A tag with one value applies uniformly
+# by TIFF convention; one value per band must then actually agree.
+function _gt_checkuniform(values::AbstractVector, nsp::Integer, name::AbstractString, context::AbstractString)
+    vals = length(values) == 1 ? fill(first(values), nsp) : values
+    length(vals) == nsp || throw(ArgumentError(
+        "$context: $name has $(length(vals)) values but SAMPLESPERPIXEL=$nsp"
+    ))
+    allequal(vals) || throw(ArgumentError(
+        "$context: $name must be the same for every band, got $(Int.(vals))"
+    ))
+    return Int(first(vals))
+end
+
 # Reads every IFD's tags, fully resolving any TiffImages.RemoteData
 # placeholder to its real value. This never allocates a pixel buffer or
 # reads a strip/tile byte: `load!` only follows a tag's own remote-data
@@ -56,19 +86,22 @@ end
 # "tiff_predictor" filter config via src/codecs/tiffpredictor.jl's
 # `tiffpredictor_config`. `ncols` is the row width the predictor resets at:
 # the full chunk width, which is the tile width for tiled data or the image
-# width for striped data. The context prefix matches every other scan error
-# this driver raises; `tiffpredictor_config` itself knows nothing about which
-# file or page it was asked about.
+# width for striped data. `samplesperpixel` is the predictor's per-row
+# differencing stride: the true band count for chunky data, where one row of
+# a chunk interleaves every band, or `1` for planar data, where each chunk
+# already holds a single band. The context prefix matches every other scan
+# error this driver raises; `tiffpredictor_config` itself knows nothing about
+# which file or page it was asked about.
 function _gt_codecs(
     compression_id::Integer, predictor_id::Integer, ::Type{T}, itemsize::Integer, ncols::Integer,
-    context::AbstractString,
+    samplesperpixel::Integer, context::AbstractString,
 ) where {T}
     pipeline = compression_id == 1 ? Tuple{Int,Vector{Int}}[] : [(Int(compression_id), Int[])]
     compressor, _ = VirtualZarr.build_codecs(VirtualZarr.GeoTIFFDriver, pipeline, Int(itemsize); context)
 
     predictor = predictor_id == 0 ? 1 : predictor_id
     predictorconfig = try
-        VirtualZarr.tiffpredictor_config(predictor, T, ncols, 1)
+        VirtualZarr.tiffpredictor_config(predictor, T, ncols, samplesperpixel)
     catch e
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$context: $(e.msg)"))
@@ -131,7 +164,8 @@ function _gt_geoattrs(ifd, shape, context::AbstractString)
 end
 
 function _gt_scantiled(
-    table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize, context,
+    table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize,
+    samplesperpixel, bandgrid::Bool, context,
 ) where {T}
     tilewidth = TiffImages.tilecols(ifd)
     tilelength = TiffImages.tilerows(ifd)
@@ -144,17 +178,27 @@ function _gt_scantiled(
         "$context: $(length(offsets)) tile offsets but a $gridx×$gridy tile grid implies $(gridx * gridy)"
     ))
 
-    compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, tilewidth, context)
+    compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, tilewidth, samplesperpixel, context)
 
-    index = zeros(UInt32, gridx, gridy)
-    offset = zeros(UInt64, gridx, gridy)
-    nbytes = zeros(UInt64, gridx, gridy)
+    # Chunky multi-band (`bandgrid`): every band's bytes already live inside
+    # one tile, so the grid gains a leading, size-1 band axis rather than
+    # subdividing — the tile count and byte ranges below are unchanged.
+    gridshape = bandgrid ? (1, gridx, gridy) : (gridx, gridy)
+    index = zeros(UInt32, gridshape)
+    offset = zeros(UInt64, gridshape)
+    nbytes = zeros(UInt64, gridshape)
     for k in eachindex(offsets, bytecounts)
         tx = (k - 1) % gridx + 1
         ty = (k - 1) ÷ gridx + 1
-        index[tx, ty] = fileindex
-        offset[tx, ty] = offsets[k]
-        nbytes[tx, ty] = bytecounts[k]
+        if bandgrid
+            index[1, tx, ty] = fileindex
+            offset[1, tx, ty] = offsets[k]
+            nbytes[1, tx, ty] = bytecounts[k]
+        else
+            index[tx, ty] = fileindex
+            offset[tx, ty] = offsets[k]
+            nbytes[tx, ty] = bytecounts[k]
+        end
     end
 
     manifest = VirtualZarr.ChunkManifest(table, index, offset, nbytes)
@@ -185,7 +229,8 @@ function _gt_choose_rows(height::Integer, rowbytes::Integer, chunkbytes_target::
 end
 
 function _gt_scanstriped(
-    driver, table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize, context,
+    driver, table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize,
+    samplesperpixel, bandgrid::Bool, context,
 ) where {T}
     rowsperstrip = Int(TiffImages.getdata(ifd, TiffImages.ROWSPERSTRIP, height))
     rowsperstrip >= 1 || throw(ArgumentError("$context: ROWSPERSTRIP must be positive, got $rowsperstrip"))
@@ -198,16 +243,18 @@ function _gt_scanstriped(
         "IMAGELENGTH=$height implies $nstrips strips"
     ))
 
-    compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, width, context)
-    rowbytes = width * itemsize
+    compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, width, samplesperpixel, context)
+    # A chunky row interleaves every band, so it is samplesperpixel times
+    # wider in bytes than a single-band row of the same pixel width.
+    rowbytes = width * itemsize * samplesperpixel
 
     if compression_id == 1 && _gt_stripsregular(offsets, bytecounts, rowsperstrip, rowbytes, height, nstrips)
         chunkrows = _gt_choose_rows(height, rowbytes, driver.chunkbytes)
         gridy = height ÷ chunkrows
         chunkbytes_actual = UInt32(chunkrows * rowbytes)
-        manifest = VirtualZarr.AffineManifest(
-            table, (1, gridy), UInt64(offsets[1]), (UInt64(0), UInt64(chunkbytes_actual)), chunkbytes_actual,
-        )
+        gridsize = bandgrid ? (1, 1, gridy) : (1, gridy)
+        strides = bandgrid ? (UInt64(0), UInt64(0), UInt64(chunkbytes_actual)) : (UInt64(0), UInt64(chunkbytes_actual))
+        manifest = VirtualZarr.AffineManifest(table, gridsize, UInt64(offsets[1]), strides, chunkbytes_actual)
         return manifest, (width, chunkrows), compressor, filters
     end
 
@@ -217,16 +264,89 @@ function _gt_scanstriped(
         "a full Zarr chunk without reading past the end of a short strip or truncating valid data"
     ))
 
-    index = zeros(UInt32, 1, nstrips)
-    offset = zeros(UInt64, 1, nstrips)
-    nbytes = zeros(UInt64, 1, nstrips)
+    gridshape = bandgrid ? (1, 1, nstrips) : (1, nstrips)
+    index = zeros(UInt32, gridshape)
+    offset = zeros(UInt64, gridshape)
+    nbytes = zeros(UInt64, gridshape)
     for k in eachindex(offsets, bytecounts)
-        index[1, k] = fileindex
-        offset[1, k] = offsets[k]
-        nbytes[1, k] = bytecounts[k]
+        if bandgrid
+            index[1, 1, k] = fileindex
+            offset[1, 1, k] = offsets[k]
+            nbytes[1, 1, k] = bytecounts[k]
+        else
+            index[1, k] = fileindex
+            offset[1, k] = offsets[k]
+            nbytes[1, k] = bytecounts[k]
+        end
     end
     manifest = VirtualZarr.ChunkManifest(table, index, offset, nbytes)
     return manifest, (width, rowsperstrip), compressor, filters
+end
+
+# PLANARCONFIG=2: each band's strips or tiles are contiguous, so one chunk
+# cell holds exactly one band and band is the slowest Julia dimension.
+# TIFF's own StripOffsets/TileOffsets array is ordered sample-major: every
+# strip/tile of band 0 first, then every one of band 1, and so on, so the
+# entry for (band `sample`, per-band index `k`, 0-based) is at
+# `sample * perplane + k`. This is verified against TiffImages.jl's own
+# reader in `test/geotiff.jl` rather than assumed.
+#
+# An uncompressed, row-regular planar file could in principle also collapse
+# to an AffineManifest by adding a third stride for the gap between band
+# planes, but plane-to-plane contiguity is a regularity condition separate
+# from per-row contiguity and is not checked here; planar data always gets a
+# ChunkManifest, which is correct regardless.
+function _gt_scanplanar(
+    table, fileindex, ifd, width, height, nsp, compression_id, predictor_id, ::Type{T}, itemsize, tiled, context,
+) where {T}
+    if tiled
+        tilewidth = TiffImages.tilecols(ifd)
+        tilelength = TiffImages.tilerows(ifd)
+        gridx, gridy = cld(width, tilewidth), cld(height, tilelength)
+        perplane = gridx * gridy
+        offsets = _gt_asvector(ifd[TiffImages.TILEOFFSETS].data)
+        bytecounts = _gt_asvector(ifd[TiffImages.TILEBYTECOUNTS].data)
+        chunkxy = (tilewidth, tilelength)
+        ncols_predictor = tilewidth
+    else
+        rowsperstrip = Int(TiffImages.getdata(ifd, TiffImages.ROWSPERSTRIP, height))
+        rowsperstrip >= 1 || throw(ArgumentError("$context: ROWSPERSTRIP must be positive, got $rowsperstrip"))
+        gridx, gridy = 1, cld(height, rowsperstrip)
+        perplane = gridy
+        offsets = _gt_asvector(ifd[TiffImages.STRIPOFFSETS].data)
+        bytecounts = _gt_asvector(ifd[TiffImages.STRIPBYTECOUNTS].data)
+        height % rowsperstrip == 0 || throw(ArgumentError(
+            "$context: IMAGELENGTH=$height is not a multiple of ROWSPERSTRIP=$rowsperstrip; the " *
+            "final strip holds only $(height - rowsperstrip * (perplane - 1)) rows, which cannot " *
+            "be a full Zarr chunk without reading past the end of a short strip or truncating valid data"
+        ))
+        chunkxy = (width, rowsperstrip)
+        ncols_predictor = width
+    end
+
+    length(offsets) == perplane * nsp || throw(ArgumentError(
+        "$context: $(length(offsets)) $(tiled ? "tile" : "strip") offsets but a " *
+        "$perplane-per-band × $nsp-band planar layout implies $(perplane * nsp)"
+    ))
+
+    # Each chunk holds exactly one band's tile or strip, so the predictor's
+    # per-row stride within a chunk is 1, not samplesperpixel.
+    compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, ncols_predictor, 1, context)
+
+    index = zeros(UInt32, gridx, gridy, nsp)
+    offset = zeros(UInt64, gridx, gridy, nsp)
+    nbytes = zeros(UInt64, gridx, gridy, nsp)
+    for sample in 0:(nsp - 1), k in 1:perplane
+        entry = sample * perplane + k
+        tx = (k - 1) % gridx + 1
+        ty = (k - 1) ÷ gridx + 1
+        index[tx, ty, sample + 1] = fileindex
+        offset[tx, ty, sample + 1] = offsets[entry]
+        nbytes[tx, ty, sample + 1] = bytecounts[entry]
+    end
+
+    manifest = VirtualZarr.ChunkManifest(table, index, offset, nbytes)
+    return manifest, (chunkxy..., 1), compressor, filters
 end
 
 function _gt_scanifd(driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString)
@@ -234,19 +354,13 @@ function _gt_scanifd(driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, p
 
     width = Int(ifd[TiffImages.IMAGEWIDTH].data)
     height = Int(ifd[TiffImages.IMAGELENGTH].data)
-
     nsp = TiffImages.nsamples(ifd)
-    nsp == 1 || throw(ArgumentError(
-        "$context: SAMPLESPERPIXEL=$nsp is not supported; only single-band images are scanned " *
-        "(TIFF stores multiple samples per pixel interleaved, which does not map onto a " *
-        "per-dimension Zarr chunk without a deinterleaving codec this package does not provide)"
-    ))
-    TiffImages.isplanar(ifd) && throw(ArgumentError(
-        "$context: PLANARCONFIG=2 (separate planes) is not supported"
-    ))
+    planar = TiffImages.isplanar(ifd)
 
-    bits = TiffImages.bitspersample(ifd)
-    T = TiffImages.rawtype(ifd)
+    bits = _gt_checkuniform(_gt_asvector(ifd[TiffImages.BITSPERSAMPLE].data), nsp, "BITSPERSAMPLE", context)
+    sfvalues = TiffImages.SAMPLEFORMAT in ifd ? _gt_asvector(ifd[TiffImages.SAMPLEFORMAT].data) : UInt16[1]
+    sampleformat = _gt_checkuniform(sfvalues, nsp, "SAMPLEFORMAT", context)
+    T = TiffImages.rawtype(TiffImages.SampleFormats(sampleformat), bits)
     bits == sizeof(T) * 8 || throw(ArgumentError(
         "$context: BITSPERSAMPLE=$bits is not byte-aligned; packed sub-byte sample " *
         "widths cannot be referenced without unpacking, which this package never does"
@@ -255,19 +369,36 @@ function _gt_scanifd(driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, p
     compression_id = Int(TiffImages.getdata(ifd, TiffImages.COMPRESSION, 1))
     predictor_id = TiffImages.predictor(ifd)
     itemsize = sizeof(T)
+    tiled = TiffImages.istiled(ifd)
 
-    manifest, chunkshape, compressor, filters = if TiffImages.istiled(ifd)
-        _gt_scantiled(table, fileindex, ifd, width, height, compression_id, predictor_id, T, itemsize, context)
+    # A single band keeps the plain 2-D (x, y) shape regardless of
+    # PLANARCONFIG: with one band, chunky and planar are byte-identical, so
+    # there is nothing to gain and a gratuitous singleton band axis to lose.
+    shape, chunkshape, manifest, compressor, filters, dimnames = if nsp > 1 && planar
+        manifest, chunkshape3, compressor, filters =
+            _gt_scanplanar(table, fileindex, ifd, width, height, nsp, compression_id, predictor_id, T, itemsize, tiled, context)
+        ((width, height, nsp), chunkshape3, manifest, compressor, filters, ["x", "y", "band"])
+    elseif nsp > 1
+        # Chunky: every tile/strip already interleaves all nsp bands, so the
+        # predictor's per-row stride is the real band count, and the chunk
+        # grid gains a leading, size-1 band axis (`bandgrid=true`).
+        manifest2, chunkshape2, compressor, filters = tiled ?
+            _gt_scantiled(table, fileindex, ifd, width, height, compression_id, predictor_id, T, itemsize, nsp, true, context) :
+            _gt_scanstriped(driver, table, fileindex, ifd, width, height, compression_id, predictor_id, T, itemsize, nsp, true, context)
+        ((nsp, width, height), (nsp, chunkshape2...), manifest2, compressor, filters, ["band", "x", "y"])
     else
-        _gt_scanstriped(driver, table, fileindex, ifd, width, height, compression_id, predictor_id, T, itemsize, context)
+        manifest2, chunkshape2, compressor, filters = tiled ?
+            _gt_scantiled(table, fileindex, ifd, width, height, compression_id, predictor_id, T, itemsize, 1, false, context) :
+            _gt_scanstriped(driver, table, fileindex, ifd, width, height, compression_id, predictor_id, T, itemsize, 1, false, context)
+        ((width, height), chunkshape2, manifest2, compressor, filters, ["x", "y"])
     end
 
     attrs = _gt_geoattrs(ifd, (width, height), context)
     fillvalue = _gt_fillvalue(T, ifd)
 
     return VirtualZarr.VirtualArray{T}(
-        manifest, (width, height), chunkshape;
-        fillvalue, compressor, filters, attrs, dimnames=["x", "y"],
+        manifest, shape, chunkshape;
+        fillvalue, compressor, filters, attrs, dimnames,
     )
 end
 
@@ -279,13 +410,15 @@ Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each image file directory
 ("0", "1", ...), so a multi-page file — including a COG's reduced-resolution
 overview pages — scans without reading or decoding any strip or tile.
 
-Supported layouts: single-sample-per-pixel (`SAMPLESPERPIXEL=1`), chunky
-planar configuration, and byte-aligned sample widths. Rejected, by name, with
-an `ArgumentError`: multiple samples per pixel, `PLANARCONFIG=2`, sub-byte bit
-depths, unsupported `COMPRESSION`/`PREDICTOR` values, and a striped layout
-whose final strip is shorter than `ROWSPERSTRIP` when that layout cannot be
-re-chunked around the gap (see `GeoTIFFDriver`'s docstring for the uncompressed
-case, which can).
+Supported layouts: any `SAMPLESPERPIXEL`, both `PLANARCONFIG` values, and
+byte-aligned sample widths. A single band keeps a 2-D `(x, y)` array; multiple
+bands add a `"band"` dimension, ordered `(band, x, y)` for chunky data and
+`(x, y, band)` for planar data (see the module docstring comment for why).
+Rejected, by name, with an `ArgumentError`: sub-byte bit depths, `BITSPERSAMPLE`
+or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
+`PREDICTOR` values, and a striped layout whose final strip is shorter than
+`ROWSPERSTRIP` when that layout cannot be re-chunked around the gap (see
+`GeoTIFFDriver`'s docstring for the uncompressed case, which can).
 """
 function VirtualZarr.scan(driver::VirtualZarr.GeoTIFFDriver, path::AbstractString)
     isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
