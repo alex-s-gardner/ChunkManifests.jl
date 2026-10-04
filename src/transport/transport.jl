@@ -31,6 +31,19 @@ measurably hurts throughput rather than helping.
 concurrency(::AbstractTransport) = 4
 
 """
+    resolve_transport(t::AbstractTransport, uri) -> AbstractTransport
+
+The transport that reads `uri` through `t`, which for most transports is `t`
+itself. [`TransportContainers`](@ref) overrides this to route each URI to a
+different backend.
+
+Callers that need a per-URI tuning value — [`maxgap`](@ref),
+[`maxblock`](@ref), [`concurrency`](@ref) — must ask the resolved transport
+rather than `t`, since a container set answers only with generic defaults.
+"""
+resolve_transport(t::AbstractTransport, ::AbstractString) = t
+
+"""
     fetchrange(t::AbstractTransport, uri, r::ByteRange) -> Vector{UInt8}
 
 Fetch the bytes of `r` from `uri` through transport `t`. Every concrete

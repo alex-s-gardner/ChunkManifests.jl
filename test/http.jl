@@ -274,19 +274,19 @@ end
                 offset = zeros(UInt64, gridsize)
                 nbytessize = zeros(UInt64, gridsize)
                 for I in CartesianIndices(gridsize)
-                    key = Zarr.citostring(VirtualZarr._V2_CHUNK_KEY_ENCODING, I)
+                    key = Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
                     chunkbytes = read(joinpath(dir, key))
                     path = "/" * key
                     _addroute!(ts, path, chunkbytes)
                     index[I] = push_uri!(table, base * path)
                     nbytessize[I] = length(chunkbytes)
                 end
-                manifest = ChunkManifest(table, index, offset, nbytessize)
-                va = VirtualArray{Float64}(
+                manifest = ExplicitChunkMap(table, index, offset, nbytessize)
+                va = ManifestArray{Float64}(
                     manifest, shape, chunkshape; fillvalue, compressor, dimnames
                 )
-                group = VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va))
-                mstore = ManifestStore(group; transport=HTTPTransport())
+                group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
+                mstore = ChunkManifest(group; transport=HTTPTransport())
 
                 zv_direct = Zarr.zopen(Zarr.DirectoryStore(dir))
                 zv_http = Zarr.zopen(mstore)

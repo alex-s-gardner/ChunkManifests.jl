@@ -5,9 +5,9 @@
 # best-effort format sniffing from a bare path.
 
 """
-    scan(driver::AbstractDriver, path; kwargs...) -> VirtualGroup
+    scan(driver::AbstractDriver, path; kwargs...) -> ChunkManifest
 
-Scan the source at `path` with `driver`, returning a [`VirtualGroup`](@ref)
+Scan the source at `path` with `driver`, returning a [`ChunkManifest`](@ref)
 whose manifests point into `path` without copying or decoding any data.
 
 Every concrete driver must add a method for its own driver type. This

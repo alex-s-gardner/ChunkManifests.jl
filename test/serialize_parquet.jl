@@ -27,16 +27,16 @@ function _pq2_3d_fixture()
     I_missing = CartesianIndex(1, 1, 1)
     I_inline = CartesianIndex(2, 1, 1)
     inline_bytes = UInt8[9, 8, 7]
-    index[I_missing] = VirtualZarr.MISSING_INDEX
-    index[I_inline] = VirtualZarr.INLINE_INDEX
+    index[I_missing] = ChunkManifests.MISSING_INDEX
+    index[I_inline] = ChunkManifests.INLINE_INDEX
 
-    manifest = ChunkManifest(table, index, offset, nbytes; inline=Dict(I_inline => inline_bytes))
-    va = VirtualArray{Float64}(manifest, shape, chunkshape; dimnames=["x", "y", "z"])
+    manifest = ExplicitChunkMap(table, index, offset, nbytes; inline=Dict(I_inline => inline_bytes))
+    va = ManifestArray{Float64}(manifest, shape, chunkshape; dimnames=["x", "y", "z"])
     return va, I_missing, I_inline, inline_bytes
 end
 
 # A real one-chunk-per-element file, as in test/serialize_zarr.jl, for a
-# round trip that reads actual bytes back through ManifestStore.
+# round trip that reads actual bytes back through ChunkManifest.
 function _pq2_contig_va(dir::AbstractString, n::Integer; fname="contig.bin")
     path = joinpath(dir, fname)
     write(path, collect(Float64, 1:n))
@@ -46,20 +46,20 @@ function _pq2_contig_va(dir::AbstractString, n::Integer; fname="contig.bin")
     index = fill(idx, gridsize)
     offset = UInt64[(k - 1) * sizeof(Float64) for k in 1:n]
     nbytes = fill(UInt64(sizeof(Float64)), gridsize)
-    manifest = ChunkManifest(table, index, offset, nbytes)
-    return VirtualArray{Float64}(manifest, (Int(n),), (1,); dimnames=["x"])
+    manifest = ExplicitChunkMap(table, index, offset, nbytes)
+    return ManifestArray{Float64}(manifest, (Int(n),), (1,); dimnames=["x"])
 end
 
 @testset "serialize_parquet" begin
 
     @testset "column schema, padding, and C-order row mapping" begin
         va, I_missing, I_inline, inline_bytes = _pq2_3d_fixture()
-        group = VirtualGroup(; arrays=Dict{String,VirtualArray}("air" => va))
+        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("air" => va))
         fmt = KerchunkParquet(; recordsize=4)
 
         mktempdir() do dir
             root = joinpath(dir, "out.parq")
-            VirtualZarr.save(root, group, fmt)
+            ChunkManifests.save(root, group, fmt)
             fielddir = joinpath(root, "air")
 
             gridsize = (3, 3, 3)
@@ -147,16 +147,16 @@ end
             # Distinct offset per chunk so a misplaced row is detectable.
             lin = LinearIndices(map(Base.OneTo, grid))
             offset = UInt64[10 * (lin[I] - 1) for I in CartesianIndices(grid)]
-            manifest = ChunkManifest(
+            manifest = ExplicitChunkMap(
                 table, fill(idx, grid), offset, fill(UInt64(8), grid)
             )
-            va = VirtualArray{Float64}(
+            va = ManifestArray{Float64}(
                 manifest, shape, chunkshape; dimnames=["x", "y", "z"]
             )
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va))
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
 
             out = joinpath(dir, "asym.parq")
-            VirtualZarr.save(out, group, KerchunkParquet(; recordsize=8))
+            ChunkManifests.save(out, group, KerchunkParquet(; recordsize=8))
 
             # Independent of the writer: read each row back and require that the
             # chunk at flat position p carries the offset we assigned it.
@@ -174,11 +174,11 @@ end
     @testset "zero-length byte range fails fast" begin
         table = PathTable()
         idx = push_uri!(table, "x.bin")
-        manifest = ChunkManifest(table, fill(idx, (1,)), zeros(UInt64, 1), zeros(UInt64, 1))
-        va = VirtualArray{Float64}(manifest, (1,), (1,); dimnames=["x"])
-        group = VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va))
+        manifest = ExplicitChunkMap(table, fill(idx, (1,)), zeros(UInt64, 1), zeros(UInt64, 1))
+        va = ManifestArray{Float64}(manifest, (1,), (1,); dimnames=["x"])
+        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
         mktempdir() do dir
-            @test_throws "whole-object sentinel" VirtualZarr.save(
+            @test_throws "whole-object sentinel" ChunkManifests.save(
                 joinpath(dir, "z.parq"), group, KerchunkParquet()
             )
         end
@@ -187,11 +187,11 @@ end
     @testset "zero-dimensional array is rejected" begin
         table = PathTable()
         push_uri!(table, "s.bin")
-        manifest = AffineManifest(table, (), UInt64(0), (), UInt32(0))
-        va = VirtualArray{Float64}(manifest, (), (); dimnames=String[])
-        group = VirtualGroup(; arrays=Dict{String,VirtualArray}("scalar" => va))
+        manifest = AffineChunkMap(table, (), UInt64(0), (), UInt32(0))
+        va = ManifestArray{Float64}(manifest, (), (); dimnames=String[])
+        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("scalar" => va))
         mktempdir() do dir
-            @test_throws "zero-dimensional" VirtualZarr.save(
+            @test_throws "zero-dimensional" ChunkManifests.save(
                 joinpath(dir, "s.parq"), group, KerchunkParquet()
             )
         end
@@ -201,13 +201,13 @@ end
         mktempdir() do dir
             va_air = _pq2_contig_va(dir, 4; fname="air.bin")
             va_nested = _pq2_contig_va(dir, 5; fname="nested.bin")
-            group = VirtualGroup(;
-                arrays=Dict{String,VirtualArray}("air" => va_air, "grp/var" => va_nested),
+            group = ChunkManifest(;
+                arrays=Dict{String,ManifestArray}("air" => va_air, "grp/var" => va_nested),
                 attrs=Dict{String,Any}("title" => "demo"),
             )
             fmt = KerchunkParquet(; recordsize=4)
             root = joinpath(dir, "layout.parq")
-            VirtualZarr.save(root, group, fmt)
+            ChunkManifests.save(root, group, fmt)
 
             @test isdir(joinpath(root, "air"))
             @test isfile(joinpath(root, "air", "refs.0.parq"))
@@ -241,27 +241,27 @@ end
         end
     end
 
-    @testset "round trip: bitwise identical through ManifestStore + Zarr.zopen" begin
+    @testset "round trip: bitwise identical through ChunkManifest + Zarr.zopen" begin
         mktempdir() do dir
             n = 10
             va = _pq2_contig_va(dir, n)
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va))
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
             fmt = KerchunkParquet(; recordsize=4)
             root = joinpath(dir, "roundtrip.parq")
-            VirtualZarr.save(root, group, fmt)
-            group2 = VirtualZarr.load(root, fmt)
+            ChunkManifests.save(root, group, fmt)
+            group2 = ChunkManifests.load(root, fmt)
             va2 = arraysof(group2)["a"]
 
             @testset "manifest contents agree chunk by chunk" begin
-                m1, m2 = manifestof(va), manifestof(va2)
+                m1, m2 = chunkmapof(va), chunkmapof(va2)
                 for I in CartesianIndices((n,))
                     @test chunkstate(m2, I) == chunkstate(m1, I) == VIRTUAL_CHUNK
                     @test chunklocation(m2, I) == chunklocation(m1, I)
                 end
             end
 
-            z1 = Zarr.zopen(ManifestStore(VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va))))
-            z2 = Zarr.zopen(ManifestStore(VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va2))))
+            z1 = Zarr.zopen(ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va)))
+            z2 = Zarr.zopen(ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va2)))
             @test z1["a"][:] == z2["a"][:]
         end
     end
@@ -269,22 +269,22 @@ end
     @testset "load: recordsize mismatch and missing .zmetadata fail fast" begin
         mktempdir() do dir
             va = _pq2_contig_va(dir, 4; fname="m.bin")
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va))
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
             root = joinpath(dir, "mismatch.parq")
-            VirtualZarr.save(root, group, KerchunkParquet(; recordsize=4))
+            ChunkManifests.save(root, group, KerchunkParquet(; recordsize=4))
 
-            @test_throws "record_size=4" VirtualZarr.load(root, KerchunkParquet(; recordsize=5))
-            @test_throws "no .zmetadata" VirtualZarr.load(joinpath(dir, "nope.parq"), KerchunkParquet())
+            @test_throws "record_size=4" ChunkManifests.load(root, KerchunkParquet(; recordsize=5))
+            @test_throws "no .zmetadata" ChunkManifests.load(joinpath(dir, "nope.parq"), KerchunkParquet())
         end
     end
 
     @testset "whole-object reference is not supported on read" begin
         mktempdir() do dir
             va = _pq2_contig_va(dir, 4; fname="w.bin")
-            group = VirtualGroup(; arrays=Dict{String,VirtualArray}("a" => va))
+            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
             fmt = KerchunkParquet(; recordsize=4)
             root = joinpath(dir, "whole.parq")
-            VirtualZarr.save(root, group, fmt)
+            ChunkManifests.save(root, group, fmt)
 
             # Hand-edit refs.0.parq to a whole-object reference (offset=0,
             # size=0, non-null path, null raw): a valid kerchunk state this
@@ -299,7 +299,29 @@ end
             )
             Parquet2.writefile(fpath, tbl; compression_codec=:zstd, compute_statistics=false)
 
-            @test_throws "whole-object reference" VirtualZarr.load(root, fmt)
+            @test_throws "whole-object reference" ChunkManifests.load(root, fmt)
+        end
+    end
+
+    @testset "ChunkManifest(path) detects and reads a .parq directory" begin
+        # The counterpart in frompath.jl runs before Parquet2 is loaded, so it
+        # can only check that the directory is identified and the absent reader
+        # reported. Here the round trip runs for real.
+        dir = mktempdir()
+        n = 6
+        va = _pq2_contig_va(dir, n)
+        cm = ChunkManifest(; arrays=Dict{String,ManifestArray}("d" => va))
+        root = joinpath(dir, "refs.parq")
+        ChunkManifests.save(root, cm, KerchunkParquet())
+
+        @test ChunkManifests._savedformat(root) isa KerchunkParquet
+        back = ChunkManifest(root)
+        @test back isa ChunkManifest
+        @test sort(collect(keys(arraysof(back)))) == ["d"]
+        @test Array(Zarr.zopen(back)["d"][:]) == collect(Float64, 1:n)
+        # Loading must leave every array on the manifest's own table.
+        for a in values(arraysof(back))
+            @test pathtable(chunkmapof(a)) === pathtable(back)
         end
     end
 

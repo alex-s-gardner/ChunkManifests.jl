@@ -39,3 +39,9 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        env:
+          # Both fixtures are committed under test/data, so every job must open
+          # them: without this the real-data cases skip and a green run says
+          # nothing about them.
+          CHUNKMANIFESTS_REQUIRE_FIXTURES: all
+

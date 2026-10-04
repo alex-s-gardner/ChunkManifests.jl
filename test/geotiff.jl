@@ -7,7 +7,7 @@ using TiffImages
 # prefixed `_gt_` to avoid colliding with helpers in other test files, which
 # share one `Main` since `@testset` does not introduce scope.
 
-const _GT_JUNK_PATH = "/Users/gardnera/Documents/GitHub/GRACE.jl/junk.tif"
+const _GT_JUNK_PATH = GEOTIFF_JUNK_PATH
 
 const _GT_SHORT = UInt16(3)
 const _GT_LONG = UInt16(4)
@@ -320,31 +320,31 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
 @testset "geotiff" begin
     @testset "candrive" begin
-        @test !VirtualZarr.candrive(GeoTIFFDriver(), joinpath(mktempdir(), "missing.tif"))
+        @test !ChunkManifests.candrive(GeoTIFFDriver(), joinpath(mktempdir(), "missing.tif"))
         mktemp() do path, io
             write(io, "not a tiff file")
             close(io)
-            @test !VirtualZarr.candrive(GeoTIFFDriver(), path)
+            @test !ChunkManifests.candrive(GeoTIFFDriver(), path)
         end
         mktemp() do path, io
             data = rand(UInt16, 4, 3)
             _gt_striped(path; width=4, height=3, rowsperstrip=3, bits=16, payload=_gt_striprows(data, 3))
-            @test VirtualZarr.candrive(GeoTIFFDriver(), path)
+            @test ChunkManifests.candrive(GeoTIFFDriver(), path)
         end
     end
 
     @testset "codec registry" begin
-        @test VirtualZarr.lookup_codec(GeoTIFFDriver, 8) !== nothing
-        @test VirtualZarr.lookup_codec(GeoTIFFDriver, 32946) !== nothing
-        @test VirtualZarr.lookup_codec(GeoTIFFDriver, 50000) !== nothing
-        @test occursin("LZW", VirtualZarr.rejection_reason(GeoTIFFDriver, 5))
-        @test occursin("PackBits", VirtualZarr.rejection_reason(GeoTIFFDriver, 32773))
-        @test occursin("JPEG", VirtualZarr.rejection_reason(GeoTIFFDriver, 7))
-        @test occursin("WebP", VirtualZarr.rejection_reason(GeoTIFFDriver, 50001))
+        @test ChunkManifests.lookup_codec(GeoTIFFDriver, 8) !== nothing
+        @test ChunkManifests.lookup_codec(GeoTIFFDriver, 32946) !== nothing
+        @test ChunkManifests.lookup_codec(GeoTIFFDriver, 50000) !== nothing
+        @test occursin("LZW", ChunkManifests.rejection_reason(GeoTIFFDriver, 5))
+        @test occursin("PackBits", ChunkManifests.rejection_reason(GeoTIFFDriver, 32773))
+        @test occursin("JPEG", ChunkManifests.rejection_reason(GeoTIFFDriver, 7))
+        @test occursin("WebP", ChunkManifests.rejection_reason(GeoTIFFDriver, 50001))
     end
 
     mktempdir() do dir
-        @testset "uncompressed striped: AffineManifest, re-chunked freely, end-to-end pixels" begin
+        @testset "uncompressed striped: AffineChunkMap, re-chunked freely, end-to-end pixels" begin
             # width != height, and ROWSPERSTRIP=5 over IMAGELENGTH=12 leaves a
             # ragged final strip (5, 5, 2 rows) — irrelevant for uncompressed,
             # contiguous data, which this driver re-chunks at any divisor of
@@ -359,16 +359,16 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             # rowbytes = 7*4 = 28; chunkbytes=112 targets 4 rows/chunk, and
             # 12 is divisible by 4 — unrelated to the 5-row strips on disk.
-            group = VirtualZarr.scan(GeoTIFFDriver(; chunkbytes=112), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(; chunkbytes=112), path)
+            va = ChunkManifests.arraysof(group)["0"]
 
             @test shapeof(va) == (width, height)
             @test chunkshapeof(va) == (width, 4)
-            @test manifestof(va) isa AffineManifest
+            @test chunkmapof(va) isa AffineChunkMap
             @test compressorof(va) === nothing
             @test eltype(va) === Float32
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             @test Array(z[:, :]) == data
 
@@ -377,7 +377,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test decoded == data
         end
 
-        @testset "uncompressed striped: non-contiguous falls back to ChunkManifest" begin
+        @testset "uncompressed striped: non-contiguous falls back to ExplicitChunkMap" begin
             width, height, rowsperstrip = 5, 6, 3
             data = rand(UInt16, width, height)
             path = joinpath(dir, "noncontig.tif")
@@ -387,12 +387,12 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=rows, gapbefore=[0, 16],
             )
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
-            @test manifestof(va) isa ChunkManifest
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
+            @test chunkmapof(va) isa ExplicitChunkMap
             @test chunkshapeof(va) == (width, rowsperstrip)
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             @test Array(z[:, :]) == data
         end
@@ -405,7 +405,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             fakecompressed = [rand(UInt8, 20), rand(UInt8, 14)]
             path = joinpath(dir, "shortstrip.tif")
             _gt_striped(path; width, height, rowsperstrip, bits=16, compression=8, payload=fakecompressed)
-            @test_throws "not a multiple of ROWSPERSTRIP" VirtualZarr.scan(GeoTIFFDriver(), path)
+            @test_throws "not a multiple of ROWSPERSTRIP" ChunkManifests.scan(GeoTIFFDriver(), path)
         end
 
         @testset "a short, unpadded final chunk is not a valid Zarr chunk (empirical check)" begin
@@ -426,9 +426,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             index = fill(UInt32(1), (1, 2))
             offset = UInt64[0 fullbytes]
             nbytes = UInt64[fullbytes shortbytes]
-            manifest = ChunkManifest(table, index, offset, nbytes)
-            va = VirtualArray{UInt16}(manifest, (width, height), (width, rowsperchunk))
-            store = ManifestStore(VirtualGroup(; arrays=Dict{String,VirtualArray}("" => va)))
+            manifest = ExplicitChunkMap(table, index, offset, nbytes)
+            va = ManifestArray{UInt16}(manifest, (width, height), (width, rowsperchunk))
+            store = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
 
             @test_throws "does not match" Zarr.zopen(store)[:, :]
         end
@@ -449,14 +449,14 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             path = joinpath(dir, "tiled_deflate.tif")
             _gt_tiled(path; width, height, tilewidth, tilelength, bits=16, compression=8, payload)
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test shapeof(va) == (width, height)
             @test chunkshapeof(va) == (tilewidth, tilelength)
-            @test manifestof(va) isa ChunkManifest
+            @test chunkmapof(va) isa ExplicitChunkMap
             @test compressorof(va) == Dict{String,Any}("id" => "zlib", "level" => -1)
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             @test Array(z[:, :]) == data
         end
@@ -469,8 +469,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 path; width, height, rowsperstrip, bits=16, compression=8, predictor=2,
                 payload=[Zarr.zcompress(data, Zarr.ZlibCompressor())],
             )
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test length(filtersof(va)) == 1
             @test filtersof(va)[1]["id"] == "tiff_predictor"
             @test filtersof(va)[1]["width"] == width
@@ -484,7 +484,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 path; width, height, rowsperstrip, bits=32, sampleformat=3, compression=1, predictor=3,
                 payload=_gt_striprows(rand(Float32, width, height), rowsperstrip),
             )
-            @test_throws "Predictor 3" VirtualZarr.scan(GeoTIFFDriver(), path)
+            @test_throws "Predictor 3" ChunkManifests.scan(GeoTIFFDriver(), path)
         end
 
         @testset "unsupported compressions rejected by name" begin
@@ -495,7 +495,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                     path; width, height, rowsperstrip, bits=16, compression=comp,
                     payload=[rand(UInt8, 32)],
                 )
-                @test_throws needle VirtualZarr.scan(GeoTIFFDriver(), path)
+                @test_throws needle ChunkManifests.scan(GeoTIFFDriver(), path)
             end
         end
 
@@ -507,12 +507,12 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 path; width, height, rowsperstrip, bits=16, samplesperpixel=1, planarconfig=2,
                 payload=_gt_striprows(data, rowsperstrip),
             )
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test shapeof(va) == (width, height)
             @test dimnamesof(va) == ["x", "y"]
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             @test Array(z[:, :]) == data
         end
@@ -531,15 +531,15 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             attrs = attrsof(va)
             @test length(attrs["GeoTransform"]) == 16
             @test attrs["x"] isa Vector{Float64} && length(attrs["x"]) == width
             @test attrs["y"] isa Vector{Float64} && length(attrs["y"]) == height
             @test !haskey(attrs, "crs")
 
-            gt = VirtualZarr.geotransform_from_scale_tiepoint([0.5, 0.5, 0.0], [0.0, 0.0, 0.0, -180.0, 90.0, 0.0])
+            gt = ChunkManifests.geotransform_from_scale_tiepoint([0.5, 0.5, 0.0], [0.0, 0.0, 0.0, -180.0, 90.0, 0.0])
             @test attrs["GeoTransform"] == collect(gt.matrix)
         end
 
@@ -560,8 +560,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test attrsof(va)["crs"] == "EPSG:4326"
         end
 
@@ -578,8 +578,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test fillvalueof(va) == -9999
         end
 
@@ -595,7 +595,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             )
             path = joinpath(dir, "page.tif")
             _gt_writetiff(path, tags1, 273, [rand(UInt8, width * height * 2)])
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
             @test collect(keys(arraysof(group))) == ["0"]
         end
 
@@ -612,14 +612,14 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=[Vector{UInt8}(reinterpret(UInt8, vec(data3)))],
             )
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test shapeof(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, width, height)
             @test dimnamesof(va) == ["band", "x", "y"]
-            @test manifestof(va) isa AffineManifest
+            @test chunkmapof(va) isa AffineChunkMap
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             result = Array(z[:, :, :])
             @test result == data3
@@ -651,13 +651,13 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 samplesperpixel=nsp, planarconfig=1, photometric=2, payload,
             )
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test shapeof(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, tilewidth, tilelength)
-            @test manifestof(va) isa ChunkManifest
+            @test chunkmapof(va) isa ExplicitChunkMap
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             result = Array(z[:, :, :])
             @test result == data3
@@ -672,7 +672,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             for y in 1:height, x in 1:width, b in 1:nsp
                 data3[b, x, y] = UInt16(1000b + 10y + x)
             end
-            f = VirtualZarr.TIFFPredictor(UInt16, width, nsp)
+            f = ChunkManifests.TIFFPredictor(UInt16, width, nsp)
             encoded = Zarr.zencode(vec(data3), f)
             compressed = Zarr.zcompress(encoded, Zarr.ZlibCompressor())
 
@@ -683,12 +683,12 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=[compressed],
             )
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test length(filtersof(va)) == 1
             @test filtersof(va)[1]["samplesperpixel"] == nsp
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             @test Array(z[:, :, :]) == data3
         end
@@ -705,14 +705,14 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=_gt_planarpayload(data3, rowsperstrip),
             )
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            va = ChunkManifests.arraysof(group)["0"]
             @test shapeof(va) == (width, height, nsp)
             @test chunkshapeof(va) == (width, rowsperstrip, 1)
             @test dimnamesof(va) == ["x", "y", "band"]
-            @test manifestof(va) isa ChunkManifest
+            @test chunkmapof(va) isa ExplicitChunkMap
 
-            store = ManifestStore(group)
+            store = group
             z = Zarr.zopen(store; path="0")
             result = Array(z[:, :, :])
             @test result == data3
@@ -738,7 +738,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 _gt_entry(279, _GT_LONG, UInt32[width * height * nsp * 2]),
             ]
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * nsp * 2)])
-            @test_throws "BITSPERSAMPLE must be the same for every band" VirtualZarr.scan(GeoTIFFDriver(), path)
+            @test_throws "BITSPERSAMPLE must be the same for every band" ChunkManifests.scan(GeoTIFFDriver(), path)
         end
 
         # A full-resolution page (width 9, height 4) plus two reduced-resolution
@@ -763,9 +763,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(9, 4), _gt_pyramidpixels(5, 2), _gt_pyramidpixels(3, 1)]
             _gt_buildpyramid(path, [p0, p1, p2], [2, 3, 0], pixeldata)
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            @test sort(collect(keys(VirtualZarr.arraysof(group)))) == ["0", "1", "2"]
-            va0, va1, va2 = VirtualZarr.arraysof(group)["0"], VirtualZarr.arraysof(group)["1"], VirtualZarr.arraysof(group)["2"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            @test sort(collect(keys(ChunkManifests.arraysof(group)))) == ["0", "1", "2"]
+            va0, va1, va2 = ChunkManifests.arraysof(group)["0"], ChunkManifests.arraysof(group)["1"], ChunkManifests.arraysof(group)["2"]
 
             @test shapeof(va0) == (9, 4)
             @test shapeof(va1) == (5, 2)
@@ -776,7 +776,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test attrsof(va1)["parent"] == "0"
             @test attrsof(va2)["parent"] == "0"
 
-            store = ManifestStore(group)
+            store = group
             @test Array(Zarr.zopen(store; path="0")[:, :]) == data0
             @test Array(Zarr.zopen(store; path="1")[:, :]) == data1
             @test Array(Zarr.zopen(store; path="2")[:, :]) == data2
@@ -799,8 +799,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             # The tiepoint names the same world point at every level, so pixel
             # (1,1)'s outer edge coincides exactly...
-            corner0 = VirtualZarr.pixel_to_world(VirtualZarr.GeoTransform(Tuple(Float64.(gt0))), 1.0, 1.0)
-            corner1 = VirtualZarr.pixel_to_world(VirtualZarr.GeoTransform(Tuple(Float64.(gt1))), 1.0, 1.0)
+            corner0 = ChunkManifests.pixel_to_world(ChunkManifests.GeoTransform(Tuple(Float64.(gt0))), 1.0, 1.0)
+            corner1 = ChunkManifests.pixel_to_world(ChunkManifests.GeoTransform(Tuple(Float64.(gt1))), 1.0, 1.0)
             @test corner0 == corner1
 
             # ...while pixel centers sit half a (level-specific) pixel inward,
@@ -839,9 +839,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(overwidth, overheight)]
             _gt_buildpyramid(path, [p0, p1], [2, 0], pixeldata)
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            vaover = VirtualZarr.arraysof(group)["1"]
-            expected = VirtualZarr.geotransform_from_scale_tiepoint(ownscale, owntiepoint)
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            vaover = ChunkManifests.arraysof(group)["1"]
+            expected = ChunkManifests.geotransform_from_scale_tiepoint(ownscale, owntiepoint)
             @test attrsof(vaover)["GeoTransform"] == collect(expected.matrix)
             # The extent-derived value (4 * 1.0 / 2 = 2.0) would differ from the
             # own scale (9.0) kept above, confirming the own tags took priority.
@@ -865,16 +865,16 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(subwidth, subheight)]
             _gt_buildpyramid(path, [p0, p1], [0, 0], pixeldata)
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            @test sort(collect(keys(VirtualZarr.arraysof(group)))) == ["0", "0.sub1"]
-            vasub = VirtualZarr.arraysof(group)["0.sub1"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            @test sort(collect(keys(ChunkManifests.arraysof(group)))) == ["0", "0.sub1"]
+            vasub = ChunkManifests.arraysof(group)["0.sub1"]
             @test shapeof(vasub) == (subwidth, subheight)
             @test attrsof(vasub)["reduced_resolution"] == true
             @test attrsof(vasub)["parent"] == "0"
             @test attrsof(vasub)["crs"] == "EPSG:32610"
             @test attrsof(vasub)["GeoTransform"][1] ≈ (width * 1.0) / subwidth
 
-            store = ManifestStore(group)
+            store = group
             @test Array(Zarr.zopen(store; path="0.sub1")[:, :]) == _gt_pyramidmatrix(subwidth, subheight)
         end
 
@@ -884,7 +884,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             p0 = vcat(_gt_pyramidtags(width, height, 0), Any[(330, _GT_LONG, [_GTPageRef(1)])])  # points at itself
             _gt_buildpyramid(path, [p0], [0], [_gt_pyramidpixels(width, height)])
 
-            task = @async VirtualZarr.scan(GeoTIFFDriver(), path)
+            task = @async ChunkManifests.scan(GeoTIFFDriver(), path)
             status = timedwait(() -> istaskdone(task), 10.0)
             @test status === :ok  # must terminate well within the timeout, not hang
             status === :ok && @test_throws "revisits" fetch(task)
@@ -898,8 +898,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(width, height)]
             _gt_buildpyramid(path, [p0, pmask], [2, 0], pixeldata)
 
-            group = VirtualZarr.scan(GeoTIFFDriver(), path)
-            vamask = VirtualZarr.arraysof(group)["1"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            vamask = ChunkManifests.arraysof(group)["1"]
             @test attrsof(vamask)["mask"] == true
             @test attrsof(vamask)["reduced_resolution"] == false
             @test attrsof(vamask)["parent"] == "0"
@@ -908,14 +908,42 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
     @testset "real file: $_GT_JUNK_PATH" begin
         if isfile(_GT_JUNK_PATH)
-            group = VirtualZarr.scan(GeoTIFFDriver(), _GT_JUNK_PATH)
-            va = VirtualZarr.arraysof(group)["0"]
+            group = ChunkManifests.scan(GeoTIFFDriver(), _GT_JUNK_PATH)
+            va = ChunkManifests.arraysof(group)["0"]
             @test shapeof(va) == (720, 360)
             @test chunkshapeof(va) == (720, 1)
-            @test manifestof(va) isa ChunkManifest
+            @test chunkmapof(va) isa ExplicitChunkMap
             @test compressorof(va) == Dict{String,Any}("id" => "zstd", "level" => 0)
             @test eltype(va) === Float64
             @test fillvalueof(va) !== nothing && isnan(fillvalueof(va))
         end
+    end
+
+    @testset "byte order" begin
+        # A TIFF declares its byte order in its header and the sample data
+        # follows it. This store cannot swap bytes and Zarr.jl ignores the
+        # marker in a dtype string, so a foreign-order file has to be refused
+        # rather than decoded to wrong numbers -- the same rule HDF5Driver
+        # applies. Written by hand because TiffImages writes host order only:
+        # "MM" plus the 42 magic is enough for its header reader to set
+        # need_bswap on a little-endian host.
+        dir = mktempdir()
+        fn = joinpath(dir, "bigendian.tif")
+        open(fn, "w") do io
+            write(io, UInt8['M', 'M'])          # big-endian byte order
+            write(io, UInt8[0x00, 0x2a])        # 42, big-endian
+            write(io, UInt8[0x00, 0x00, 0x00, 0x08])  # first IFD offset
+            write(io, zeros(UInt8, 64))
+        end
+
+        err = try
+            scan(GeoTIFFDriver(), fn)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("byte order", err.msg)
+        @test occursin("does not", err.msg)
     end
 end

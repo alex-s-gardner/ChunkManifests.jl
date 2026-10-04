@@ -1,12 +1,12 @@
-module VirtualZarrTiffImagesExt
+module ChunkManifestsTiffImagesExt
 
-using VirtualZarr
+using ChunkManifests
 import TiffImages
 
 # Dimension convention for every array this driver produces: Julia order is
 # (x, y) — width fastest-varying, matching the TIFF file's own byte layout
 # (rows stored one after another, columns contiguous within a row), the same
-# way VirtualZarr.jl's HDF5 driver takes "Julia order" to be the reverse of
+# way ChunkManifests.jl's HDF5 driver takes "Julia order" to be the reverse of
 # the file's declared (slow-to-fast) dimension order. `zarray_json` reverses
 # this to (y, x) on serialization, which is numpy's/GDAL's own (row, col)
 # convention.
@@ -37,7 +37,7 @@ const _GT_MODELTRANSFORMATION = UInt16(34264)
 const _GT_MAGIC_LE = (UInt8[0x49, 0x49, 0x2a, 0x00], UInt8[0x49, 0x49, 0x2b, 0x00])
 const _GT_MAGIC_BE = (UInt8[0x4d, 0x4d, 0x00, 0x2a], UInt8[0x4d, 0x4d, 0x00, 0x2b])
 
-function VirtualZarr.candrive(::VirtualZarr.GeoTIFFDriver, path)
+function ChunkManifests.candrive(::ChunkManifests.GeoTIFFDriver, path)
     isfile(path) || return false
     try
         return open(path, "r") do io
@@ -84,6 +84,17 @@ end
 function _gt_readpages(path::AbstractString)
     pages = open(path, "r") do io
         tf = read(io, TiffImages.TiffFile)
+        # A TIFF declares its byte order in its header ("MM" for big-endian),
+        # and the sample data follows it. This store passes a source's bytes
+        # through untouched and Zarr.jl ignores the byte-order marker in a
+        # dtype string, so such a file would decode to wrong numbers rather
+        # than fail — the same reason HDF5Driver refuses a big-endian dataset.
+        tf.need_bswap && throw(ArgumentError(
+            "$path: TIFF is stored in the opposite byte order to this host, which " *
+            "cannot be served faithfully. Zarr.jl accepts a \">\" dtype but does not " *
+            "byte-swap on read, so the bytes would decode to wrong values rather " *
+            "than fail. Rewrite the source in host byte order, or scan a converted copy",
+        ))
         visited = Set{Int}()
         result = Tuple{String,TiffImages.IFD,Union{Nothing,String}}[]
 
@@ -160,11 +171,11 @@ function _gt_codecs(
     samplesperpixel::Integer, context::AbstractString,
 ) where {T}
     pipeline = compression_id == 1 ? Tuple{Int,Vector{Int}}[] : [(Int(compression_id), Int[])]
-    compressor, _ = VirtualZarr.build_codecs(VirtualZarr.GeoTIFFDriver, pipeline, Int(itemsize); context)
+    compressor, _ = ChunkManifests.build_codecs(ChunkManifests.GeoTIFFDriver, pipeline, Int(itemsize); context)
 
     predictor = predictor_id == 0 ? 1 : predictor_id
     predictorconfig = try
-        VirtualZarr.tiffpredictor_config(predictor, T, ncols, samplesperpixel)
+        ChunkManifests.tiffpredictor_config(predictor, T, ncols, samplesperpixel)
     catch e
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$context: $(e.msg)"))
@@ -177,7 +188,7 @@ function _gt_fillvalue(::Type{T}, ifd) where {T}
     TiffImages.GDALNODATA in ifd || return nothing
     s = ifd[TiffImages.GDALNODATA].data
     isempty(strip(s)) && return nothing
-    return VirtualZarr.parse_gdal_nodata(T, s)
+    return ChunkManifests.parse_gdal_nodata(T, s)
 end
 
 # Raw GeoTIFF tag values, decoded by src/drivers/geotiffmeta.jl into a CRS
@@ -205,21 +216,21 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
     attrs = Dict{String,Any}()
 
     geokeys = if geokeydirectory !== nothing
-        VirtualZarr.decode_geokeys(geokeydirectory; doubleparams=geodoubleparams, asciiparams=geoasciiparams)
+        ChunkManifests.decode_geokeys(geokeydirectory; doubleparams=geodoubleparams, asciiparams=geoasciiparams)
     else
         Dict{Int,Any}()
     end
-    owncrs = isempty(geokeys) ? nothing : VirtualZarr.identify_crs(geokeys)
-    ownrastertype = get(geokeys, VirtualZarr.GEOKEY_GTRasterTypeGeoKey, VirtualZarr.RASTER_PIXEL_IS_AREA)
+    owncrs = isempty(geokeys) ? nothing : ChunkManifests.identify_crs(geokeys)
+    ownrastertype = get(geokeys, ChunkManifests.GEOKEY_GTRasterTypeGeoKey, ChunkManifests.RASTER_PIXEL_IS_AREA)
 
     crs = owncrs !== nothing ? owncrs : (inherit === nothing ? nothing : inherit.crs)
     crs !== nothing && (attrs["crs"] = crs)
 
     width, height = shape
     gt, rastertype = if transformation !== nothing
-        VirtualZarr.geotransform(; transformation), ownrastertype
+        ChunkManifests.geotransform(; transformation), ownrastertype
     elseif pixelscale !== nothing && tiepoint !== nothing
-        VirtualZarr.geotransform(; pixelscale, tiepoints=tiepoint), ownrastertype
+        ChunkManifests.geotransform(; pixelscale, tiepoints=tiepoint), ownrastertype
     elseif inherit !== nothing && inherit.pixelscale !== nothing && inherit.tiepoint !== nothing
         # An overview covers the same ground as its full-resolution parent
         # with fewer, larger pixels. GDAL sizes an overview as
@@ -234,13 +245,13 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
             inherit.height * inherit.pixelscale[2] / height,
             inherit.pixelscale[3],
         ]
-        VirtualZarr.geotransform(; pixelscale=inheritedscale, tiepoints=inherit.tiepoint), inherit.rastertype
+        ChunkManifests.geotransform(; pixelscale=inheritedscale, tiepoints=inherit.tiepoint), inherit.rastertype
     else
         nothing, ownrastertype
     end
     if gt !== nothing
         attrs["GeoTransform"] = collect(gt.matrix)
-        x, y = VirtualZarr.pixel_coordinates(gt, width, height; rastertype)
+        x, y = ChunkManifests.pixel_coordinates(gt, width, height; rastertype)
         attrs["x"] = x
         attrs["y"] = y
     end
@@ -289,7 +300,7 @@ function _gt_scantiled(
         end
     end
 
-    manifest = VirtualZarr.ChunkManifest(table, index, offset, nbytes)
+    manifest = ChunkManifests.ExplicitChunkMap(table, index, offset, nbytes)
     return manifest, (tilewidth, tilelength), compressor, filters
 end
 
@@ -342,7 +353,7 @@ function _gt_scanstriped(
         chunkbytes_actual = UInt32(chunkrows * rowbytes)
         gridsize = bandgrid ? (1, 1, gridy) : (1, gridy)
         strides = bandgrid ? (UInt64(0), UInt64(0), UInt64(chunkbytes_actual)) : (UInt64(0), UInt64(chunkbytes_actual))
-        manifest = VirtualZarr.AffineManifest(table, gridsize, UInt64(offsets[1]), strides, chunkbytes_actual)
+        manifest = ChunkManifests.AffineChunkMap(table, gridsize, UInt64(offsets[1]), strides, chunkbytes_actual)
         return manifest, (width, chunkrows), compressor, filters
     end
 
@@ -367,7 +378,7 @@ function _gt_scanstriped(
             nbytes[1, k] = bytecounts[k]
         end
     end
-    manifest = VirtualZarr.ChunkManifest(table, index, offset, nbytes)
+    manifest = ChunkManifests.ExplicitChunkMap(table, index, offset, nbytes)
     return manifest, (width, rowsperstrip), compressor, filters
 end
 
@@ -380,10 +391,10 @@ end
 # reader in `test/geotiff.jl` rather than assumed.
 #
 # An uncompressed, row-regular planar file could in principle also collapse
-# to an AffineManifest by adding a third stride for the gap between band
+# to an AffineChunkMap by adding a third stride for the gap between band
 # planes, but plane-to-plane contiguity is a regularity condition separate
 # from per-row contiguity and is not checked here; planar data always gets a
-# ChunkManifest, which is correct regardless.
+# ExplicitChunkMap, which is correct regardless.
 function _gt_scanplanar(
     table, fileindex, ifd, width, height, nsp, compression_id, predictor_id, ::Type{T}, itemsize, tiled, context,
 ) where {T}
@@ -433,12 +444,12 @@ function _gt_scanplanar(
         nbytes[tx, ty, sample + 1] = bytecounts[entry]
     end
 
-    manifest = VirtualZarr.ChunkManifest(table, index, offset, nbytes)
+    manifest = ChunkManifests.ExplicitChunkMap(table, index, offset, nbytes)
     return manifest, (chunkxy..., 1), compressor, filters
 end
 
 function _gt_scanifd(
-    driver::VirtualZarr.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
+    driver::ChunkManifests.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
     sft::Integer, parentkey::Union{Nothing,AbstractString}, primarygeo::Dict{String,Any}, ismain::Bool,
 )
     context = "$path: page \"$key\""
@@ -504,7 +515,7 @@ function _gt_scanifd(
         fillvalue = T(inherit.fillvalue)
     end
 
-    va = VirtualZarr.VirtualArray{T}(
+    va = ChunkManifests.ManifestArray{T}(
         manifest, shape, chunkshape;
         fillvalue, compressor, filters, attrs, dimnames,
     )
@@ -522,7 +533,7 @@ function _gt_scanifd(
 end
 
 """
-    scan(driver::GeoTIFFDriver, path::AbstractString) -> VirtualGroup
+    scan(driver::GeoTIFFDriver, path::AbstractString) -> ChunkManifest
 
 Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each main-chain image file
 directory (page) becomes one array, keyed by its 0-based page index as a
@@ -552,15 +563,15 @@ or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
 entry nesting deeper than one level, and any IFD offset — main chain or
 `SubIFDs` — revisited while scanning, which would otherwise loop forever.
 """
-function VirtualZarr.scan(driver::VirtualZarr.GeoTIFFDriver, path::AbstractString)
+function ChunkManifests.scan(driver::ChunkManifests.GeoTIFFDriver, path::AbstractString)
     isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
 
-    table = VirtualZarr.PathTable()
-    fileindex = VirtualZarr.push_uri!(table, abspath(path); size=filesize(path))
+    table = ChunkManifests.PathTable()
+    fileindex = ChunkManifests.push_uri!(table, abspath(path); size=filesize(path))
 
     pages = _gt_readpages(path)
 
-    arrays = Dict{String,VirtualZarr.VirtualArray}()
+    arrays = Dict{String,ChunkManifests.ManifestArray}()
     primarygeo = Dict{String,Any}()
     lastfull = nothing
     for (key, ifd, forcedparent) in pages
@@ -577,32 +588,36 @@ function VirtualZarr.scan(driver::VirtualZarr.GeoTIFFDriver, path::AbstractStrin
     end
 
     provenance = Dict{String,Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
-    return VirtualZarr.VirtualGroup(; arrays, provenance)
+    return ChunkManifests.ChunkManifest(; arrays, provenance)
 end
 
-# Registration mutates dictionaries owned by VirtualZarr, not by this
+# Registration mutates dictionaries owned by ChunkManifests, not by this
 # extension; precompiling the extension does not replay that mutation into a
 # fresh session the way it would for a dict this module owned itself, so it
 # has to happen in __init__ rather than at top level.
 function __init__()
-    VirtualZarr.register_codec!(
-        VirtualZarr.GeoTIFFDriver, 8, VirtualZarr.COMPRESSOR,
+    ChunkManifests.register_codec!(
+        ChunkManifests.GeoTIFFDriver, 8, ChunkManifests.COMPRESSOR,
         (cd, itemsize) -> Dict{String,Any}("id" => "zlib", "level" => -1),
     )
-    VirtualZarr.register_codec!(
-        VirtualZarr.GeoTIFFDriver, 32946, VirtualZarr.COMPRESSOR,
+    ChunkManifests.register_codec!(
+        ChunkManifests.GeoTIFFDriver, 32946, ChunkManifests.COMPRESSOR,
         (cd, itemsize) -> Dict{String,Any}("id" => "zlib", "level" => -1),
     )
-    VirtualZarr.register_codec!(
-        VirtualZarr.GeoTIFFDriver, 50000, VirtualZarr.COMPRESSOR,
+    ChunkManifests.register_codec!(
+        ChunkManifests.GeoTIFFDriver, 50000, ChunkManifests.COMPRESSOR,
         (cd, itemsize) -> Dict{String,Any}("id" => "zstd", "level" => 0),
     )
 
-    VirtualZarr.register_rejection!(VirtualZarr.GeoTIFFDriver, 5, "LZW has no byte-compatible Zarr v2 codec")
-    VirtualZarr.register_rejection!(VirtualZarr.GeoTIFFDriver, 32773, "PackBits has no byte-compatible Zarr v2 codec")
-    VirtualZarr.register_rejection!(VirtualZarr.GeoTIFFDriver, 7, "JPEG has no byte-compatible Zarr v2 codec")
-    VirtualZarr.register_rejection!(VirtualZarr.GeoTIFFDriver, 50001, "WebP has no byte-compatible Zarr v2 codec")
+    ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 5, "LZW has no byte-compatible Zarr v2 codec")
+    ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 32773, "PackBits has no byte-compatible Zarr v2 codec")
+    ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 7, "JPEG has no byte-compatible Zarr v2 codec")
+    ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 50001, "WebP has no byte-compatible Zarr v2 codec")
+
+    # Only reachable once this extension loads, which is also when scanning a
+    # TIFF becomes possible at all.
+    ChunkManifests.register_driver!(ChunkManifests.GeoTIFFDriver())
     return nothing
 end
 
-end # module VirtualZarrTiffImagesExt
+end # module ChunkManifestsTiffImagesExt

@@ -1,15 +1,15 @@
 @testset "Manifest" begin
-    @testset "ChunkManifest basic states" begin
+    @testset "ExplicitChunkMap basic states" begin
         t = PathTable()
         push_uri!(t, "file1.h5")
         push_uri!(t, "file2.h5")
 
-        index = UInt32[1 VirtualZarr.MISSING_INDEX; 2 VirtualZarr.INLINE_INDEX]
+        index = UInt32[1 ChunkManifests.MISSING_INDEX; 2 ChunkManifests.INLINE_INDEX]
         offset = UInt64[10 0; 20 0]
         nbytes = UInt64[5 0; 7 0]
         inline = Dict(CartesianIndex(2, 2) => UInt8[1, 2, 3])
 
-        m = ChunkManifest(t, index, offset, nbytes; inline)
+        m = ExplicitChunkMap(t, index, offset, nbytes; inline)
 
         @test chunkgridsize(m) == (2, 2)
         @test chunkgridaxes(m) == axes(index)
@@ -37,11 +37,11 @@
         @test_throws "VIRTUAL_CHUNK" inlinebytes(m, CartesianIndex(1, 1))
         @test_throws "MISSING_CHUNK" inlinebytes(m, CartesianIndex(1, 2))
 
-        @test manifestversion(m) == VirtualZarr.MANIFEST_FORMAT_VERSION
+        @test manifestversion(m) == ChunkManifests.MANIFEST_FORMAT_VERSION
         @test pathtable(m) === t
     end
 
-    @testset "ChunkManifest axes mismatch" begin
+    @testset "ExplicitChunkMap axes mismatch" begin
         t = PathTable()
         push_uri!(t, "file1.h5")
         index = UInt32[1 1; 1 1]
@@ -49,7 +49,7 @@
         nbytes = zeros(UInt64, 2, 2)
 
         err = try
-            ChunkManifest(t, index, offset, nbytes)
+            ExplicitChunkMap(t, index, offset, nbytes)
             nothing
         catch e
             e
@@ -58,7 +58,7 @@
         @test occursin("axes", sprint(showerror, err))
     end
 
-    @testset "AffineManifest offsets on a distinct 3-D grid" begin
+    @testset "AffineChunkMap offsets on a distinct 3-D grid" begin
         t = PathTable()
         push_uri!(t, "data.bin")
 
@@ -67,7 +67,7 @@
         strides = (UInt64(7), UInt64(100), UInt64(5000))
         chunkbytes = UInt32(64)
 
-        m = AffineManifest(t, gridsize, base, strides, chunkbytes)
+        m = AffineChunkMap(t, gridsize, base, strides, chunkbytes)
 
         @test chunkgridsize(m) == gridsize
         @test chunkgridaxes(m) == map(Base.OneTo, gridsize)
@@ -89,13 +89,41 @@
         @test_throws "INLINE_CHUNK" inlinebytes(m, CartesianIndex(1, 1, 1))
         @test_throws BoundsError chunklocation(m, CartesianIndex(3, 1, 1))
 
-        t2 = PathTable()
-        push_uri!(t2, "a.bin")
-        push_uri!(t2, "b.bin")
-        @test_throws "exactly one" AffineManifest(t2, gridsize, base, strides, chunkbytes)
     end
 
-    @testset "ChunkManifest over non-standard axes (view)" begin
+    @testset "AffineChunkMap resolves fileindex in a shared table" begin
+        # The arrays of one ChunkManifest share a single PathTable, so an
+        # affine map's file is identified by index. Resolving the wrong entry
+        # would read a real file at a real offset and hand back plausible
+        # bytes from the wrong source, so this is checked rather than assumed.
+        t = PathTable()
+        push_uri!(t, "a.bin")
+        push_uri!(t, "b.bin")
+        push_uri!(t, "c.bin")
+
+        gridsize = (2, 3)
+        strides = (UInt64(8), UInt64(64))
+
+        for (idx, uri) in ((1, "a.bin"), (2, "b.bin"), (3, "c.bin"))
+            m = AffineChunkMap(t, gridsize, UInt64(0), strides, UInt32(8); fileindex=idx)
+            for I in CartesianIndices(gridsize)
+                @test chunklocation(m, I)[1] == uri
+            end
+        end
+
+        # Omitting fileindex means the first entry, not "the only entry".
+        m = AffineChunkMap(t, gridsize, UInt64(0), strides, UInt32(8))
+        @test chunklocation(m, CartesianIndex(1, 1))[1] == "a.bin"
+
+        @test_throws "out of range" AffineChunkMap(
+            t, gridsize, UInt64(0), strides, UInt32(8); fileindex=4
+        )
+        @test_throws "out of range" AffineChunkMap(
+            t, gridsize, UInt64(0), strides, UInt32(8); fileindex=0
+        )
+    end
+
+    @testset "ExplicitChunkMap over non-standard axes (view)" begin
         t = PathTable()
         push_uri!(t, "file1.h5")
 
@@ -115,7 +143,7 @@
         nbytes = view(bignbytes, idx, idx)
         @test axes(index) == (2:3, 2:3)
 
-        m = ChunkManifest(t, index, offset, nbytes)
+        m = ExplicitChunkMap(t, index, offset, nbytes)
         @test chunkgridaxes(m) == (2:3, 2:3)
         @test chunkgridsize(m) == (2, 2)
 
@@ -134,22 +162,22 @@
         t = PathTable()
         push_uri!(t, "f.h5")
 
-        m = ChunkManifest(
+        m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )
-        @test occursin("ChunkManifest", sprint(show, m))
+        @test occursin("ExplicitChunkMap", sprint(show, m))
 
-        am = AffineManifest(t, (1,), UInt64(0), (UInt64(4),), UInt32(4))
-        @test occursin("AffineManifest", sprint(show, am))
+        am = AffineChunkMap(t, (1,), UInt64(0), (UInt64(4),), UInt32(4))
+        @test occursin("AffineChunkMap", sprint(show, am))
     end
 
-    @testset "ChunkManifest from AffineManifest" begin
+    @testset "ExplicitChunkMap from AffineChunkMap" begin
         t = PathTable()
         push_uri!(t, "a.bin")
-        am = AffineManifest(t, (2, 3), UInt64(100), (UInt64(8), UInt64(64)), UInt32(8))
-        cm = ChunkManifest(am)
+        am = AffineChunkMap(t, (2, 3), UInt64(100), (UInt64(8), UInt64(64)), UInt32(8))
+        cm = ExplicitChunkMap(am)
 
-        @test cm isa ChunkManifest
+        @test cm isa ExplicitChunkMap
         @test chunkgridsize(cm) == chunkgridsize(am)
         for I in CartesianIndices(chunkgridsize(am))
             @test chunklocation(cm, I) == chunklocation(am, I)

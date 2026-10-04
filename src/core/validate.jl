@@ -60,7 +60,7 @@ transport: a chunk's byte range overruns its file's recorded size
 (`kind = :offset_overflow`), its path table index is out of range
 (`:bad_index`), or an `INLINE_CHUNK` has no inline bytes (`:empty_inline`).
 `label` is the array name when the issue was found while validating a
-[`VirtualGroup`](@ref), and `nothing` otherwise.
+[`ChunkManifest`](@ref), and `nothing` otherwise.
 """
 struct ConsistencyIssue
     label::Union{Nothing,String}
@@ -131,11 +131,11 @@ function _probefile(entry::FileEntry, transport::AbstractTransport)
     return (:mismatch, "recorded size $(entry.size) bytes, now $(sz) bytes")
 end
 
-# Internal consistency of a ChunkManifest's columns, needing no transport:
+# Internal consistency of a ExplicitChunkMap's columns, needing no transport:
 # every non-sentinel index must address an existing path table entry, every
 # INLINE_CHUNK must have bytes, and every chunk's range must fit inside its
 # file's recorded size (when a size was recorded at all).
-function _consistency(m::ChunkManifest{N}, label=nothing) where {N}
+function _consistency(m::ExplicitChunkMap{N}, label=nothing) where {N}
     issues = ConsistencyIssue[]
     t = m.table
     ntable = length(t.entries)
@@ -182,16 +182,16 @@ function _consistency(m::ChunkManifest{N}, label=nothing) where {N}
     return issues
 end
 
-# AffineManifest's offsets are a closed-form function of the chunk index and
+# AffineChunkMap's offsets are a closed-form function of the chunk index and
 # its grid bounds are checked by chunkstate/chunklocation on every access, so
 # there is no per-chunk state that can go inconsistent.
-_consistency(::AffineManifest, label=nothing) = ConsistencyIssue[]
+_consistency(::AffineChunkMap, label=nothing) = ConsistencyIssue[]
 
 # Shared engine behind every validate(...) method: one FileEntry probe per
 # path table entry (never per chunk) plus the chunk-level consistency check
 # above. `label` tags issues and file reasons with an array name when called
-# from validate(::VirtualGroup); nothing otherwise.
-function _validate_core(m::AbstractManifest, transport::AbstractTransport, strict::Bool, label)
+# from validate(::ChunkManifest); nothing otherwise.
+function _validate_core(m::AbstractChunkMap, transport::AbstractTransport, strict::Bool, label)
     consistency = _consistency(m, label)
     if strict && !isempty(consistency)
         c = first(consistency)
@@ -231,7 +231,7 @@ function _validate_core(m::AbstractManifest, transport::AbstractTransport, stric
 end
 
 """
-    validate(m::AbstractManifest, transport=LocalTransport(); strict=false) -> ValidationReport
+    validate(m::AbstractChunkMap, transport=LocalTransport(); strict=false) -> ValidationReport
 
 Check `m`'s distinct files against live storage through `transport`, and
 check `m`'s internal consistency. Cost is one [`objectsize`](@ref) query per
@@ -242,30 +242,30 @@ no-network consistency check.
 With `strict=true`, throws on the first inconsistency or file problem found
 instead of collecting a full report.
 """
-function validate(m::AbstractManifest, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
+function validate(m::AbstractChunkMap, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
     verified, unverifiable, missing_files, mismatched, consistency =
         _validate_core(m, transport, strict, nothing)
     return ValidationReport(verified, unverifiable, missing_files, mismatched, consistency)
 end
 
 """
-    validate(a::VirtualArray, transport=LocalTransport(); strict=false) -> ValidationReport
+    validate(a::ManifestArray, transport=LocalTransport(); strict=false) -> ValidationReport
 
-Equivalent to `validate(manifestof(a), transport; strict)`.
+Equivalent to `validate(chunkmapof(a), transport; strict)`.
 """
-function validate(a::VirtualArray, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
-    return validate(manifestof(a), transport; strict)
+function validate(a::ManifestArray, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
+    return validate(chunkmapof(a), transport; strict)
 end
 
 """
-    validate(g::VirtualGroup, transport=LocalTransport(); strict=false) -> ValidationReport
+    validate(g::ChunkManifest, transport=LocalTransport(); strict=false) -> ValidationReport
 
 Validates every array's manifest in `g` and merges the results. Each array is
 checked independently, so a file shared by two arrays' manifests is queried
 once per array rather than once overall; [`ConsistencyIssue`](@ref) and file
 reasons carry the owning array's name.
 """
-function validate(g::VirtualGroup, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
+function validate(g::ChunkManifest, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
     verified = String[]
     unverifiable = FileCheck[]
     missing_files = FileCheck[]
@@ -273,7 +273,7 @@ function validate(g::VirtualGroup, transport::AbstractTransport=LocalTransport()
     consistency = ConsistencyIssue[]
 
     for (name, arr) in arraysof(g)
-        v, u, mi, mm, c = _validate_core(manifestof(arr), transport, strict, name)
+        v, u, mi, mm, c = _validate_core(chunkmapof(arr), transport, strict, name)
         append!(verified, v)
         append!(unverifiable, u)
         append!(missing_files, mi)
@@ -301,7 +301,7 @@ function _setindex_checked!(col, v, I, label::AbstractString)
 end
 
 """
-    setchunk!(m::ChunkManifest, I::CartesianIndex, uri, offset, nbytes;
+    setchunk!(m::ExplicitChunkMap, I::CartesianIndex, uri, offset, nbytes;
               etag=nothing, size=nothing, mtime=nothing) -> m
 
 Repoint chunk `I` to byte range `[offset, offset + nbytes)` of `uri`,
@@ -309,7 +309,7 @@ reusing [`push_uri!`](@ref) to add `uri` to `m`'s path table only if it is
 not already present. No other chunk's columns are read or written.
 """
 function setchunk!(
-    m::ChunkManifest{N},
+    m::ExplicitChunkMap{N},
     I::CartesianIndex{N},
     uri::AbstractString,
     offset::Integer,
@@ -327,14 +327,14 @@ function setchunk!(
 end
 
 """
-    setchunk!(m::ChunkManifest, I::CartesianIndex, state::ChunkState) -> m
+    setchunk!(m::ExplicitChunkMap, I::CartesianIndex, state::ChunkState) -> m
 
 Set chunk `I` to [`MISSING_CHUNK`](@ref): its bytes are absent and read as
 the array's fill value. `state` must be `MISSING_CHUNK`; `VIRTUAL_CHUNK`
 needs the `(uri, offset, nbytes)` form of `setchunk!` and `INLINE_CHUNK`
 needs the byte-vector form.
 """
-function setchunk!(m::ChunkManifest{N}, I::CartesianIndex{N}, state::ChunkState) where {N}
+function setchunk!(m::ExplicitChunkMap{N}, I::CartesianIndex{N}, state::ChunkState) where {N}
     state == MISSING_CHUNK || throw(ArgumentError(
         "setchunk!: a bare ChunkState argument must be MISSING_CHUNK (got $state); " *
         "VIRTUAL_CHUNK needs (uri, offset, nbytes) and INLINE_CHUNK needs a byte vector",
@@ -345,12 +345,12 @@ function setchunk!(m::ChunkManifest{N}, I::CartesianIndex{N}, state::ChunkState)
 end
 
 """
-    setchunk!(m::ChunkManifest, I::CartesianIndex, bytes::AbstractVector{UInt8}) -> m
+    setchunk!(m::ExplicitChunkMap, I::CartesianIndex, bytes::AbstractVector{UInt8}) -> m
 
 Set chunk `I` to [`INLINE_CHUNK`](@ref), embedding `bytes` directly in the
 manifest rather than referencing an external file.
 """
-function setchunk!(m::ChunkManifest{N}, I::CartesianIndex{N}, bytes::AbstractVector{UInt8}) where {N}
+function setchunk!(m::ExplicitChunkMap{N}, I::CartesianIndex{N}, bytes::AbstractVector{UInt8}) where {N}
     isempty(bytes) && throw(ArgumentError("setchunk!: inline bytes must be non-empty"))
     _setindex_checked!(m.index, INLINE_INDEX, I, "index")
     m.inline[I] = Vector{UInt8}(bytes)
@@ -358,16 +358,16 @@ function setchunk!(m::ChunkManifest{N}, I::CartesianIndex{N}, bytes::AbstractVec
 end
 
 """
-    setchunk!(m::AffineManifest, I, args...; kwargs...)
+    setchunk!(m::AffineChunkMap, I, args...; kwargs...)
 
-Throws unconditionally. An [`AffineManifest`](@ref) has no per-chunk storage
+Throws unconditionally. An [`AffineChunkMap`](@ref) has no per-chunk storage
 to repoint — its offsets are a closed-form function of the chunk index — so
-there is no supported conversion to a [`ChunkManifest`](@ref); build one
+there is no supported conversion to a [`ExplicitChunkMap`](@ref); build one
 directly instead.
 """
-function setchunk!(::AffineManifest, I, args...; kwargs...)
+function setchunk!(::AffineChunkMap, I, args...; kwargs...)
     throw(ArgumentError(
-        "setchunk!: AffineManifest has no per-chunk storage to repoint and cannot be " *
-        "converted to a ChunkManifest; build a ChunkManifest directly instead",
+        "setchunk!: AffineChunkMap has no per-chunk storage to repoint and cannot be " *
+        "converted to a ExplicitChunkMap; build a ExplicitChunkMap directly instead",
     ))
 end

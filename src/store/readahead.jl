@@ -44,7 +44,7 @@ end
 # its successors in chunk-grid linear order stay in the same file, remain
 # VIRTUAL_CHUNK, and fit within `budget` bytes, up to `maxchunks` entries.
 function _readahead_plan(
-    m::AbstractManifest{N}, I::CartesianIndex{N}, maxchunks::Int, budget::Int
+    m::AbstractChunkMap{N}, I::CartesianIndex{N}, maxchunks::Int, budget::Int
 ) where {N}
     ax = chunkgridaxes(m)
     lin = LinearIndices(ax)
@@ -84,7 +84,7 @@ actually asked for.
 function _readahead_fetch(
     cache::ReadaheadCache,
     transport::AbstractTransport,
-    m::AbstractManifest{N},
+    m::AbstractChunkMap{N},
     I::CartesianIndex{N},
     uri::String,
     offset::UInt64,
@@ -96,7 +96,7 @@ function _readahead_fetch(
     cached = _cache_get(cache, key, nbytes)
     cached === nothing || return cached
 
-    budget = min(cache.maxbytes, Int(maxblock(transport)))
+    budget = min(cache.maxbytes, Int(maxblock(resolve_transport(transport, uri))))
     plan = _readahead_plan(m, I, cache.chunks, budget)
 
     if length(plan) == 1

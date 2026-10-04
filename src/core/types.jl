@@ -1,8 +1,16 @@
 # Type and interface contract. Implementations live in the sibling files listed
-# in VirtualZarr.jl. Struct fields are internal: everything outside this package
+# in ChunkManifests.jl. Struct fields are internal: everything outside this package
 # goes through the accessor functions declared at the bottom of this file.
 
-const MANIFEST_FORMAT_VERSION = 1
+# Version of this package's own native on-disk format ([`ZarrManifest`](@ref)),
+# incremented whenever that layout changes.
+const MANIFEST_FORMAT_VERSION = 2
+
+# Version of kerchunk's reference-set schema, which this package reads and
+# writes but does not define. Fixed at 1 by kerchunk; it is not ours to
+# increment, and emitting anything else makes the document unreadable by
+# fsspec's ReferenceFileSystem.
+const KERCHUNK_REFERENCE_VERSION = 1
 
 """
     ChunkState
@@ -44,35 +52,35 @@ struct PathTable
 end
 
 """
-    AbstractManifest{N}
+    AbstractChunkMap{N}
 
 Maps each cell of an `N`-dimensional chunk grid to the bytes backing it.
 Subtypes implement [`chunkgridaxes`](@ref), [`chunkstate`](@ref),
 [`chunklocation`](@ref) and [`pathtable`](@ref).
 """
-abstract type AbstractManifest{N} end
+abstract type AbstractChunkMap{N} end
 
 """
-    ChunkManifest{N}
+    ExplicitChunkMap{N}
 
-Manifest holding one explicit entry per chunk as parallel columns shaped like
+Chunk map holding one explicit entry per chunk as parallel columns shaped like
 the chunk grid. The column types are free: `Array` for an in-memory manifest,
 a constant-valued array when every chunk shares one file, or a `Zarr.ZArray`
 to page a manifest too large to materialize.
 """
-struct ChunkManifest{
+struct ExplicitChunkMap{
     N,
     TI<:AbstractArray{UInt32,N},
     TO<:AbstractArray{UInt64,N},
     TL<:AbstractArray{<:Unsigned,N},
-} <: AbstractManifest{N}
+} <: AbstractChunkMap{N}
     table::PathTable
     index::TI
     offset::TO
     nbytes::TL
     inline::Dict{CartesianIndex{N},Vector{UInt8}}
 
-    function ChunkManifest{N,TI,TO,TL}(
+    function ExplicitChunkMap{N,TI,TO,TL}(
         table, index, offset, nbytes, inline
     ) where {N,TI,TO,TL}
         return new{N,TI,TO,TL}(table, index, offset, nbytes, inline)
@@ -80,28 +88,34 @@ struct ChunkManifest{
 end
 
 """
-    AffineManifest{N}
+    AffineChunkMap{N}
 
-Manifest for a source whose chunk offsets are a closed-form function of the
+Chunk map for a source whose chunk offsets are a closed-form function of the
 chunk index, as produced by contiguous HDF5 datasets and uncompressed striped
 TIFFs. Storage is constant in the number of chunks.
+
+Every chunk lives in one file, `table[fileindex]`. `table` may hold other
+entries: the arrays of one [`ChunkManifest`](@ref) share a single table, so a
+map's own file is identified by index rather than by being the table's only
+entry.
 """
-struct AffineManifest{N} <: AbstractManifest{N}
+struct AffineChunkMap{N} <: AbstractChunkMap{N}
     table::PathTable
+    fileindex::UInt32
     gridsize::NTuple{N,Int}
     base::UInt64
     strides::NTuple{N,UInt64}
     chunkbytes::UInt32
 
-    function AffineManifest{N}(
-        table, gridsize, base, strides, chunkbytes
+    function AffineChunkMap{N}(
+        table, fileindex, gridsize, base, strides, chunkbytes
     ) where {N}
-        return new{N}(table, gridsize, base, strides, chunkbytes)
+        return new{N}(table, fileindex, gridsize, base, strides, chunkbytes)
     end
 end
 
 """
-    VirtualArray{T,N}
+    ManifestArray{T,N}
 
 A manifest plus the Zarr v2 metadata needed to decode it. `shape`,
 `chunkshape` and `dimnames` are in Julia order and are reversed only when
@@ -113,7 +127,7 @@ serialized. `compressor` and `filters` are Zarr v2 codec configurations, with
 `dimnames` during serialization rather than stored here, so the two cannot
 disagree.
 """
-struct VirtualArray{T,N,M<:AbstractManifest{N}}
+struct ManifestArray{T,N,M<:AbstractChunkMap{N}}
     manifest::M
     shape::NTuple{N,Int}
     chunkshape::NTuple{N,Int}
@@ -123,25 +137,13 @@ struct VirtualArray{T,N,M<:AbstractManifest{N}}
     attrs::Dict{String,Any}
     dimnames::Vector{String}
 
-    function VirtualArray{T,N,M}(
+    function ManifestArray{T,N,M}(
         manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
     ) where {T,N,M}
         return new{T,N,M}(
             manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
         )
     end
-end
-
-"""
-    VirtualGroup
-
-Tree of [`VirtualArray`](@ref)s keyed by full Zarr path (`"gt1l/h_li"`), plus
-group attributes and a record of which driver produced the scan.
-"""
-struct VirtualGroup
-    arrays::Dict{String,VirtualArray}
-    attrs::Dict{String,Any}
-    provenance::Dict{String,Any}
 end
 
 """
@@ -197,6 +199,13 @@ Reductions and broadcast walk a Zarr array one chunk at a time through
 with a run of byte-adjacent chunks on each miss restores it for those access
 patterns. `maxbytes = 0` disables readahead; `chunks` bounds how far ahead a
 single miss reads.
+
+This sits below the chunk boundary and knows where each chunk's bytes live, so
+it is what collapses a first pass over byte-adjacent chunks into one request.
+`DiskArrays.cache` is the complement rather than a substitute: it holds decoded
+chunks above the chunk boundary with no knowledge of their layout, so it spares
+a repeat read but not the first one. The two compose, and wrapping a Zarr array
+from this store in `DiskArrays.cache` keeps both effects.
 """
 struct ReadaheadCache
     entries::Dict{Tuple{String,UInt64},Vector{UInt8}}
@@ -221,27 +230,70 @@ function ReadaheadCache(; maxbytes::Integer=64 * 1024 * 1024, chunks::Integer=32
 end
 
 """
-    ManifestStore(group; transport=LocalTransport(), readahead=ReadaheadCache())
+    ChunkManifest
 
-Read-only `Zarr.AbstractStore` that answers metadata keys from synthesized
-Zarr v2 documents and chunk keys with the source files' raw, still-encoded
-bytes. Decoding is Zarr.jl's job: this store never decompresses, so the bytes
-it returns are byte-for-byte those of the original file.
+Tree of [`ManifestArray`](@ref)s keyed by full Zarr path (`"gt1l/h_li"`), plus
+group attributes and a record of which driver produced the scan.
+
+A `ChunkManifest` *is* a read-only `Zarr.AbstractStore`: it answers metadata
+keys from synthesized Zarr v2 documents and chunk keys with the source files'
+raw, still-encoded bytes, so `Zarr.zopen(manifest)` is all that stands between
+a scan and an array. Decoding is Zarr.jl's job — this store never
+decompresses, so the bytes it returns are byte-for-byte those of the original
+file.
+
+Every array shares one `table`, so repointing a file is a single edit however
+many arrays reference it, and [`validate`](@ref) costs one request per file
+rather than per chunk. `transport` resolves those URIs: a
+[`TransportContainers`](@ref) routes each URI to the backend that can read it,
+while a single transport reads every URI the same way.
 """
-struct ManifestStore{T<:AbstractTransport} <: Zarr.AbstractStore
-    group::VirtualGroup
-    transport::T
+struct ChunkManifest <: Zarr.AbstractStore
+    arrays::Dict{String,ManifestArray}
+    table::PathTable
+    attrs::Dict{String,Any}
+    provenance::Dict{String,Any}
+    transport::AbstractTransport
     readahead::ReadaheadCache
+end
 
-    function ManifestStore{T}(group, transport, readahead) where {T}
-        return new{T}(group, transport, readahead)
+"""
+    ManifestSeries(members, dim)
+    ManifestSeries(paths, dim; access=AutoAccess())
+
+An ordered set of [`ChunkManifest`](@ref)s declared to lie along the dimension
+named `dim`, which `ChunkManifests.combine` concatenates into one manifest.
+
+The declaration is the whole point: which dimension a set of files is stacked
+along cannot be recovered from the files themselves without reading and
+ordering their coordinate values, which this package does not do. `dim` states
+it, and the members stay in the order given.
+
+Dimensions are named rather than numbered because one number cannot serve a
+whole group: `time` is dimension 3 of a data variable and dimension 1 of its
+own coordinate. Arrays that do not name `dim` at all are not concatenated —
+only one member's copy of `x` or `y` survives — which is what
+`combine`'s `check` keyword governs.
+"""
+struct ManifestSeries
+    members::Vector{ChunkManifest}
+    dimname::String
+
+    function ManifestSeries(members, dimname)
+        ms = collect(ChunkManifest, members)
+        isempty(ms) && throw(ArgumentError(
+            "ManifestSeries: no manifests given; a series needs at least one member"
+        ))
+        nm = String(string(dimname))
+        isempty(nm) && throw(ArgumentError("ManifestSeries: the dimension name is empty"))
+        return new(ms, nm)
     end
 end
 
 """
     ManifestFormat
 
-An on-disk representation of a [`VirtualGroup`](@ref). Formats are types rather
+An on-disk representation of a [`ChunkManifest`](@ref). Formats are types rather
 than flags so a new one is a new subtype plus [`save`](@ref) and
 [`load`](@ref) methods, never an edit to a central dispatch function.
 """
@@ -323,6 +375,90 @@ function scan end
 function candrive end
 
 """
+    SourceAccess
+
+How a driver reaches a source file's bytes while scanning it.
+
+Scanning reads a file's metadata — superblocks, chunk indexes, tag
+directories — which is a small fraction of a large file but is scattered
+through it, so how those bytes are reached decides whether scanning a remote
+object is cheap or expensive. Mechanisms are types rather than flags so a new
+one is a new subtype plus a [`scan`](@ref) method, never an edit to a central
+dispatch function.
+
+Whichever mechanism is used, the manifest records the URI the caller asked
+for. A file fetched to a local cache is still recorded under its remote URI,
+because the manifest has to stay valid for readers that never saw the cache.
+
+Not every driver supports every mechanism: a driver that cannot honor one
+says so rather than silently falling back to transferring more than the
+caller expected.
+"""
+abstract type SourceAccess end
+
+"""
+    AutoAccess()
+
+Choose a mechanism per path and per available capability: a local path is read
+directly, and a remote one is read in place where the driver and the
+underlying library can, otherwise fetched to a local cache.
+"""
+struct AutoAccess <: SourceAccess end
+
+"""
+    LocalAccess()
+
+Open the path directly on the local filesystem.
+"""
+struct LocalAccess <: SourceAccess end
+
+"""
+    DownloadAccess(; transport=TransportContainers(), cachedir=nothing, keep=false)
+
+Fetch the whole object to a local file, scan that, and record the original
+URI in the manifest.
+
+This transfers the entire object even though scanning reads only its
+metadata, which is why it is not silent: it is what makes scanning a remote
+source work with a stock install, and the documented workflow of scanning
+once and saving the manifest amortizes it to a single transfer per file.
+`cachedir` defaults to a fresh temporary directory discarded afterwards;
+naming one and setting `keep` retains the copy for a later rescan.
+"""
+struct DownloadAccess <: SourceAccess
+    transport::AbstractTransport
+    cachedir::Union{Nothing,String}
+    keep::Bool
+end
+
+"""
+    ROS3Access(; aws=nothing)
+
+Read the object in place through HDF5's read-only S3 virtual file driver, so
+only the metadata libhdf5 actually touches is transferred.
+
+Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports and
+the HDF5 binaries shipped by `HDF5_jll` do not have; pointing HDF5.jl at a
+system library that does is what makes this available.
+"""
+struct ROS3Access <: SourceAccess
+    aws::Any
+end
+
+ROS3Access(; aws=nothing) = ROS3Access(aws)
+
+function DownloadAccess(;
+    transport::AbstractTransport=TransportContainers(),
+    cachedir=nothing,
+    keep::Bool=false,
+)
+    return DownloadAccess(transport, cachedir === nothing ? nothing : String(cachedir), keep)
+end
+
+function resolve_access end
+function withsourcepath end
+
+"""
     GeoTIFFDriver(; chunkbytes=8 * 1024 * 1024)
 
 Reads the chunk layout of a TIFF or Cloud-Optimized GeoTIFF.
@@ -375,8 +511,14 @@ download.
 """
 function objectsize end
 
-# Combining and integrity.
+# Combining and integrity. `combine` is deliberately not exported: Rasters
+# exports a `combine` of its own, and `using Rasters, ChunkManifests` would
+# otherwise make the bare name ambiguous for exactly the pair of packages a
+# caller here is likely to have loaded.
 function concat end
+function combine end
+function membersof end
+function dimnameof end
 function validate end
 function setchunk! end
 function coalesce_ranges end
