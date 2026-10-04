@@ -120,6 +120,19 @@ therefore false on the binaries `HDF5_jll` ships, which is why `ROS3Access`
 requires pointing HDF5.jl at a system libhdf5 and why its tests skip by
 default.
 
+## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
+
+`Aqua.test_persistent_tasks` walks the test environment's manifest and calls
+`error("Unable to locate Project.toml in …")` on any entry that has none.
+`SymDict` 0.3.0 ships only a `REQUIRE` file, predating Pkg3, and reaches this
+package as a direct dependency of `AWSS3`. The check therefore throws rather
+than returning a result. Aqua 0.8.18 is the current release and behaves this
+way.
+
+`test/aqua.jl` turns that one check off for this reason. Either Aqua skipping a
+manifest entry it cannot read, or AWSS3 dropping SymDict, restores it. Neither
+has been reported upstream.
+
 ## Version pins this forces
 
 `Rasters = "0.15"` is exact rather than a range. Rasters 0.12 through 0.14 cap

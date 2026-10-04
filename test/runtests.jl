@@ -43,4 +43,5 @@ include("fixtures.jl")
     include("rasters.jl")
     include("yaxarrays.jl")
     include("s3.jl")
+    include("aqua.jl")
 end

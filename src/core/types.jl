@@ -21,6 +21,31 @@ manifest itself (`INLINE_CHUNK`).
 """
 @enum ChunkState VIRTUAL_CHUNK MISSING_CHUNK INLINE_CHUNK
 
+"""
+    VIRTUAL_CHUNK
+
+A [`ChunkState`](@ref): the chunk's bytes live in an external file, at the URI,
+offset and length [`chunklocation`](@ref) reports.
+"""
+VIRTUAL_CHUNK
+
+"""
+    MISSING_CHUNK
+
+A [`ChunkState`](@ref): the source file holds no bytes for this chunk, so it
+reads as the array's fill value. Neither [`chunklocation`](@ref) nor
+[`inlinebytes`](@ref) applies.
+"""
+MISSING_CHUNK
+
+"""
+    INLINE_CHUNK
+
+A [`ChunkState`](@ref): the chunk's bytes are carried in the manifest itself
+and [`inlinebytes`](@ref) returns them, so no file is read.
+"""
+INLINE_CHUNK
+
 # Sentinel values in a manifest's index column. Missing is zero so that a
 # zero-initialized index array is already a valid, wholly-missing manifest.
 const MISSING_INDEX = UInt32(0)

@@ -61,7 +61,26 @@ function _chunkstate(idx::UInt32)
     return VIRTUAL_CHUNK
 end
 
+"""
+    pathtable(m::AbstractChunkMap) -> PathTable
+    pathtable(g::ChunkManifest) -> PathTable
+
+The [`PathTable`](@ref) whose rows `m`'s chunk indices name.
+
+Every array of a [`ChunkManifest`](@ref) shares one table by reference, so the
+table returned here is the manifest's own, not a copy: editing it through
+[`seturi!`](@ref) or [`replace_prefix!`](@ref) repoints every array at once.
+"""
 pathtable(m::AbstractChunkMap) = m.table
+
+"""
+    manifestversion(m::AbstractChunkMap) -> Int
+
+The native serialization format version `m` is written as, `$(MANIFEST_FORMAT_VERSION)`.
+
+`ChunkManifests.load` refuses a file carrying any other version rather than
+guessing how to read it.
+"""
 manifestversion(::AbstractChunkMap) = MANIFEST_FORMAT_VERSION
 
 # Table index 0 (MISSING_INDEX) and typemax(UInt32) (INLINE_INDEX) mark a
@@ -93,12 +112,49 @@ function _retable(m::AffineChunkMap, table::PathTable, remap::Vector{UInt32})
     )
 end
 
+"""
+    chunkgridaxes(m::AbstractChunkMap) -> Tuple
+
+Axes of `m`'s chunk grid, one per dimension. Index `m` over
+`CartesianIndices(chunkgridaxes(m))` to visit every chunk.
+
+These are the axes of the *grid*, not of the array: entry `(2, 1)` is the
+second chunk along the first dimension, whatever its element extent.
+"""
 chunkgridaxes(m::ExplicitChunkMap) = axes(m.index)
+
+"""
+    chunkgridsize(m::AbstractChunkMap) -> NTuple{N,Int}
+
+Number of chunks along each dimension of `m`.
+"""
 chunkgridsize(m::ExplicitChunkMap) = size(m.index)
 
+"""
+    chunkstate(m::AbstractChunkMap, I::CartesianIndex) -> ChunkState
+    chunkstate(m::AbstractChunkMap, I::Integer...) -> ChunkState
+
+Whether chunk `I` of `m` is a [`VIRTUAL_CHUNK`](@ref), a
+[`MISSING_CHUNK`](@ref) or an [`INLINE_CHUNK`](@ref).
+
+Call this before [`chunklocation`](@ref) or [`inlinebytes`](@ref), each of
+which applies to one state only and throws on the others.
+"""
 chunkstate(m::ExplicitChunkMap{N}, I::CartesianIndex{N}) where {N} = _chunkstate(m.index[I])
 chunkstate(m::ExplicitChunkMap{N}, I::Vararg{Integer,N}) where {N} = chunkstate(m, CartesianIndex(I))
 
+"""
+    chunklocation(m::AbstractChunkMap, I::CartesianIndex) -> (uri, offset, nbytes)
+    chunklocation(m::AbstractChunkMap, I::Integer...) -> (uri, offset, nbytes)
+
+Where chunk `I`'s still-encoded bytes live: the URI of the file holding them,
+the byte offset of their first byte, and how many bytes they occupy.
+
+Defined only for a [`VIRTUAL_CHUNK`](@ref); throws on the other two states, so
+check [`chunkstate`](@ref) first. The byte range is the chunk exactly as the
+source file stores it — compressed and filtered — which is what makes serving
+it a copy rather than a decode.
+"""
 function chunklocation(m::ExplicitChunkMap{N}, I::CartesianIndex{N}) where {N}
     state = chunkstate(m, I)
     state == VIRTUAL_CHUNK || throw(ArgumentError(
@@ -112,6 +168,17 @@ function chunklocation(m::ExplicitChunkMap{N}, I::Vararg{Integer,N}) where {N}
     return chunklocation(m, CartesianIndex(I))
 end
 
+"""
+    inlinebytes(m::AbstractChunkMap, I::CartesianIndex) -> Vector{UInt8}
+    inlinebytes(m::AbstractChunkMap, I::Integer...) -> Vector{UInt8}
+
+Chunk `I`'s bytes, carried in the manifest rather than in a source file.
+
+Defined only for an [`INLINE_CHUNK`](@ref); throws on the other two states, so
+check [`chunkstate`](@ref) first. An [`AffineChunkMap`](@ref) has no inline
+chunks at all, its closed form describing a regular grid of byte ranges in one
+file.
+"""
 function inlinebytes(m::ExplicitChunkMap{N}, I::CartesianIndex{N}) where {N}
     state = chunkstate(m, I)
     state == INLINE_CHUNK || throw(ArgumentError(
