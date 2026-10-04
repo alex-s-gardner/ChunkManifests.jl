@@ -29,5 +29,6 @@ using Test
     # and its own extensions into the session, so nothing that checks what is
     # reachable without them may run after this point.
     include("rasters.jl")
+    include("yaxarrays.jl")
     include("s3.jl")
 end

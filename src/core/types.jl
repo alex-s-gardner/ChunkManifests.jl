@@ -199,6 +199,13 @@ Reductions and broadcast walk a Zarr array one chunk at a time through
 with a run of byte-adjacent chunks on each miss restores it for those access
 patterns. `maxbytes = 0` disables readahead; `chunks` bounds how far ahead a
 single miss reads.
+
+This sits below the chunk boundary and knows where each chunk's bytes live, so
+it is what collapses a first pass over byte-adjacent chunks into one request.
+`DiskArrays.cache` is the complement rather than a substitute: it holds decoded
+chunks above the chunk boundary with no knowledge of their layout, so it spares
+a repeat read but not the first one. The two compose, and wrapping a Zarr array
+from this store in `DiskArrays.cache` keeps both effects.
 """
 struct ReadaheadCache
     entries::Dict{Tuple{String,UInt64},Vector{UInt8}}

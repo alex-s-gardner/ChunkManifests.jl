@@ -284,4 +284,70 @@ end
         end
     end
 
+    @testset "composes with DiskArrays.cache rather than duplicating it" begin
+        # The two caches solve different halves of the problem and the numbers
+        # here are what says so. This cache sits under the chunk boundary and
+        # knows where each chunk's bytes live, so it can turn a first pass over
+        # byte-adjacent chunks into one request. DiskArrays.cache sits above the
+        # chunk boundary, holding decoded chunks with no idea where they came
+        # from, so it can only spare a *repeat* read. Neither subsumes the
+        # other, and wrapping one in the other keeps both effects.
+        mktempdir() do dir
+            nchunks = 12
+            va, _, vals = _contig_va(dir, nchunks)
+
+            function counts(; readahead, wrapcache)
+                counting = ReadaheadCountingTransport()
+                store = ChunkManifest(;
+                    arrays=Dict{String,ManifestArray}("" => va),
+                    transport=counting, readahead,
+                )
+                za = Zarr.zopen(store)
+                arr = wrapcache ? Zarr.DiskArrays.cache(za) : za
+                counting.count[] = 0
+                @test sum(arr) == sum(vals)
+                first = counting.count[]
+                counting.count[] = 0
+                @test sum(arr) == sum(vals)
+                repeat = counting.count[]
+                counting.count[] = 0
+                @test arr[3:4] == vals[3:4]
+                window = counting.count[]
+                return (; first, repeat, window, chunks=size(Zarr.DiskArrays.eachchunk(arr)))
+            end
+
+            off = counts(; readahead=ReadaheadCache(; maxbytes=0), wrapcache=false)
+            ra = counts(; readahead=ReadaheadCache(), wrapcache=false)
+            dac = counts(; readahead=ReadaheadCache(; maxbytes=0), wrapcache=true)
+            both = counts(; readahead=ReadaheadCache(), wrapcache=true)
+
+            # Neither cache: one request per chunk, every time.
+            @test off.first == nchunks
+            @test off.repeat == nchunks
+
+            # Byte-range coalescing collapses the first pass, which is the one
+            # thing DiskArrays.cache cannot do: it has no way to know these
+            # chunks are adjacent in one file.
+            @test ra.first == 1
+            @test dac.first == nchunks
+
+            # Both spare the repeat, so that alone is no reason to keep this one.
+            @test ra.repeat == 0
+            @test dac.repeat == 0
+
+            # Wrapping does not interfere: the first pass is still coalesced.
+            @test both.first == 1
+            @test both.repeat == 0
+
+            # The chunk grid survives the wrapper, so DiskArrays' own batching
+            # keeps asking for chunk-aligned blocks either way.
+            @test off.chunks == ra.chunks == dac.chunks == both.chunks == (nchunks,)
+            @test Zarr.DiskArrays.haschunks(
+                Zarr.DiskArrays.cache(Zarr.zopen(ChunkManifest(;
+                    arrays=Dict{String,ManifestArray}("" => va),
+                )))
+            ) isa Zarr.DiskArrays.Chunked
+        end
+    end
+
 end

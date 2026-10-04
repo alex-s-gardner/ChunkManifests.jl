@@ -26,7 +26,7 @@ store, so anything that consumes one works:
 ```julia
 using ZarrDatasets, YAXArrays
 ZarrDatasets.ZarrDataset(cm)           # CommonDataModel
-YAXArrays.open_dataset(Zarr.zopen(cm))
+YAXArrays.open_dataset(Zarr.zopen(cm)) # the zopen step is required
 ```
 
 ## Rasters

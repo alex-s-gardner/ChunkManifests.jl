@@ -9,6 +9,11 @@ const _RA_DA = Zarr.DiskArrays
 const _RA_ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/antarctic_grounded_ice.nc"
 const _RA_ATL06_PATH = "/Users/gardnera/Documents/GitHub/H5ToTable.jl/data/ATL06_20220404104324_01881512_006_02.h5"
 
+# Counts chunk requests, not I/O operations. Overriding fetchranges with a
+# plain loop bypasses the coalescing default on purpose: the question these
+# tests ask is how many chunks a read selects, and coalescing would merge
+# byte-adjacent ones and hide that. test/readahead.jl leaves fetchranges alone
+# where the number of real requests is what matters instead.
 struct _RA_CountingTransport <: AbstractTransport
     inner::LocalTransport
     count::Threads.Atomic{Int}
