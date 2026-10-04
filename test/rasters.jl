@@ -7,6 +7,7 @@ const _RA_CDM = ZarrDatasets.CDM
 const _RA_DA = Zarr.DiskArrays
 
 const _RA_ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/antarctic_grounded_ice.nc"
+const _RA_ATL06_PATH = "/Users/gardnera/Documents/GitHub/H5ToTable.jl/data/ATL06_20220404104324_01881512_006_02.h5"
 
 struct _RA_CountingTransport <: AbstractTransport
     inner::LocalTransport
@@ -264,8 +265,106 @@ _ra_decode(hv) = Union{Missing,Float64}[
                 permutedims(f["grounded"][1:10, 1:10], (2, 1))
             end
             @test window == expected
+
+            # A window straddling the first and second chunk along x, away from
+            # the origin, so an index-order or chunk-offset error cannot hide in
+            # a corner read.
+            cx = chunkshapeof(va)[1]
+            counting.count[] = 0
+            spanning = r[(cx - 3):(cx + 4), 100:104]
+            @test counting.count[] == 2
+            spanning_expected = h5open(_RA_ITSLIVE_PATH, "r") do f
+                permutedims(f["grounded"][100:104, (cx - 3):(cx + 4)], (2, 1))
+            end
+            @test spanning == spanning_expected
+        end
+
+        @testset "real NetCDF4 file: coordinates become real lookups" begin
+            # The coordinate variables are scanned beside the data variable
+            # rather than with it: a whole-root scan of this file still aborts
+            # on its fixed-length-string `mapping` variable.
+            arrays = Dict{String,ManifestArray}()
+            for k in ("grounded", "x", "y")
+                merge!(arrays, arraysof(scan(HDF5Driver(), _RA_ITSLIVE_PATH; group="/$k")))
+            end
+            cm = ChunkManifest(; arrays)
+            r = Rasters.Raster(cm, "grounded")
+
+            xv, yv = h5open(_RA_ITSLIVE_PATH, "r") do f
+                read(f["x"]), read(f["y"])
+            end
+
+            xd = Rasters.dims(r, Rasters.X)
+            yd = Rasters.dims(r, Rasters.Y)
+            # Lengths differ, so an x/y swap cannot pass this.
+            @test length(xd) == length(xv) == 22896
+            @test length(yd) == length(yv) == 18392
+            @test collect(Rasters.lookup(xd)) == xv
+            @test collect(Rasters.lookup(yd)) == yv
+
+            # The y axis of this grid descends. Rasters must report that rather
+            # than assume an ascending axis, or every extent and selector along
+            # y is inverted.
+            @test Rasters.order(Rasters.lookup(xd)) isa Rasters.ForwardOrdered
+            @test Rasters.order(Rasters.lookup(yd)) isa Rasters.ReverseOrdered
+            @test Rasters.span(Rasters.lookup(xd)) == Rasters.Regular(240.0)
+            @test Rasters.span(Rasters.lookup(yd)) == Rasters.Regular(-240.0)
+
+            # The CRS this file carries lives in the attributes of `mapping`,
+            # which cannot be scanned yet, so the lookups are Mapped with no
+            # projection attached. Supplying one explicitly shows that the crs
+            # keyword reaches Rasters: what is missing is the file's CRS, not
+            # the plumbing for it.
+            @test Rasters.crs(r) === nothing
+            projected = Rasters.Raster(cm, "grounded"; crs=Rasters.EPSG(3031))
+            @test Rasters.crs(projected) == Rasters.EPSG(3031)
+            @test collect(Rasters.lookup(Rasters.dims(projected, Rasters.X))) == xv
         end
     else
         @warn "ItsLiveMasks fixture not found; skipping real-file Rasters tests" _RA_ITSLIVE_PATH
+    end
+
+    if isfile(_RA_ATL06_PATH)
+        @testset "real HDF5 granule: values match HDF5.jl through the CF layer" begin
+            counting = _RA_CountingTransport()
+            cm = ChunkManifest(
+                scan(HDF5Driver(), _RA_ATL06_PATH; group="/gt1l/land_ice_segments/h_li");
+                transport=counting, readahead=ReadaheadCache(; maxbytes=0),
+            )
+            va = arraysof(cm)["h_li"]
+            fill = fillvalueof(va)
+            total = prod(chunkgridsize(chunkmapof(va)))
+
+            r = Rasters.Raster(cm, "h_li")
+            @test size(r) == shapeof(va)
+            @test eltype(r) == Union{Missing,Float32}
+            @test map(Rasters.name, Rasters.dims(r)) == (:delta_time,)
+
+            stored = h5open(_RA_ATL06_PATH, "r") do f
+                read(f["gt1l/land_ice_segments/h_li"])
+            end
+            expected = [v == fill ? missing : v for v in stored]
+            @test count(ismissing, expected) > 0
+
+            counting.count[] = 0
+            @test isequal(collect(r), expected)
+            @test counting.count[] == total
+            # The mask Rasters derives has to agree with where the file's own
+            # fill value sits.
+            @test Rasters.boolmask(r) == .!ismissing.(expected)
+
+            # raw=true must hand back the stored fill value untouched, which is
+            # what shows the masking is the CF layer's and not the store's.
+            rawr = Rasters.Raster(cm, "h_li"; raw=true, verbose=false)
+            @test eltype(rawr) == Float32
+            @test collect(rawr) == stored
+
+            counting.count[] = 0
+            @test isequal(r[1:100], expected[1:100])
+            @test counting.count[] == 1
+            @test counting.count[] < total
+        end
+    else
+        @warn "ATL06 fixture not found; skipping real-granule Rasters tests" _RA_ATL06_PATH
     end
 end
