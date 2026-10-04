@@ -30,14 +30,17 @@ end
 # A named top-level array ("data"), not the "" key test/store.jl uses: a
 # ChunkManifest with an array at "" makes Zarr.zopen return that array
 # directly, whereas ZarrDatasets.ZarrDataset needs an actual ZGroup to walk.
-function _it_named_group(; shape, chunkshape, dimnames, fillvalue=nothing, attrs=Dict{String,Any}())
+function _it_named_group(
+    ::Type{T}=Float64;
+    shape, chunkshape, dimnames, fillvalue=nothing, attrs=Dict{String,Any}(), data=nothing,
+) where {T}
     gridsize = cld.(shape, chunkshape)
-    data = reshape(collect(Float64, 1:prod(shape)), shape)
+    data = data === nothing ? reshape(collect(T, 1:prod(shape)), shape) : data
     compressor = Dict{String,Any}("id" => "zlib", "level" => 3)
 
     dir = mktempdir()
     za = Zarr.zcreate(
-        Float64, Zarr.DirectoryStore(dir), shape...;
+        T, Zarr.DirectoryStore(dir), shape...;
         chunks=chunkshape, compressor=Zarr.ZlibCompressor(3), fill_value=fillvalue,
     )
     za[CartesianIndices(shape)] = data
@@ -52,7 +55,7 @@ function _it_named_group(; shape, chunkshape, dimnames, fillvalue=nothing, attrs
         nbytes[I] = filesize(fname)
     end
     manifest = ExplicitChunkMap(table, index, offset, nbytes)
-    va = ManifestArray{Float64}(
+    va = ManifestArray{T}(
         manifest, shape, chunkshape; fillvalue, compressor, dimnames, attrs
     )
     group = ChunkManifest(;
@@ -127,6 +130,83 @@ end
         corner = za[1:3, 1:4, 1:5] # exactly the first chunk
         @test corner == data[1:3, 1:4, 1:5]
         # A read confined to one chunk must not touch the other 26.
+        @test counting.count[] == 1
+    end
+
+    @testset "CF decoding through ZarrDatasets is lazy and chunk-aware" begin
+        # Pins the premise the Rasters integration rests on: a CF-decoding
+        # variable obtained from a ZarrDataset over this store is a lazy
+        # DiskArray that still knows the source chunk grid, so a Raster built
+        # directly on it reads only the chunks a window needs. If ZarrDatasets
+        # stops defining eachchunk/haschunks for CFVariable, or CF decoding
+        # becomes eager, this fails rather than silently degrading to
+        # whole-array reads.
+        shape = (6, 10)
+        chunkshape = (3, 5)
+        gridsize = cld.(shape, chunkshape)
+        fillvalue = Int16(-9999)
+        stored = reshape(Int16.(1:prod(shape)), shape)
+        stored[1, 1] = fillvalue
+
+        # scale_factor and add_offset give CF decoding something to do, and an
+        # Int16 store with a Float64 result makes an eager decode obvious.
+        group, _ = _it_named_group(
+            Int16;
+            shape, chunkshape, dimnames=["x", "y"], fillvalue, data=stored,
+            attrs=Dict{String,Any}(
+                "scale_factor" => 0.5, "add_offset" => 100.0, "units" => "m"
+            ),
+        )
+        counting = _IT_CountingTransport()
+        # Readahead would prefetch byte-adjacent chunks and inflate the counts
+        # below, which measure how many chunks a window actually requires.
+        mstore = ChunkManifest(
+            group; transport=counting, readahead=ReadaheadCache(; maxbytes=0)
+        )
+
+        ds = ZarrDatasets.ZarrDataset(mstore)
+        rawvar = _IT_CDM.variable(ds, "data")
+        cfvar = ds["data"]
+        # Construction reads metadata only.
+        @test counting.count[] == 0
+
+        @test _IT_CDM.AbstractVariable <: _IT_DiskArrays.AbstractDiskArray
+        @test rawvar isa _IT_DiskArrays.AbstractDiskArray
+        @test cfvar isa _IT_CDM.CFVariable
+        @test cfvar isa _IT_DiskArrays.AbstractDiskArray
+        @test eltype(rawvar) == Int16
+        @test eltype(cfvar) == Union{Missing,Float64}
+
+        # The chunk grid survives both the ZarrVariable and the CF wrapper.
+        za = Zarr.zopen(mstore).arrays["data"]
+        @test _IT_DiskArrays.eachchunk(rawvar) == _IT_DiskArrays.eachchunk(za)
+        @test _IT_DiskArrays.eachchunk(cfvar) == _IT_DiskArrays.eachchunk(za)
+        @test size(_IT_DiskArrays.eachchunk(cfvar)) == gridsize
+        @test _IT_DiskArrays.haschunks(cfvar) == _IT_DiskArrays.haschunks(za)
+        @test counting.count[] == 0
+
+        decoded = Union{Missing,Float64}[
+            stored[I] == fillvalue ? missing : stored[I] * 0.5 + 100.0
+            for I in CartesianIndices(shape)
+        ]
+
+        # One chunk in, one chunk out — the decode does not force the rest.
+        counting.count[] = 0
+        @test isequal(cfvar[1:3, 1:5], decoded[1:3, 1:5])
+        @test counting.count[] == 1
+
+        counting.count[] = 0
+        @test isequal(cfvar[1:6, 1:5], decoded[1:6, 1:5])
+        @test counting.count[] == 2
+
+        counting.count[] = 0
+        @test isequal(cfvar[:, :], decoded)
+        @test counting.count[] == prod(gridsize)
+
+        # The raw variable returns the stored values, undecoded, so the
+        # decoding above is the CF layer's and not something the store did.
+        counting.count[] = 0
+        @test rawvar[1:3, 1:5] == stored[1:3, 1:5]
         @test counting.count[] == 1
     end
 
