@@ -211,6 +211,29 @@ _isfixedstring(::Type{<:AbstractString}) = true
 
 _hasfillvalue(T::Type) = !_isfixedstring(T)
 
+# Zarr v2 encodes byte order in the dtype string, but Zarr.jl parses the marker
+# and then ignores it: a ">f4" array decodes big-endian bytes as little-endian
+# and returns wrong numbers with no error. This store passes a source file's
+# bytes through untouched and cannot swap them, so a big-endian dataset has no
+# faithful representation here and is refused rather than mis-decoded in
+# silence. Single-byte elements and strings have no byte order to get wrong.
+function _checkbyteorder(dset, ::Type{T}, context::AbstractString) where {T}
+    (_isfixedstring(T) || sizeof(T) <= 1) && return nothing
+    dt = HDF5.datatype(dset)
+    order = try
+        HDF5.API.h5t_get_order(dt)
+    finally
+        close(dt)
+    end
+    order == HDF5.API.H5T_ORDER_BE && throw(ArgumentError(
+        "$context: dataset is stored big-endian, which cannot be served faithfully. " *
+        "Zarr.jl accepts a \">\" dtype but does not byte-swap on read, so the bytes " *
+        "would decode to wrong values rather than fail. Rewrite the source as " *
+        "little-endian, or scan a little-endian copy",
+    ))
+    return nothing
+end
+
 function _checkdtype(::Type{T}, context::AbstractString) where {T}
     try
         zarr_dtype_string(T)
@@ -319,6 +342,7 @@ function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractStri
     context = "$filepath: dataset \"$dsetpath\""
     T = eltype(dset)
     _checkdtype(T, context)
+    _checkbyteorder(dset, T, context)
 
     kind = _layoutkind(dset)
     kind == :other && throw(ArgumentError(

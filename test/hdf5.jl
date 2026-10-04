@@ -574,4 +574,93 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             ))) == ["grounded"]
         end
     end
+
+    # Cases adopted from the Python implementations' suites, where each one
+    # caught something: byte order and unlimited dimensions from VirtualiZarr's
+    # HDF parser tests, group spelling from its regression for GH #364.
+    @testset "byte order" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "endian.h5")
+        vals = Float32[1.5, -2.25, 3.125, 1.0f6]
+
+        h5open(fn, "w") do f
+            for (nm, tid) in ("be" => HDF5.API.H5T_IEEE_F32BE, "le" => HDF5.API.H5T_IEEE_F32LE)
+                dt = HDF5.Datatype(HDF5.API.h5t_copy(tid))
+                d = create_dataset(f, nm, dt, dataspace(vals); chunk=(2,))
+                # Written through the native memory type so libhdf5 converts
+                # into the file's declared order, rather than dropping native
+                # bytes under a label that contradicts them.
+                HDF5.write_dataset(d, datatype(Float32), vals)
+            end
+            d8 = create_dataset(f, "i8", datatype(Int8), dataspace((2,)); chunk=(2,))
+            HDF5.write_dataset(d8, datatype(Int8), Int8[1, 2])
+        end
+
+        # The file really does hold big-endian bytes, and HDF5.jl reads them
+        # correctly by swapping. This store cannot swap.
+        h5open(fn, "r") do f
+            @test read(f["be"]) == vals
+            @test HDF5.API.h5t_get_order(HDF5.datatype(f["be"])) == HDF5.API.H5T_ORDER_BE
+        end
+
+        err = try
+            scan(HDF5Driver(), fn; group="/be")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("stored big-endian", err.msg)
+        @test occursin("does not byte-swap", err.msg)
+
+        # Little-endian is unaffected, and a single-byte element type has no
+        # byte order to get wrong.
+        @test Zarr.zopen(scan(HDF5Driver(), fn; group="/le"))["le"][:] == vals
+        @test Zarr.zopen(scan(HDF5Driver(), fn; group="/i8"))["i8"][:] == Int8[1, 2]
+    end
+
+    @testset "group argument spellings" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "groups.h5")
+        h5open(fn, "w") do f
+            g = create_group(f, "subgroup")
+            d = create_dataset(g, "v", datatype(Int32), dataspace((3,)); chunk=(3,))
+            HDF5.write_dataset(d, datatype(Int32), Int32[1, 2, 3])
+            d2 = create_dataset(f, "root", datatype(Int32), dataspace((2,)); chunk=(2,))
+            HDF5.write_dataset(d2, datatype(Int32), Int32[9, 8])
+        end
+
+        @test sort(collect(keys(arraysof(scan(HDF5Driver(), fn))))) == ["root", "subgroup/v"]
+        # A leading or trailing separator must not change which variable is
+        # found, nor leave it keyed differently.
+        for grp in ("subgroup", "/subgroup", "subgroup/", "/subgroup/")
+            g = scan(HDF5Driver(), fn; group=grp)
+            @test collect(keys(arraysof(g))) == ["v"]
+            @test Zarr.zopen(g)["v"][:] == Int32[1, 2, 3]
+        end
+    end
+
+    @testset "unlimited dimension: a chunk may extend past the shape" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "unlimited.h5")
+        h5open(fn, "w") do f
+            # An unlimited dimension with a chunk longer than the data written,
+            # so the grid's only chunk runs past the declared extent.
+            d = create_dataset(
+                f, "u", datatype(Int32), dataspace((3,), max_dims=(-1,)); chunk=(4,)
+            )
+            HDF5.write_dataset(d, datatype(Int32), Int32[1, 2, 3])
+        end
+
+        g = scan(HDF5Driver(), fn; group="/u")
+        va = arraysof(g)["u"]
+        @test shapeof(va) == (3,)
+        @test chunkshapeof(va) == (4,)
+        @test chunkgridsize(chunkmapof(va)) == (1,)
+        # The trailing partial chunk must not be trimmed or mis-sized: the
+        # values have to match what HDF5.jl reads.
+        @test Zarr.zopen(g)["u"][:] == h5open(fn, "r") do f
+            read(f["u"])
+        end
+    end
 end

@@ -18,6 +18,19 @@ The runtime `zarr_decodes_byte_filters()` probe stays either way: a patched
 branch is version-indistinguishable from an unpatched one, so a version bound
 cannot gate the behavior and a probe is the only correct test.
 
+## Zarr.jl — byte order in a dtype string is ignored
+
+`Zarr.typestr(">f4")` returns `Float32`, and reading such an array does not
+byte-swap: big-endian bytes decode as little-endian and the values come back
+wrong with no error. Verified against an in-memory `DictStore`, so it is not
+specific to this store.
+
+Byte order is the dtype's job in Zarr v2 and there is no byte-swap codec to do
+it in a filter instead, so until Zarr.jl honors the marker a big-endian source
+cannot be served faithfully. `HDF5Driver` therefore refuses one rather than
+mis-decoding it, which costs the ability to scan big-endian archival files.
+This has not been reported upstream.
+
 ## Rasters.jl #936 — CF CRS, open and blocked
 
 [rafaqz/Rasters.jl#936](https://github.com/rafaqz/Rasters.jl/pull/936), "load
