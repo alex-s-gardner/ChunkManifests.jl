@@ -1,3 +1,4 @@
+import HDF5
 import JSON
 import Zarr
 
@@ -139,6 +140,72 @@ import Zarr
         za = Zarr.zopen(store)
         @test size(za) == shape
         @test za[:, :] == data
+    end
+
+    @testset "fixed-length byte string dtypes" begin
+        # `|S<n>` is the numpy and Zarr v2 spelling, and what zarr-python
+        # writes. Zarr.jl parses `|S<n>` and `<S<n>` identically, so the
+        # emitted form is the spec one.
+        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{1,0}) == "|S1"
+        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{5,0}) == "|S5"
+        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{10,1}) == "|S10"
+
+        # The types a saved manifest reads back as have to emit the same
+        # string, or a load-then-save cycle would change the dtype.
+        # Zarr.typestr is no inverse here: it encodes ASCIIChar as "<V1",
+        # opaque bytes, which would lose the string type entirely.
+        @test Zarr.typestr("|S1") === Zarr.ASCIIChar
+        @test Zarr.typestr("|S5") === Zarr.MaxLengthString{5,UInt8}
+        @test Zarr.typestr(Zarr.ASCIIChar) == "<V1"
+        @test ChunkManifests.zarr_dtype_string(Zarr.ASCIIChar) == "|S1"
+        @test ChunkManifests.zarr_dtype_string(Zarr.MaxLengthString{5,UInt8}) == "|S5"
+
+        # Variable-length strings and compound types stay refused.
+        @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
+        @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(
+            NamedTuple{(:a,),Tuple{UInt8}}
+        )
+    end
+
+    @testset "a zero-dimensional array emits [] shape and chunks, not {}" begin
+        table = PathTable()
+        push_uri!(table, "unused.bin")
+        m = ExplicitChunkMap(
+            table, fill(ChunkManifests.INLINE_INDEX, ()), zeros(UInt64, ()),
+            fill(UInt64(1), ());
+            inline=Dict(CartesianIndex() => UInt8[0x41]),
+        )
+        va = ManifestArray{HDF5.FixedString{1,0}}(m, (), (); dimnames=String[])
+        doc = JSON.parse(String(ChunkManifests.zarray_json(va)))
+        # JSON writes an untyped empty vector as an object, so these have to be
+        # collected concretely for a reader that checks the spec.
+        @test doc["shape"] == Any[]
+        @test doc["chunks"] == Any[]
+        @test doc["dtype"] == "|S1"
+
+        # The inline byte survives the whole round trip, which is what says
+        # `|S1` decoding as ASCIIChar is byte-compatible rather than merely
+        # parseable.
+        store = ChunkManifest(; arrays=Dict{String,ManifestArray}("s" => va))
+        z = Zarr.zopen(store)["s"]
+        @test eltype(z) === Zarr.ASCIIChar
+        @test UInt8(z[]) == 0x41
+    end
+
+    @testset "a multi-byte fixed string round trips its bytes" begin
+        table = PathTable()
+        push_uri!(table, "unused.bin")
+        bytes = Vector{UInt8}("abcde")
+        m = ExplicitChunkMap(
+            table, fill(ChunkManifests.INLINE_INDEX, (1,)), zeros(UInt64, (1,)),
+            fill(UInt64(5), (1,));
+            inline=Dict(CartesianIndex(1) => bytes),
+        )
+        va = ManifestArray{HDF5.FixedString{5,0}}(m, (1,), (1,); dimnames=["s"])
+        store = ChunkManifest(; arrays=Dict{String,ManifestArray}("s" => va))
+        z = Zarr.zopen(store)["s"]
+        @test eltype(z) === Zarr.MaxLengthString{5,UInt8}
+        @test String(z[1]) == "abcde"
     end
 
 end

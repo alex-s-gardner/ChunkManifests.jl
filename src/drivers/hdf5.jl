@@ -97,6 +97,16 @@ function _layoutkind(dset)
     return :other
 end
 
+# Fixed-length byte strings, the dtype a CF grid-mapping variable carries, need
+# handling apart from numeric dtypes in two places: libhdf5 refuses to report a
+# fill value for one, and Zarr.jl accepts no fill value for one either, so a
+# missing chunk of that type cannot be materialized at all.
+_isfixedstring(::Type) = false
+_isfixedstring(::Type{<:HDF5.FixedString}) = true
+_isfixedstring(::Type{<:AbstractString}) = true
+
+_hasfillvalue(T::Type) = !_isfixedstring(T)
+
 function _checkdtype(::Type{T}, context::AbstractString) where {T}
     try
         zarr_dtype_string(T)
@@ -162,11 +172,36 @@ end
 # so it is exactly the regular layout AffineChunkMap exists for: a single
 # grid cell whose byte range is the dataset's own file offset and storage
 # size.
-function _scancontiguous(table, dset, shape, context::AbstractString)
+# A dataset with no allocated storage has no bytes to point at. HDF5 reads one
+# as its fill value, which is exactly what a wholly-missing chunk map means, so
+# it is recorded as one MISSING_INDEX cell rather than refused. A CF
+# grid-mapping variable is the case that matters: it carries every projection
+# parameter in its attributes and its payload is routinely empty.
+function _scanunallocated(table, shape, ::Type{T}) where {T}
+    gridsize = ntuple(_ -> 1, length(shape))
+    offset = zeros(UInt64, gridsize)
+    manifest = if _isfixedstring(T)
+        # The NUL bytes HDF5 itself reads for a never-written fixed-length
+        # string, embedded rather than referenced: Zarr.jl accepts no fill
+        # value for this dtype, so a missing chunk would read as an error
+        # instead of as an empty string. The CF grid-mapping variables this
+        # reaches carry a byte or two.
+        nb = prod(shape) * sizeof(T)
+        ExplicitChunkMap(
+            table, fill(INLINE_INDEX, gridsize), offset, fill(UInt64(nb), gridsize);
+            inline=Dict(CartesianIndex(gridsize) => zeros(UInt8, nb)),
+        )
+    else
+        ExplicitChunkMap(
+            table, fill(MISSING_INDEX, gridsize), offset, zeros(UInt64, gridsize)
+        )
+    end
+    return manifest, shape, nothing, Dict{String,Any}[]
+end
+
+function _scancontiguous(table, dset, shape, ::Type{T}, context::AbstractString) where {T}
     base = HDF5.API.h5d_get_offset(dset)
-    base == typemax(UInt64) && throw(ArgumentError(
-        "$context: contiguous dataset has no allocated storage (never written)"
-    ))
+    base == typemax(UInt64) && return _scanunallocated(table, shape, T)
     chunkbytes = HDF5.API.h5d_get_storage_size(dset)
     N = length(shape)
     gridsize = ntuple(_ -> 1, N)
@@ -191,17 +226,27 @@ function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractStri
     N = length(shape)
     itemsize = sizeof(T)
 
-    plist = HDF5.get_create_properties(dset)
-    fillvalue = try
-        HDF5.get_fill_value(plist, T)
-    finally
-        close(plist)
+    # Fill values are not read for a string dtype. A CF grid-mapping variable
+    # has no meaningful one, and asking is not merely pointless: libhdf5
+    # rejects the request for this datatype, and for the MaxLengthString a
+    # saved manifest reads back as, HDF5.jl would build the variable-length
+    # H5T_VARIABLE datatype from its AbstractString supertype rather than the
+    # fixed-size one the file actually uses.
+    fillvalue = if _hasfillvalue(T)
+        plist = HDF5.get_create_properties(dset)
+        try
+            HDF5.get_fill_value(plist, T)
+        finally
+            close(plist)
+        end
+    else
+        nothing
     end
 
     manifest, chunkshape, compressor, filters = if kind == :chunked
         _scanchunked(table, fileindex, dset, T, itemsize, context)
     else
-        _scancontiguous(table, dset, shape, context)
+        _scancontiguous(table, dset, shape, T, context)
     end
 
     dimnames = something(_dimnames(f, dset, N), ["dim_$i" for i in 1:N])

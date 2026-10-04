@@ -212,8 +212,17 @@ end
 
     @testset "real NetCDF4 file: ZarrDataset values and dims match HDF5.jl" begin
         if isfile(_IT_ITSLIVE_PATH)
-            @testset "whole-root scan fails fast on the non-numeric grid_mapping variable" begin
-                @test_throws "no faithful Zarr v2 dtype" scan(HDF5Driver(), _IT_ITSLIVE_PATH)
+            @testset "a whole-root scan reaches every variable in the file" begin
+                # The grid-mapping variable is a fixed-length string, which has
+                # a Zarr v2 dtype, so the scan takes it along with the rest and
+                # the file's projection parameters are reachable through the
+                # store. ZarrDatasets lists it beside the data variables.
+                g = scan(HDF5Driver(), _IT_ITSLIVE_PATH)
+                @test sort(collect(keys(arraysof(g)))) == ["grounded", "mapping", "x", "y"]
+                ds = ZarrDatasets.ZarrDataset(g)
+                @test "mapping" in collect(_IT_CDM.varnames(ds))
+                @test _IT_CDM.attrib(ds["mapping"], "grid_mapping_name") ==
+                    "polar_stereographic"
             end
 
             for (name, dimnames_expected) in (("grounded", ("x", "y")),)

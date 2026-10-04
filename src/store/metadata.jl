@@ -10,11 +10,11 @@ const _V2_CHUNK_KEY_ENCODING = Zarr.ChunkKeyEncoding('.', false)
 
 Numpy-style Zarr v2 dtype string for element type `T`.
 
-Only `Bool`, fixed-width signed/unsigned integers, floating-point types, and
-complex-float types have an exact Zarr v2 encoding and are supported. Every
-other type throws: `Zarr.typestr`'s fallback for an unrecognized type encodes
-it as opaque raw bytes (`"<Vn"`), which would silently discard the type's
-actual layout rather than fail on it.
+Only `Bool`, fixed-width signed/unsigned integers, floating-point types,
+complex-float types and fixed-length byte strings have an exact Zarr v2
+encoding and are supported. Every other type throws: `Zarr.typestr`'s fallback
+for an unrecognized type encodes it as opaque raw bytes (`"<Vn"`), which would
+silently discard the type's actual layout rather than fail on it.
 """
 function zarr_dtype_string(::Type{T}) where {T}
     if T === Bool || T <: Union{Signed,Unsigned} || T <: AbstractFloat ||
@@ -23,10 +23,24 @@ function zarr_dtype_string(::Type{T}) where {T}
     end
     throw(ArgumentError(
         "no faithful Zarr v2 dtype for element type $T; supported types are " *
-        "Bool, fixed-width signed/unsigned integers, floating-point, and " *
-        "complex-float types",
+        "Bool, fixed-width signed/unsigned integers, floating-point, " *
+        "complex-float, and fixed-length byte string types",
     ))
 end
+
+# Fixed-length byte strings, which is the dtype a CF grid-mapping variable
+# carries. `|S<n>` is the numpy and Zarr v2 spelling for them and what
+# zarr-python writes; Zarr.jl parses `|S<n>` and `<S<n>` identically.
+#
+# These are not delegated to `Zarr.typestr`, which is not an inverse here:
+# `typestr("|S1")` gives `Zarr.ASCIIChar`, but `typestr(Zarr.ASCIIChar)` gives
+# `"<V1"` — opaque bytes, which would lose the string type when a saved
+# manifest is read back and written again. At n == 1 Zarr.jl decodes as
+# `ASCIIChar` rather than a string type; that is byte-compatible, one byte
+# either way, and is the right trade against emitting a spelling off-spec.
+zarr_dtype_string(::Type{HDF5.FixedString{N,PAD}}) where {N,PAD} = "|S$N"
+zarr_dtype_string(::Type{Zarr.MaxLengthString{N,UInt8}}) where {N} = "|S$N"
+zarr_dtype_string(::Type{Zarr.ASCIIChar}) = "|S1"
 
 """
     zarray_json(va::ManifestArray) -> Vector{UInt8}
@@ -44,8 +58,11 @@ function zarray_json(va::ManifestArray{T,N}) where {T,N}
     filters = filtersof(va)
     doc = Dict{String,Any}(
         "zarr_format" => 2,
-        "shape" => collect(reverse(shapeof(va))),
-        "chunks" => collect(reverse(chunkshapeof(va))),
+        # Collected as Int, not left to the tuple's own eltype: a
+        # zero-dimensional array's empty tuple collects to a Vector{Union{}},
+        # which JSON writes as `{}` rather than the `[]` the spec requires.
+        "shape" => collect(Int, reverse(shapeof(va))),
+        "chunks" => collect(Int, reverse(chunkshapeof(va))),
         "dtype" => zarr_dtype_string(T),
         "compressor" => compressorof(va),
         "fill_value" => fillvalueof(va),

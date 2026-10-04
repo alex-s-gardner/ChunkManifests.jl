@@ -406,4 +406,82 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             @test occursin("fixedscaleoffset", sprint(showerror, err))
         end
     end
+
+    @testset "fixed-length strings and unallocated storage" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "strings.h5")
+
+        # A real H5T_STRING of fixed size. HDF5.jl's `datatype(FixedString)`
+        # builds a compound type instead, which is not what a NetCDF4
+        # grid-mapping variable is, so the datatype is made directly.
+        function _fixedstr(n)
+            dt = HDF5.Datatype(HDF5.API.h5t_copy(HDF5.API.H5T_C_S1))
+            HDF5.API.h5t_set_size(dt, n)
+            return dt
+        end
+
+        h5open(fn, "w") do f
+            # Scalar, never written: the shape of a CF grid-mapping variable,
+            # carrying its parameters as attributes.
+            ds = create_dataset(f, "mapping", _fixedstr(1), dataspace(()))
+            HDF5.attributes(ds)["grid_mapping_name"] = "polar_stereographic"
+            HDF5.attributes(ds)["spatial_epsg"] = 3031
+
+            # A numeric dataset with no allocated storage, for contrast.
+            create_dataset(f, "empty", datatype(Int32), dataspace((4,)))
+        end
+
+        g = scan(HDF5Driver(), fn; group="/mapping")
+        va = arraysof(g)["mapping"]
+        @test eltype(va) == HDF5.FixedString{1,0}
+        @test shapeof(va) == ()
+        @test fillvalueof(va) === nothing
+        @test attrsof(va)["grid_mapping_name"] == "polar_stereographic"
+        # Zarr.jl accepts no fill value for this dtype, so the NUL byte HDF5
+        # itself reads is embedded rather than recorded as missing; otherwise
+        # the array would be unreadable.
+        @test chunkstate(chunkmapof(va), CartesianIndex()) == INLINE_CHUNK
+        @test inlinebytes(chunkmapof(va), CartesianIndex()) == UInt8[0x00]
+        @test UInt8(Zarr.zopen(g)["mapping"][]) == 0x00
+
+        # A numeric dataset that was never written has a fill value, so a
+        # wholly-missing map is the faithful record and reads as that value.
+        ge = scan(HDF5Driver(), fn; group="/empty")
+        vae = arraysof(ge)["empty"]
+        @test fillvalueof(vae) == 0
+        @test chunkstate(chunkmapof(vae), CartesianIndex(1)) == MISSING_CHUNK
+        @test Zarr.zopen(ge)["empty"][:] == zeros(Int32, 4)
+    end
+
+    if isfile(ITSLIVE_PATH)
+        @testset "NetCDF4 whole-root scan reaches the grid-mapping variable" begin
+            # This scan used to abort on `mapping`, whose fixed-length string
+            # dtype had no Zarr v2 encoding here, which put the file's CRS
+            # parameters out of reach.
+            g = scan(HDF5Driver(), ITSLIVE_PATH)
+            @test sort(collect(keys(arraysof(g)))) == ["grounded", "mapping", "x", "y"]
+
+            mapping = arraysof(g)["mapping"]
+            @test eltype(mapping) == HDF5.FixedString{1,0}
+            @test shapeof(mapping) == ()
+            attrs = attrsof(mapping)
+            @test attrs["grid_mapping_name"] == "polar_stereographic"
+            @test only(attrs["spatial_epsg"]) == 3031
+            @test haskey(attrs, "spatial_proj")
+            @test haskey(attrs, "standard_parallel")
+
+            # The data variable names it, which is the link a CF reader walks.
+            @test attrsof(arraysof(g)["grounded"])["grid_mapping"] == "mapping"
+
+            # Those attributes have to survive a save/load cycle, and the
+            # dtype has to re-emit identically after the element type comes
+            # back as the Zarr side's own string type.
+            out = ChunkManifests.save(joinpath(mktempdir(), "m"), g, ZarrManifest())
+            back = ChunkManifest(out)
+            mb = arraysof(back)["mapping"]
+            @test eltype(mb) === Zarr.ASCIIChar
+            @test ChunkManifests.zarr_dtype_string(eltype(mb)) == "|S1"
+            @test attrsof(mb) == attrs
+        end
+    end
 end

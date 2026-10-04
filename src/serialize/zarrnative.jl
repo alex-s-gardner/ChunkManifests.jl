@@ -136,6 +136,10 @@ end
 _cartesian_key(I::CartesianIndex) = join(Tuple(I), ",")
 
 function _cartesian_from_key(key::AbstractString, N::Integer)
+    # A zero-dimensional array has one chunk at CartesianIndex(), whose key is
+    # the empty string. `split` yields one empty component for that rather than
+    # none, so the count check would reject the only key such an array can have.
+    N == 0 && return CartesianIndex()
     parts = split(key, ',')
     length(parts) == N || throw(ArgumentError(
         "manifest.json: inline chunk key $(repr(key)) has $(length(parts)) components, expected $N"
