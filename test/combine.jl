@@ -126,6 +126,13 @@ end
             m1 = dummy_chunkmap((4, 6), (2, 3), "s1.bin")
             @test concat([m1]; dims=1) === m1
             @test_throws "no manifests given" concat(AbstractChunkMap[]; dims=1)
+
+            # An untyped empty collection names no element type, so it matches
+            # every concat signature at once and needs its own method to stay
+            # unambiguous.
+            @test_throws "no inputs given" concat(())
+            @test_throws "no inputs given" concat((); dims=1)
+            @test_throws "no inputs given" concat(Union{}[]; dims=1)
         end
     end
 

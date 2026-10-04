@@ -10,13 +10,34 @@ authors except where noted. States verified 2026-10-04.
 reading v2 arrays with a shuffle or fletcher32 filter", **merged 2026-10-03**.
 
 Reading an array whose last filter works on raw bytes (shuffle, fletcher32)
-with an element type wider than one byte needs this fix. Until a Zarr.jl
-release contains it, `[sources]` in `Project.toml` pins a branch carrying it,
-and that pin blocks registration.
+with an element type wider than one byte needs this fix. Until a release
+contains it, `[sources]` in `Project.toml` pins a branch carrying it, and that
+pin blocks registration.
+
+The fix landed in `ZarrCore/src/Compressors/Compressors.jl`, so it reaches a
+release through `ZarrCore` rather than through the `Zarr` package this one
+depends on — see the next entry. No released version carries it yet:
+`ZarrCore` 0.11.0 was published before the merge.
 
 The runtime `zarr_decodes_byte_filters()` probe stays either way: a patched
 branch is version-indistinguishable from an unpatched one, so a version bound
 cannot gate the behavior and a probe is the only correct test.
+
+## Zarr.jl — split into subpackages, umbrella not yet released
+
+Zarr.jl is now a monorepo. `ZarrCore`, `ZarrBlosc`, `ZarrGCS`, `ZarrHTTP`,
+`ZarrS3`, `ZarrZip`, `ZarrZlib` and `ZarrZstd` are each registered at 0.11.0,
+published between 2026-09-21 and 2026-09-28. The `Zarr` package is registered
+only up to **0.10.2**, and the repository carries no `v0.11.0` tag for it.
+
+`Zarr = "0.10"` in `Project.toml` therefore bounds the pre-split package, which
+is also what the `[sources]` branch forks. Clearing the #354 pin means taking a
+dependency on whichever package publishes the fix, not deleting four lines.
+
+What that costs is unmeasured. `ChunkManifest` subtypes `Zarr.AbstractStore`
+and adds methods to `Zarr.storefromstring`, `Zarr.store_read_strategy` and the
+undocumented `Zarr.read_items!`. Whether the split preserves those spellings,
+and which package exports them, has not been checked.
 
 ## Zarr.jl — byte order in a dtype string is ignored
 
@@ -119,6 +140,19 @@ flag receives an empty value and the driver is built OFF. `HDF5.has_ros3()` is
 therefore false on the binaries `HDF5_jll` ships, which is why `ROS3Access`
 requires pointing HDF5.jl at a system libhdf5 and why its tests skip by
 default.
+
+## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
+
+`Aqua.test_persistent_tasks` walks the test environment's manifest and calls
+`error("Unable to locate Project.toml in …")` on any entry that has none.
+`SymDict` 0.3.0 ships only a `REQUIRE` file, predating Pkg3, and reaches this
+package as a direct dependency of `AWSS3`. The check therefore throws rather
+than returning a result. Aqua 0.8.18 is the current release and behaves this
+way.
+
+`test/aqua.jl` turns that one check off for this reason. Either Aqua skipping a
+manifest entry it cannot read, or AWSS3 dropping SymDict, restores it. Neither
+has been reported upstream.
 
 ## Version pins this forces
 

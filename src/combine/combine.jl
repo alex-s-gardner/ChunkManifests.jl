@@ -49,6 +49,13 @@ function _materialize(m::AffineChunkMap{N}, remap::Vector{UInt32}) where {N}
     return index, offset, nbytes, Dict{CartesianIndex{N},Vector{UInt8}}()
 end
 
+# An empty collection carries no element type, so Tuple{} and
+# AbstractVector{Union{}} are subtypes of every concat signature at once. This
+# method is their common subtype: it resolves that ambiguity and reports the
+# empty input the way each typed method reports its own.
+concat(::Union{Tuple{},AbstractVector{Union{}}}; kwargs...) =
+    throw(ArgumentError("concat: no inputs given"))
+
 """
     concat(ms; dims::Integer) -> ExplicitChunkMap
 

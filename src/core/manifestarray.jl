@@ -72,13 +72,82 @@ function ManifestArray{T}(
     )
 end
 
+"""
+    chunkmapof(a::ManifestArray) -> AbstractChunkMap
+
+The chunk map locating `a`'s bytes — an [`ExplicitChunkMap`](@ref) with one
+entry per chunk, or an [`AffineChunkMap`](@ref) holding a closed form instead.
+"""
 chunkmapof(a::ManifestArray) = a.manifest
+
+"""
+    shapeof(a::ManifestArray) -> NTuple{N,Int}
+
+Extent of `a` in elements, per dimension. Same as `size(a)`.
+"""
 shapeof(a::ManifestArray) = a.shape
+
+"""
+    chunkshapeof(a::ManifestArray) -> NTuple{N,Int}
+
+Extent of one of `a`'s chunks in elements, per dimension.
+
+Every chunk has this shape except those at the high end of a dimension whose
+length is not a whole multiple of it, which Zarr reads as full chunks with the
+overhang ignored.
+"""
 chunkshapeof(a::ManifestArray) = a.chunkshape
+
+"""
+    fillvalueof(a::ManifestArray) -> Union{Nothing,T}
+
+Value a [`MISSING_CHUNK`](@ref) of `a` reads as, or `nothing` if the source
+declares none.
+"""
 fillvalueof(a::ManifestArray) = a.fillvalue
+
+"""
+    compressorof(a::ManifestArray) -> Union{Nothing,Dict{String,Any}}
+
+`a`'s compressor as a Zarr v2 codec configuration, or `nothing` when its
+chunks are stored uncompressed.
+
+Zarr.jl applies this on read; this package never does.
+"""
 compressorof(a::ManifestArray) = a.compressor
+
+"""
+    filtersof(a::ManifestArray) -> Vector{Dict{String,Any}}
+
+`a`'s filters as Zarr v2 codec configurations, outermost first, empty when the
+source applies none.
+
+Order matters: a filter list is applied in reverse on read, so the last entry
+is the first undone.
+"""
 filtersof(a::ManifestArray) = a.filters
+
+"""
+    attrsof(a::ManifestArray) -> Dict{String,Any}
+    attrsof(g::ChunkManifest) -> Dict{String,Any}
+
+Attributes carried over from the source, served as the `.zattrs` of an array
+or of the manifest's root group.
+
+This is where CF metadata reaches a reader: `units`, `coordinates`,
+`grid_mapping` and the projection parameters of a grid-mapping variable pass
+through unaltered, and interpreting them is the reader's job.
+"""
 attrsof(a::ManifestArray) = a.attrs
+
+"""
+    dimnamesof(a::ManifestArray) -> Vector{String}
+
+Names of `a`'s dimensions, outermost first, empty when the source names none.
+
+These become `_ARRAY_DIMENSIONS` in the synthesized metadata, which is how a
+Zarr reader recovers which coordinate variable belongs to which axis.
+"""
 dimnamesof(a::ManifestArray) = a.dimnames
 
 Base.ndims(::ManifestArray{T,N}) where {T,N} = N
@@ -201,10 +270,40 @@ function ChunkManifest(
     )
 end
 
+"""
+    arraysof(g::ChunkManifest) -> Dict{String,ManifestArray}
+
+`g`'s arrays, keyed by the Zarr key each is served under. A key containing `/`
+places its array in a nested group.
+"""
 arraysof(g::ChunkManifest) = g.arrays
+
 attrsof(g::ChunkManifest) = g.attrs
+
+"""
+    provenanceof(g::ChunkManifest) -> Dict{String,Any}
+
+What `g` records about its own creation — the driver that scanned it, the
+package version, the time.
+
+Served as root-group attributes rather than held apart, so it survives a save
+and reload in every format.
+"""
 provenanceof(g::ChunkManifest) = g.provenance
+
 pathtable(g::ChunkManifest) = g.table
+
+"""
+    transportof(g::ChunkManifest) -> AbstractTransport
+
+The transport `g` reads chunk bytes through.
+
+A [`TransportContainers`](@ref) routes each URI to the backend that can read
+it, which is what lets one manifest span local files and remote objects; a
+single transport reads every URI the same way. Use
+`ChunkManifest(g; transport=...)` to supply credentials or restrict what may
+be fetched.
+"""
 transportof(g::ChunkManifest) = g.transport
 
 function Base.show(io::IO, g::ChunkManifest)
