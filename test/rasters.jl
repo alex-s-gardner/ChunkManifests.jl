@@ -9,26 +9,6 @@ const _RA_DA = Zarr.DiskArrays
 const _RA_ITSLIVE_PATH = ITSLIVE_PATH
 const _RA_ATL06_PATH = ATL06_PATH
 
-# Counts chunk requests, not I/O operations. Overriding fetchranges with a
-# plain loop bypasses the coalescing default on purpose: the question these
-# tests ask is how many chunks a read selects, and coalescing would merge
-# byte-adjacent ones and hide that. test/readahead.jl leaves fetchranges alone
-# where the number of real requests is what matters instead.
-struct _RA_CountingTransport <: AbstractTransport
-    inner::LocalTransport
-    count::Threads.Atomic{Int}
-end
-_RA_CountingTransport() = _RA_CountingTransport(LocalTransport(), Threads.Atomic{Int}(0))
-function ChunkManifests.fetchrange(t::_RA_CountingTransport, uri::AbstractString, r::ByteRange)
-    Threads.atomic_add!(t.count, 1)
-    return ChunkManifests.fetchrange(t.inner, uri, r)
-end
-function ChunkManifests.fetchranges(
-    t::_RA_CountingTransport, uri::AbstractString, rs::AbstractVector{ByteRange}
-)
-    return [ChunkManifests.fetchrange(t, uri, r) for r in rs]
-end
-
 const _RA_FILL = Int16(-9999)
 
 # NetCDF4-shaped fixture: h(x, time) carrying a real HDF5 fill value and CF
@@ -96,7 +76,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
     end
 
     @testset "Raster(cm, name)" begin
-        counting = _RA_CountingTransport()
+        counting = FetchCountingTransport(; coalesce=false)
         cm = ChunkManifest(
             path; transport=counting, readahead=ReadaheadCache(; maxbytes=0)
         )
@@ -172,7 +152,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
     end
 
     @testset "RasterStack(cm)" begin
-        counting = _RA_CountingTransport()
+        counting = FetchCountingTransport(; coalesce=false)
         cm = ChunkManifest(path; transport=counting)
         counting.count[] = 0
         st = Rasters.RasterStack(cm)
@@ -193,7 +173,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
         # run of byte-adjacent chunks on a miss by design, which is what makes
         # the construction count above 4 rather than 8.
         exact = ChunkManifest(
-            path; transport=_RA_CountingTransport(), readahead=ReadaheadCache(; maxbytes=0)
+            path; transport=FetchCountingTransport(; coalesce=false), readahead=ReadaheadCache(; maxbytes=0)
         )
         exactcount = transportof(exact).count
         exactstack = Rasters.RasterStack(exact)
@@ -242,7 +222,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
 
     if isfile(_RA_ITSLIVE_PATH)
         @testset "real NetCDF4 file: a window touches only the chunks it covers" begin
-            counting = _RA_CountingTransport()
+            counting = FetchCountingTransport(; coalesce=false)
             cm = ChunkManifest(
                 scan(HDF5Driver(), _RA_ITSLIVE_PATH; group="/grounded");
                 transport=counting, readahead=ReadaheadCache(; maxbytes=0),
@@ -360,7 +340,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
 
     if isfile(_RA_ATL06_PATH)
         @testset "real HDF5 granule: values match HDF5.jl through the CF layer" begin
-            counting = _RA_CountingTransport()
+            counting = FetchCountingTransport(; coalesce=false)
             cm = ChunkManifest(
                 scan(HDF5Driver(), _RA_ATL06_PATH; group="/gt1l/land_ice_segments/h_li");
                 transport=counting, readahead=ReadaheadCache(; maxbytes=0),

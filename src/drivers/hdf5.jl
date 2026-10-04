@@ -50,14 +50,19 @@ function _datasetattrs(dset)
     return out
 end
 
-function _scalename(f, ref::HDF5.Reference)
+# Full path of the object a reference points at. Dimension scales arrive as
+# references both on a variable's DIMENSION_LIST and in `_siblingpaths`, so
+# resolving one lives here rather than at each use.
+function _refpath(f, ref::HDF5.Reference)
     obj = f[ref]
     try
-        return basename(HDF5.name(obj))
+        return HDF5.name(obj)
     finally
         close(obj)
     end
 end
+
+_scalename(f, ref::HDF5.Reference) = basename(_refpath(f, ref))
 
 # NAME attribute libhdf5 gives a dimension scale that has no variable behind
 # it. It names no dimension, so a scale carrying it falls back to generic
@@ -91,6 +96,13 @@ function _dimnames(f, dset, N)
     return reverse([_scalename(f, first(refs)) for refs in dl])
 end
 
+# `dirname` of a dataset at the file root is "/", and joining that with a name
+# naively doubles the separator. libhdf5 accepts "//mapping", but the array key
+# derived from it keeps a leading "/", which the store reads as an unnamed group
+# nested under the root and walks without end.
+_joinh5(parent::AbstractString, name::AbstractString) =
+    (isempty(parent) || parent == "/") ? "/$name" : "$parent/$name"
+
 # Full HDF5 paths of the variables a dataset references and cannot be
 # interpreted without: its dimension scales, the coordinate variables its
 # `coordinates` attribute names, and the grid-mapping variable its
@@ -102,25 +114,13 @@ end
 # own group and then against the file root, which is the order CF's search
 # rule gives for the files this reaches. A dimension scale is reached by
 # object reference and so needs no resolution.
-# `dirname` of a dataset at the file root is "/", and joining that with a name
-# naively doubles the separator. libhdf5 accepts "//mapping", but the array key
-# derived from it keeps a leading "/", which the store reads as an unnamed group
-# nested under the root and walks without end.
-_joinh5(parent::AbstractString, name::AbstractString) =
-    (isempty(parent) || parent == "/") ? "/$name" : "$parent/$name"
-
 function _siblingpaths(f, dset, dsetpath::AbstractString)
     out = String[]
 
     if haskey(HDF5.attrs(dset), "DIMENSION_LIST")
         for refs in HDF5.read_attribute(dset, "DIMENSION_LIST")
             for r in refs
-                obj = f[r]
-                try
-                    push!(out, HDF5.name(obj))
-                finally
-                    close(obj)
-                end
+                push!(out, _refpath(f, r))
             end
         end
     end
@@ -154,14 +154,13 @@ end
 # fixed point, since a coordinate variable may name a grid mapping of its own.
 function _scansiblings!(arrays, table, fileindex, f, rootpath::AbstractString, filepath)
     prefix = rootpath == "/" ? "/" : "$rootpath/"
-    # Each entry pairs an array key with the HDF5 path it came from. The two
-    # are not interchangeable: a sibling outside the scan root keeps its bare
-    # name as a key, which says nothing about where in the file it lives.
-    pending = [(key, prefix * key) for key in keys(arrays)]
+    # HDF5 paths, not array keys: a sibling outside the scan root keeps its
+    # bare name as a key, which says nothing about where in the file it lives.
+    pending = [prefix * key for key in keys(arrays)]
     seen = Set(keys(arrays))
 
     while !isempty(pending)
-        _, objpath = pop!(pending)
+        objpath = pop!(pending)
         haskey(f, objpath) || continue
         dset = f[objpath]
         paths = try
@@ -189,7 +188,7 @@ function _scansiblings!(arrays, table, fileindex, f, rootpath::AbstractString, f
             finally
                 close(obj)
             end
-            push!(pending, (sibkey, p))
+            push!(pending, p)
         end
     end
     return arrays
@@ -205,6 +204,11 @@ end
 # handling apart from numeric dtypes in two places: libhdf5 refuses to report a
 # fill value for one, and Zarr.jl accepts no fill value for one either, so a
 # missing chunk of that type cannot be materialized at all.
+# The scan-time eltype of an HDF5 fixed-length string dataset. Its Zarr v2
+# spelling is `|S<n>`; see `zarr_dtype_string` in src/store/metadata.jl for why
+# that form rather than whatever `Zarr.typestr` would return.
+zarr_dtype_string(::Type{HDF5.FixedString{N,PAD}}) where {N,PAD} = "|S$N"
+
 _isfixedstring(::Type) = false
 _isfixedstring(::Type{<:HDF5.FixedString}) = true
 _isfixedstring(::Type{<:AbstractString}) = true
@@ -342,12 +346,12 @@ end
 function _scanunallocated(table, shape, ::Type{T}) where {T}
     gridsize = ntuple(_ -> 1, length(shape))
     offset = zeros(UInt64, gridsize)
-    manifest = if _isfixedstring(T)
+    manifest = if !_hasfillvalue(T)
         # The NUL bytes HDF5 itself reads for a never-written fixed-length
-        # string, embedded rather than referenced: Zarr.jl accepts no fill
-        # value for this dtype, so a missing chunk would read as an error
-        # instead of as an empty string. The CF grid-mapping variables this
-        # reaches carry a byte or two.
+        # string, embedded rather than referenced: with no fill value Zarr.jl
+        # accepts, a missing chunk would read as an error instead of as an
+        # empty string. The CF grid-mapping variables this reaches carry a
+        # byte or two.
         nb = prod(shape) * sizeof(T)
         ExplicitChunkMap(
             table, fill(INLINE_INDEX, gridsize), offset, fill(UInt64(nb), gridsize);

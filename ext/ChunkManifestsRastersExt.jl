@@ -36,11 +36,9 @@ const CDM = ZarrDatasets.CDM
 # A ChunkManifest keys its arrays by full Zarr path ("gt1l/h_li"), while
 # CommonDataModel addresses a variable by name within a dataset, so a key's
 # leading groups are walked here rather than passed along as part of the name.
-function _splitpath(key::AbstractString)
-    i = findlast('/', key)
-    i === nothing && return "", key
-    return key[1:(i - 1)], key[(i + 1):end]
-end
+# The split is the store's own, so a key divides here exactly as it does when
+# the store resolves one.
+const _splitpath = ChunkManifests._splitkey
 
 function _groupof(ds, group::AbstractString)
     isempty(group) && return ds
@@ -52,11 +50,12 @@ end
 
 # Array keys of `cm` lying directly under `group`, with their leaf names.
 function _leaves(cm::ChunkManifest, group::AbstractString)
-    return [
-        key => last(_splitpath(key))
-        for key in sort!(collect(keys(arraysof(cm))))
-        if first(_splitpath(key)) == group
-    ]
+    out = Pair{String,String}[]
+    for key in sort!(collect(keys(arraysof(cm))))
+        g, leaf = _splitpath(key)
+        g == group && push!(out, key => String(leaf))
+    end
+    return out
 end
 
 function _groupnames(cm::ChunkManifest)
@@ -121,6 +120,11 @@ Rasters' own CommonDataModel machinery over the manifest's synthesized Zarr
 metadata, so the result matches what `Raster(path; lazy=true)` builds from a
 real Zarr store. `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce` and `raw`
 mean what they mean there.
+
+Each call opens its own dataset over `cm`, which costs a walk of the manifest's
+whole array tree. [`Rasters.RasterStack`](@extref)`(cm)` opens one and shares it
+across every layer, so that is the cheaper route to several arrays of one
+manifest.
 """
 function Rasters.Raster(
     cm::ChunkManifest, name;

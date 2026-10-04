@@ -24,16 +24,6 @@ function _sr_write_slice(
     return path
 end
 
-function _sr_dummyva(shape, chunkshape, uri; kwargs...)
-    table = PathTable()
-    push_uri!(table, uri)
-    N = length(shape)
-    m = AffineChunkMap(
-        table, cld.(shape, chunkshape), UInt64(0), ntuple(_ -> UInt64(1), N), UInt32(0)
-    )
-    return ManifestArray{Float64}(m, shape, chunkshape; kwargs...)
-end
-
 @testset "Series" begin
     dir = mktempdir()
     xv = Int32.(1:4)
@@ -126,8 +116,8 @@ end
         function _grid(uri, xlen)
             return ChunkManifest(;
                 arrays=Dict{String,ManifestArray}(
-                    "h" => _sr_dummyva((4,), (2,), uri; dimnames=["time"]),
-                    "x" => _sr_dummyva((xlen,), (2,), uri; dimnames=["x"]),
+                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames=["time"]),
+                    "x" => dummy_manifestarray((xlen,), (2,), uri; dimnames=["x"]),
                 ),
             )
         end
@@ -202,7 +192,7 @@ end
         # A dimension named twice gives no single axis to concatenate along.
         twice = ChunkManifest(;
             arrays=Dict{String,ManifestArray}(
-                "sq" => _sr_dummyva((4, 4), (2, 2), "f.bin"; dimnames=["time", "time"]),
+                "sq" => dummy_manifestarray((4, 4), (2, 2), "f.bin"; dimnames=["time", "time"]),
             ),
         )
         @test_throws "names dimension \"time\" at positions [1, 2]" ChunkManifests.combine(
@@ -218,7 +208,7 @@ end
         function member(uri, attrs)
             return ChunkManifest(;
                 arrays=Dict{String,ManifestArray}(
-                    "h" => _sr_dummyva((4,), (2,), uri; dimnames=["time"]),
+                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames=["time"]),
                 ),
                 attrs,
             )

@@ -12,16 +12,6 @@ function _mg_write_h5(path::AbstractString, sets)
     return path
 end
 
-function _mg_dummyva(shape, chunkshape, uri; kwargs...)
-    table = PathTable()
-    push_uri!(table, uri)
-    N = length(shape)
-    m = AffineChunkMap(
-        table, cld.(shape, chunkshape), UInt64(0), ntuple(_ -> UInt64(1), N), UInt32(0)
-    )
-    return ManifestArray{Float64}(m, shape, chunkshape; kwargs...)
-end
-
 @testset "Merge" begin
     @testset "a layer per file, read through Zarr" begin
         dir = mktempdir()
@@ -134,15 +124,15 @@ end
     @testset "group attributes" begin
         shared = Dict{String,Any}("mission" => "ICESat-2")
         m1 = ChunkManifest(;
-            arrays=Dict{String,ManifestArray}("z" => _mg_dummyva((4,), (2,), "f1.bin")),
+            arrays=Dict{String,ManifestArray}("z" => dummy_manifestarray((4,), (2,), "f1.bin")),
             attrs=merge(shared, Dict{String,Any}("granule" => "A")),
         )
         m2 = ChunkManifest(;
-            arrays=Dict{String,ManifestArray}("z" => _mg_dummyva((4,), (2,), "f2.bin")),
+            arrays=Dict{String,ManifestArray}("z" => dummy_manifestarray((4,), (2,), "f2.bin")),
             attrs=merge(shared, Dict{String,Any}("granule" => "B")),
         )
         agree = ChunkManifest(;
-            arrays=Dict{String,ManifestArray}("z" => _mg_dummyva((4,), (2,), "f3.bin")),
+            arrays=Dict{String,ManifestArray}("z" => dummy_manifestarray((4,), (2,), "f3.bin")),
             attrs=copy(shared),
         )
 

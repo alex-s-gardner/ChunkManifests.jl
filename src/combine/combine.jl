@@ -138,6 +138,28 @@ function _mergeattrs!(merged::Dict{String,Any}, attrs::Dict{String,Any}, context
     return merged
 end
 
+# Group attributes of several inputs merged into one dict under
+# `_mergeattrs!`'s conflict rule, or `attrs` verbatim when a caller supplies
+# it. `context(i)` names input `i` in an error, and `subject` names what the
+# `attrs` keyword would set, so the message tells a caller holding a set of
+# granules with differing attributes exactly how to proceed.
+function _groupattrs(n::Integer, attrsof_::Function, context::Function, attrs, subject)
+    attrs === nothing || return Dict{String,Any}(attrs)
+    merged = Dict{String,Any}()
+    for i in 1:n
+        try
+            _mergeattrs!(merged, attrsof_(i), context(i))
+        catch e
+            e isa ArgumentError || rethrow()
+            throw(ArgumentError(
+                "$(e.msg). Pass attrs= to set the $subject manifest's group attributes " *
+                "yourself instead of merging the inputs'",
+            ))
+        end
+    end
+    return merged
+end
+
 """
     concat(xs; dims::Integer) -> ManifestArray
 

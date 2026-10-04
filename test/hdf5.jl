@@ -3,6 +3,15 @@ import HDF5.Filters: Deflate, Shuffle, Fletcher32, Szip, NBit, ScaleOffset
 
 # ATL06_PATH and ITSLIVE_PATH come from test/fixtures.jl.
 
+# A real H5T_STRING of fixed size. HDF5.jl's `datatype(FixedString)` builds a
+# compound type instead, which is not what a NetCDF4 grid-mapping variable is,
+# so the datatype is made directly.
+function _fixedstr(n)
+    dt = HDF5.Datatype(HDF5.API.h5t_copy(HDF5.API.H5T_C_S1))
+    HDF5.API.h5t_set_size(dt, n)
+    return dt
+end
+
 @testset "HDF5Driver" begin
     @testset "candrive" begin
         if isfile(ATL06_PATH)
@@ -410,15 +419,6 @@ import HDF5.Filters: Deflate, Shuffle, Fletcher32, Szip, NBit, ScaleOffset
         dir = mktempdir()
         fn = joinpath(dir, "strings.h5")
 
-        # A real H5T_STRING of fixed size. HDF5.jl's `datatype(FixedString)`
-        # builds a compound type instead, which is not what a NetCDF4
-        # grid-mapping variable is, so the datatype is made directly.
-        function _fixedstr(n)
-            dt = HDF5.Datatype(HDF5.API.h5t_copy(HDF5.API.H5T_C_S1))
-            HDF5.API.h5t_set_size(dt, n)
-            return dt
-        end
-
         h5open(fn, "w") do f
             # Scalar, never written: the shape of a CF grid-mapping variable,
             # carrying its parameters as attributes.
@@ -487,12 +487,6 @@ import HDF5.Filters: Deflate, Shuffle, Fletcher32, Szip, NBit, ScaleOffset
     @testset "CF sibling inclusion" begin
         dir = mktempdir()
         fn = joinpath(dir, "siblings.h5")
-
-        function _fixedstr(n)
-            dt = HDF5.Datatype(HDF5.API.h5t_copy(HDF5.API.H5T_C_S1))
-            HDF5.API.h5t_set_size(dt, n)
-            return dt
-        end
 
         h5open(fn, "w") do f
             x = create_dataset(f, "x", datatype(Int32), dataspace((4,)); chunk=(2,))

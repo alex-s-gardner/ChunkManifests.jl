@@ -73,11 +73,10 @@ end
 # nothing short of reading the values distinguishes "same grid" from "same
 # bytes".
 function _checkshared(
-    ms::AbstractVector{ChunkManifest}, key::AbstractString, dimname::AbstractString,
-    check::Symbol,
+    ms::AbstractVector{ChunkManifest}, key::AbstractString, ref::ManifestArray,
+    dimname::AbstractString, check::Symbol,
 )
     check === :none && return nothing
-    ref = arraysof(first(ms))[key]
     disagrees(i, detail) = throw(ArgumentError(
         "combine: array \"$key\" has no dimension named $(repr(dimname)), so it is not " *
         "concatenated and only member $(firstindex(ms))'s copy survives, but member $i's " *
@@ -152,7 +151,8 @@ function combine(s::ManifestSeries; check::Symbol=:shape, attrs=nothing)
     ms = membersof(s)
     dimname = dimnameof(s)
 
-    refkeys = Set(keys(arraysof(first(ms))))
+    firstarrays = arraysof(first(ms))
+    refkeys = Set(keys(firstarrays))
     isempty(refkeys) && throw(ArgumentError(
         "combine: member $(firstindex(ms)) holds no arrays"
     ))
@@ -169,43 +169,31 @@ function combine(s::ManifestSeries; check::Symbol=:shape, attrs=nothing)
     # Resolved up front so that a dimension no array names is reported as such,
     # rather than as whichever uncombined array first fails its check.
     arraykeys = sort!(collect(refkeys))
-    dimindex = [_seriesdim(arraysof(first(ms))[key], dimname, key) for key in arraykeys]
+    refarrays = [firstarrays[key] for key in arraykeys]
+    dimindex = map(_seriesdim, refarrays, fill(dimname, length(arraykeys)), arraykeys)
     all(iszero, dimindex) && throw(ArgumentError(
         "combine: no array names a dimension $(repr(dimname)), so there is nothing to " *
         "concatenate. The members' arrays have dimnames " *
-        "$(sort(unique(vcat((dimnamesof(a) for a in values(arraysof(first(ms))))...))))",
+        "$(sort(unique(vcat(map(dimnamesof, refarrays)...))))",
     ))
 
     # Settled before any chunk map is rebuilt: a conflicting attribute is pure
     # metadata, and reporting it only after the whole concatenation would make
     # the caller pay for work that is then thrown away.
-    mergedattrs = if attrs === nothing
-        acc = Dict{String,Any}()
-        for i in eachindex(ms)
-            try
-                _mergeattrs!(acc, attrsof(ms[i]), "combine: member $i's group")
-            catch e
-                e isa ArgumentError || rethrow()
-                throw(ArgumentError(
-                    "$(e.msg). Pass attrs= to set the combined manifest's group attributes " *
-                    "yourself instead of merging the members'",
-                ))
-            end
-        end
-        acc
-    else
-        Dict{String,Any}(attrs)
-    end
+    mergedattrs = _groupattrs(
+        length(ms), i -> attrsof(ms[i]), i -> "combine: member $i's group",
+        attrs, "combined",
+    )
 
     # One table for the whole result, as every array of a ChunkManifest shares
     # its path table; the arrays left uncombined are brought onto it by the
     # constructor below.
     table = PathTable()
     arrays = Dict{String,ManifestArray}()
-    for (key, d) in zip(arraykeys, dimindex)
+    for (key, ref, d) in zip(arraykeys, refarrays, dimindex)
         if d == 0
-            _checkshared(ms, key, dimname, check)
-            arrays[key] = arraysof(first(ms))[key]
+            _checkshared(ms, key, ref, dimname, check)
+            arrays[key] = ref
             continue
         end
         try

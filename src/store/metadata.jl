@@ -38,7 +38,8 @@ end
 # manifest is read back and written again. At n == 1 Zarr.jl decodes as
 # `ASCIIChar` rather than a string type; that is byte-compatible, one byte
 # either way, and is the right trade against emitting a spelling off-spec.
-zarr_dtype_string(::Type{HDF5.FixedString{N,PAD}}) where {N,PAD} = "|S$N"
+# The HDF5 driver adds the method for its own fixed-string eltype, in
+# src/drivers/hdf5.jl: driver-specific type knowledge lives with the driver.
 zarr_dtype_string(::Type{Zarr.MaxLengthString{N,UInt8}}) where {N} = "|S$N"
 zarr_dtype_string(::Type{Zarr.ASCIIChar}) = "|S1"
 

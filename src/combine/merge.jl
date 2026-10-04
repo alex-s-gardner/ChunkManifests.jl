@@ -24,7 +24,9 @@ function _layerkeys!(
         "ChunkManifest: input $i, named $(repr(nm)), holds no arrays"
     ))
     single = length(src) == 1
-    for k in sort!(collect(keys(src)))
+    # Unsorted: nothing downstream depends on insertion order, and
+    # `_sharetable!` sorts the keys itself when it builds the shared table.
+    for k in keys(src)
         key = if single
             String(nm)
         else
@@ -34,10 +36,9 @@ function _layerkeys!(
             ))
             "$nm/$k"
         end
-        haskey(arrays, key) && throw(ArgumentError(
-            "ChunkManifest: input $i, named $(repr(nm)), would key an array at $(repr(key)), " *
-            "which an earlier input already filled",
-        ))
+        # No collision check: `_checknames` has already established that every
+        # name is non-empty, unique and free of "/", so a single-array input's
+        # bare name and a multi-array input's "name/key" cannot coincide.
         arrays[key] = src[k]
     end
     return arrays
@@ -87,26 +88,12 @@ function _mergemanifests(
         _layerkeys!(arrays, members[i], names[i], i)
     end
 
-    mergedattrs = if attrs === nothing
-        acc = Dict{String,Any}()
-        for i in eachindex(members, names)
-            try
-                _mergeattrs!(
-                    acc, attrsof(members[i]),
-                    "ChunkManifest: input $i, named $(repr(names[i])), has a group",
-                )
-            catch e
-                e isa ArgumentError || rethrow()
-                throw(ArgumentError(
-                    "$(e.msg). Pass attrs= to set the merged manifest's group attributes " *
-                    "yourself instead of merging the inputs'",
-                ))
-            end
-        end
-        acc
-    else
-        Dict{String,Any}(attrs)
-    end
+    mergedattrs = _groupattrs(
+        length(members),
+        i -> attrsof(members[i]),
+        i -> "ChunkManifest: input $i, named $(repr(names[i])), has a group",
+        attrs, "merged",
+    )
 
     provenance = Dict{String,Any}("driver" => "merge", "ninputs" => length(members))
     return ChunkManifest(; arrays, attrs=mergedattrs, provenance, transport, readahead)

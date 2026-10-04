@@ -7,16 +7,6 @@ import YAXArrays
 # `zopen` step is not optional: nothing declares `to_dataset` for a bare
 # `Zarr.AbstractStore`, which is what the first case below records.
 
-struct _YX_CountingTransport <: AbstractTransport
-    inner::LocalTransport
-    count::Threads.Atomic{Int}
-end
-_YX_CountingTransport() = _YX_CountingTransport(LocalTransport(), Threads.Atomic{Int}(0))
-function ChunkManifests.fetchrange(t::_YX_CountingTransport, uri::AbstractString, r::ByteRange)
-    Threads.atomic_add!(t.count, 1)
-    return ChunkManifests.fetchrange(t.inner, uri, r)
-end
-
 @testset "YAXArrays" begin
     dir = mktempdir()
     path = joinpath(dir, "yax.h5")
@@ -30,7 +20,7 @@ end
         HDF5.write(d, data)
     end
 
-    counting = _YX_CountingTransport()
+    counting = FetchCountingTransport()
     cm = ChunkManifest(
         path; transport=counting, readahead=ReadaheadCache(; maxbytes=0)
     )
