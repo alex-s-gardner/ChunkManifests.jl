@@ -105,6 +105,24 @@ function chunkkey(::ManifestArray{T,N}, I::CartesianIndex{N}) where {T,N}
     return Zarr.citostring(_V2_CHUNK_KEY_ENCODING, I)
 end
 
+# Number of '.'-separated components of a chunk key, and the k-th of them as a
+# view. Both walk the key instead of materializing its components, which is
+# what keeps `parse_chunkkey` free of allocations.
+_countcomponents(key::AbstractString) = count(==('.'), key) + 1
+
+function _component(key::AbstractString, k::Integer)
+    start = firstindex(key)
+    seen = 1
+    for i in eachindex(key)
+        if key[i] == '.'
+            seen == k && return SubString(key, start, prevind(key, i))
+            seen += 1
+            start = nextind(key, i)
+        end
+    end
+    return SubString(key, start)
+end
+
 """
     parse_chunkkey(va::ManifestArray{T,N}, key::AbstractString) -> Union{Nothing,CartesianIndex{N}}
 
@@ -119,13 +137,15 @@ function parse_chunkkey(va::ManifestArray{T,N}, key::AbstractString) where {T,N}
     if N == 0
         return key == "0" ? CartesianIndex() : nothing
     end
-    parts = split(key, '.')
-    length(parts) == N || return nothing
+    _countcomponents(key) == N || return nothing
     shape, chunkshape = shapeof(va), chunkshapeof(va)
     gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
     # Zarr key components are Julia dimensions in reverse order (C order).
+    # Addressed by position rather than split into a vector: this runs once per
+    # chunk of every read that comes through `getindex`, and a split would
+    # allocate a vector of substrings each time.
     idx = ntuple(N) do d
-        n = tryparse(Int, parts[N - d + 1])
+        n = tryparse(Int, _component(key, N - d + 1))
         n === nothing ? typemin(Int) : n + 1
     end
     all(d -> 1 <= idx[d] <= gridsize[d], eachindex(gridsize)) || return nothing

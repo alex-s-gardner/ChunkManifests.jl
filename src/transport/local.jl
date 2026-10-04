@@ -34,10 +34,22 @@ end-of-file rather than returning a short read as if it were complete.
 """
 function fetchrange(::LocalTransport, uri::AbstractString, r::ByteRange)
     path = _localpath(uri)
-    isfile(path) || throw(ArgumentError("no such file: $path"))
-    _checked_range(path, filesize(path), r)
-    return open(path, "r") do io
-        _read_checked(io, path, r)
+    # The handle is opened before anything else is asked about the path, and
+    # the size is taken from it: `isfile` then `filesize` then `open` is three
+    # filesystem round trips where one will do, and this runs once for every
+    # chunk a read touches. A failed open carries the same error the
+    # missing-file check raised.
+    io = try
+        open(path, "r")
+    catch e
+        (e isa SystemError || e isa Base.IOError) || rethrow()
+        throw(ArgumentError("no such file: $path"))
+    end
+    try
+        _checked_range(path, filesize(io), r)
+        return _read_checked(io, path, r)
+    finally
+        close(io)
     end
 end
 

@@ -31,6 +31,30 @@ cannot be served faithfully. `HDF5Driver` therefore refuses one rather than
 mis-decoding it, which costs the ability to scan big-endian archival files.
 This has not been reported upstream.
 
+## HDF5.jl — the fast chunk iterator is never selected
+
+`get_chunk_info_all` prefers `H5Dchunk_iter`, which enumerates a dataset's
+chunks in one pass, and falls back to calling `H5Dget_chunk_info` once per
+chunk otherwise. The preference is gated on
+`hasmethod(API.h5d_chunk_iter, Tuple{API.hid_t})` (`src/datasets.jl:825`), but
+`h5d_chunk_iter` has methods of arity 0, 2, 3 and 4 and never one of arity 1,
+so that test is false at every library version and the fallback always runs.
+HDF5.jl's own comment calls the fallback O(N^2).
+
+Measured here on libhdf5 2.2.0, enumerating a dataset's chunks:
+
+| chunks | `get_chunk_info_all` | `h5d_chunk_iter` | ratio |
+|---|---|---|---|
+| 500 | 4.2 ms | 0.19 ms | 22x |
+| 2000 | 52 ms | 0.51 ms | 103x |
+| 4000 | 202 ms | 0.96 ms | 211x |
+
+Scanning is this package's expensive step and a real granule has tens of
+thousands of chunks, so `src/drivers/hdf5.jl` calls the iterator directly where
+it exists and keeps `get_chunk_info_all` behind it. Issue
+[#1211](https://github.com/JuliaIO/HDF5.jl/issues/1211) is about iterating a
+dataset's values and is unrelated; this has not been reported.
+
 ## Rasters.jl #936 — CF CRS, open and blocked
 
 [rafaqz/Rasters.jl#936](https://github.com/rafaqz/Rasters.jl/pull/936), "load

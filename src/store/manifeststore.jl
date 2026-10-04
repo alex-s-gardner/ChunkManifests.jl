@@ -9,10 +9,14 @@
 # "/"-separated ancestor; nothing recognizable at the final step means
 # "absent", which `Zarr.jl` reads as "not initialized" rather than an error.
 
+# Views rather than copies: a read that walks an array one chunk at a time
+# comes through `getindex` for every chunk, so this runs once per chunk. A
+# SubString hashes and compares as its contents, so it looks an array up in
+# `arraysof` exactly as a String would.
 function _splitkey(key::AbstractString)
     i = findlast('/', key)
-    i === nothing && return "", key
-    return key[1:(i - 1)], key[(i + 1):end]
+    i === nothing && return SubString(key, 1, 0), SubString(key, firstindex(key))
+    return SubString(key, firstindex(key), prevind(key, i)), SubString(key, nextind(key, i))
 end
 
 # True when `p` is a "/"-separated ancestor of some array's path, i.e. a
@@ -105,16 +109,14 @@ function Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
     ))
 end
 
-"""
-    Zarr.storagesize(s::ChunkManifest, p::AbstractString) -> Int
-
-Total bytes backing the array at path `p`: the sum of each chunk's byte
-range for virtual chunks and each chunk's byte length for inline chunks.
-Missing chunks contribute nothing.
-"""
-function Zarr.storagesize(s::ChunkManifest, p::AbstractString)
-    haskey(arraysof(s), p) || throw(ArgumentError("storagesize: no array at path \"$p\""))
-    m = chunkmapof(arraysof(s)[p])
+# The arrays of a ChunkManifest are held in a Dict{String,ManifestArray}, whose
+# element type is abstract because one manifest's arrays genuinely differ in
+# element type and chunk-map type. Looking one up therefore yields a value whose
+# concrete type is unknown, so a per-chunk loop written in the caller's own body
+# dispatches dynamically on every chunk. Each loop over a chunk grid is its own
+# function for that reason: the lookup costs one dynamic dispatch, and the loop
+# then compiles against the concrete map.
+function _storagesize(m::AbstractChunkMap)
     total = 0
     for I in CartesianIndices(chunkgridaxes(m))
         state = chunkstate(m, I)
@@ -128,6 +130,18 @@ function Zarr.storagesize(s::ChunkManifest, p::AbstractString)
 end
 
 """
+    Zarr.storagesize(s::ChunkManifest, p::AbstractString) -> Int
+
+Total bytes backing the array at path `p`: the sum of each chunk's byte
+range for virtual chunks and each chunk's byte length for inline chunks.
+Missing chunks contribute nothing.
+"""
+function Zarr.storagesize(s::ChunkManifest, p::AbstractString)
+    haskey(arraysof(s), p) || throw(ArgumentError("storagesize: no array at path \"$p\""))
+    return _storagesize(chunkmapof(arraysof(s)[p]))
+end
+
+"""
     Zarr.subdirs(s::ChunkManifest, p::AbstractString) -> Vector{String}
 
 Names of the groups and arrays directly under path `p`.
@@ -136,6 +150,16 @@ function Zarr.subdirs(s::ChunkManifest, p::AbstractString)
     haskey(arraysof(s), p) && return String[]
     (p == "" || _isgrouppath(s, p)) || return String[]
     return sort!(collect(_children(s, p)))
+end
+
+function _subkeys(va::ManifestArray)
+    m = chunkmapof(va)
+    ks = [".zarray", ".zattrs"]
+    for I in CartesianIndices(chunkgridaxes(m))
+        chunkstate(m, I) == MISSING_CHUNK && continue
+        push!(ks, chunkkey(va, I))
+    end
+    return ks
 end
 
 """
@@ -147,14 +171,7 @@ when `p` is a group.
 """
 function Zarr.subkeys(s::ChunkManifest, p::AbstractString)
     if haskey(arraysof(s), p)
-        va = arraysof(s)[p]
-        m = chunkmapof(va)
-        ks = [".zarray", ".zattrs"]
-        for I in CartesianIndices(chunkgridaxes(m))
-            chunkstate(m, I) == MISSING_CHUNK && continue
-            push!(ks, chunkkey(va, I))
-        end
-        return ks
+        return _subkeys(arraysof(s)[p])
     elseif p == "" || _isgrouppath(s, p)
         return [".zgroup", ".zattrs"]
     end
@@ -193,9 +210,13 @@ either from the cache or from the fetch loop below.
 function Zarr.read_items!(
     s::ChunkManifest, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
 )
-    va = arraysof(s)[p]
-    m = chunkmapof(va)
-    readahead = s.readahead
+    return _read_items!(chunkmapof(arraysof(s)[p]), c, s.transport, s.readahead, i)
+end
+
+function _read_items!(
+    m::AbstractChunkMap, c::AbstractChannel, transport::AbstractTransport,
+    readahead::ReadaheadCache, i,
+)
     caching = readahead.maxbytes > 0
     IdxT = eltype(i)
 
@@ -222,7 +243,7 @@ function Zarr.read_items!(
 
     for (uri, entries) in byuri
         ranges = [entry[2] for entry in entries]
-        bytes = fetchranges(s.transport, uri, ranges)
+        bytes = fetchranges(transport, uri, ranges)
         for k in eachindex(entries, bytes)
             put!(c, entries[k][1] => bytes[k])
             caching && _cache_put!(readahead, (uri, entries[k][2].offset), bytes[k])

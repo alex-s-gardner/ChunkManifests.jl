@@ -263,6 +263,40 @@ end
 # unsigned 0) into a near-full range when a chunked dataset has zero
 # allocated chunks, and throws instead of returning an empty list. Checking
 # get_num_chunks first avoids calling into that path.
+# True when libhdf5 offers H5Dchunk_iter, which enumerates a dataset's chunks
+# in one pass. HDF5.jl's `get_chunk_info_all` prefers it but gates on
+# `hasmethod(API.h5d_chunk_iter, Tuple{API.hid_t})`, and no one-argument method
+# of that name exists at any library version, so the gate never opens and it
+# always falls back to calling H5Dget_chunk_info once per chunk. That fallback
+# is quadratic in chunk count: on this machine, enumerating 500, 2000 and 4000
+# chunks takes 4.2 ms, 52 ms and 202 ms through it against 0.19 ms, 0.51 ms and
+# 0.96 ms through the iterator. Scanning is this package's expensive step and a
+# real granule has tens of thousands of chunks, so the iterator is called
+# directly where it exists, with the same fallback behind it.
+const _HAS_CHUNK_ITER = hasmethod(HDF5.API.h5d_chunk_iter, Tuple{Any,Any})
+
+# Calls `f(element_offset, filter_mask, addr, size)` once per allocated chunk,
+# with `element_offset` in Julia dimension order so it lines up with
+# `HDF5.get_chunk`. The iterator hands over a pointer to the offset in HDF5's
+# own storage order, the reverse, which is why it is loaded and flipped here —
+# the same thing `HDF5._get_chunk_info_all_by_iter` does before building its
+# `ChunkInfo`.
+function _eachchunkinfo(f, dset)
+    if _HAS_CHUNK_ITER
+        N = ndims(HDF5.dataspace(dset))
+        HDF5.API.h5d_chunk_iter(dset) do offset, filter_mask, addr, size
+            eloffset = reverse(unsafe_load(Ptr{NTuple{N,HDF5.API.hsize_t}}(offset)))
+            f(eloffset, filter_mask, addr, size)
+            return HDF5.API.H5_ITER_CONT
+        end
+    else
+        for ci in HDF5.get_chunk_info_all(dset)
+            f(ci.offset, ci.filter_mask, ci.addr, ci.size)
+        end
+    end
+    return nothing
+end
+
 function _scanchunked(table, fileindex, dset, ::Type{T}, itemsize, context::AbstractString) where {T}
     chunkshape = HDF5.get_chunk(dset)
     N = length(chunkshape)
@@ -274,16 +308,17 @@ function _scanchunked(table, fileindex, dset, ::Type{T}, itemsize, context::Abst
     nbytes = zeros(UInt64, gridsize)
 
     if HDF5.get_num_chunks(dset) > 0
-        for ci in HDF5.get_chunk_info_all(dset)
-            ci.filter_mask == 0 || throw(ArgumentError(
-                "$context: chunk at element offset $(ci.offset) has filter_mask " *
-                "$(ci.filter_mask); HDF5 skipped some filters for this chunk, which " *
+        _eachchunkinfo(dset) do eloffset, filter_mask, addr, size
+            filter_mask == 0 || throw(ArgumentError(
+                "$context: chunk at element offset $(eloffset) has filter_mask " *
+                "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
                 "a single Zarr v2 codec pipeline cannot express"
             ))
-            I = CartesianIndex(ntuple(d -> ci.offset[d] ÷ chunkshape[d] + 1, N))
+            I = CartesianIndex(ntuple(d -> eloffset[d] ÷ chunkshape[d] + 1, N))
             index[I] = fileindex
-            offset[I] = UInt64(ci.addr)
-            nbytes[I] = UInt64(ci.size)
+            offset[I] = UInt64(addr)
+            nbytes[I] = UInt64(size)
+            return nothing
         end
     end
 

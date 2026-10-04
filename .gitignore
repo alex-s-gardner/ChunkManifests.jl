@@ -1,2 +1,5 @@
 Manifest.toml
 .DS_Store
+benchmark/Manifest.toml
+benchmark/last.jls
+benchmark/last_checksums.jls
