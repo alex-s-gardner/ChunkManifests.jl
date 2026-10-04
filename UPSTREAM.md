@@ -26,10 +26,11 @@ wrong with no error. Verified against an in-memory `DictStore`, so it is not
 specific to this store.
 
 Byte order is the dtype's job in Zarr v2 and there is no byte-swap codec to do
-it in a filter instead, so until Zarr.jl honors the marker a big-endian source
-cannot be served faithfully. `HDF5Driver` therefore refuses one rather than
-mis-decoding it, which costs the ability to scan big-endian archival files.
-This has not been reported upstream.
+it in a filter instead, so until Zarr.jl honors the marker a foreign-order
+source cannot be served faithfully. Both drivers therefore refuse one rather
+than mis-decoding it — `HDF5Driver` on a big-endian dataset, `GeoTIFFDriver` on
+a TIFF whose header declares the opposite order to the host — which costs the
+ability to scan big-endian archival files. This has not been reported upstream.
 
 ## HDF5.jl — the fast chunk iterator is never selected
 

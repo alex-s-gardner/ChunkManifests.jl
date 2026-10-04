@@ -187,6 +187,11 @@ Zarr **v2** metadata only. Zarr v3's codec set has no `zlib`, `shuffle`, `fletch
 - Requires a patched Zarr.jl ([PR #354](https://github.com/JuliaIO/Zarr.jl/pull/354)) to read
   arrays whose last filter operates on raw bytes — shuffle and fletcher32 — with an element
   type wider than one byte. `Project.toml` pins that branch until the fix is released.
+- Big-endian sources are refused, naming the file. Zarr v2 puts byte order in the dtype
+  string, but Zarr.jl parses the marker and does not byte-swap on read, so the bytes would
+  decode to wrong values rather than fail. This store passes a source's bytes through
+  untouched and has no codec to swap them with. Applies to HDF5/NetCDF4 datasets stored
+  big-endian and to TIFFs whose header declares the opposite order to the host.
 - GeoTIFF `PREDICTOR=2` needs a codec with no `numcodecs` equivalent, so those manifests are
   readable from Julia in any format but not from Python. TIFF predictor 3 is refused.
 - TIFF strips are not padded to a full size, so a final partial strip cannot be a Zarr chunk;

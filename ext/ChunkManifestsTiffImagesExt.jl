@@ -84,6 +84,17 @@ end
 function _gt_readpages(path::AbstractString)
     pages = open(path, "r") do io
         tf = read(io, TiffImages.TiffFile)
+        # A TIFF declares its byte order in its header ("MM" for big-endian),
+        # and the sample data follows it. This store passes a source's bytes
+        # through untouched and Zarr.jl ignores the byte-order marker in a
+        # dtype string, so such a file would decode to wrong numbers rather
+        # than fail — the same reason HDF5Driver refuses a big-endian dataset.
+        tf.need_bswap && throw(ArgumentError(
+            "$path: TIFF is stored in the opposite byte order to this host, which " *
+            "cannot be served faithfully. Zarr.jl accepts a \">\" dtype but does not " *
+            "byte-swap on read, so the bytes would decode to wrong values rather " *
+            "than fail. Rewrite the source in host byte order, or scan a converted copy",
+        ))
         visited = Set{Int}()
         result = Tuple{String,TiffImages.IFD,Union{Nothing,String}}[]
 

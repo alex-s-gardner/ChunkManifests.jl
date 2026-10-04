@@ -918,4 +918,32 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test fillvalueof(va) !== nothing && isnan(fillvalueof(va))
         end
     end
+
+    @testset "byte order" begin
+        # A TIFF declares its byte order in its header and the sample data
+        # follows it. This store cannot swap bytes and Zarr.jl ignores the
+        # marker in a dtype string, so a foreign-order file has to be refused
+        # rather than decoded to wrong numbers -- the same rule HDF5Driver
+        # applies. Written by hand because TiffImages writes host order only:
+        # "MM" plus the 42 magic is enough for its header reader to set
+        # need_bswap on a little-endian host.
+        dir = mktempdir()
+        fn = joinpath(dir, "bigendian.tif")
+        open(fn, "w") do io
+            write(io, UInt8['M', 'M'])          # big-endian byte order
+            write(io, UInt8[0x00, 0x2a])        # 42, big-endian
+            write(io, UInt8[0x00, 0x00, 0x00, 0x08])  # first IFD offset
+            write(io, zeros(UInt8, 64))
+        end
+
+        err = try
+            scan(GeoTIFFDriver(), fn)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("byte order", err.msg)
+        @test occursin("does not", err.msg)
+    end
 end
