@@ -29,6 +29,26 @@ ZarrDatasets.ZarrDataset(cm)           # CommonDataModel
 YAXArrays.open_dataset(Zarr.zopen(cm))
 ```
 
+## Rasters
+
+With `Rasters` and `ZarrDatasets` loaded, a manifest goes through Rasters' own entry points:
+
+```julia
+using Rasters, ZarrDatasets
+Raster(cm, "gt1l/land_ice_segments/h_li")   # one variable
+RasterStack(cm; group="gt1l/land_ice_segments")
+```
+
+The raster is lazy and holds the store itself, not a filename to reopen, so its transports
+and its warmed readahead cache survive and a windowed read fetches only the chunks that
+window covers. Rasters' usual `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce` and `raw`
+keywords all apply and mean what they mean elsewhere, because dimensions, CRS, CF scaling and
+fill-value masking are done by Rasters' own CommonDataModel machinery — the same code path a
+real Zarr store takes.
+
+Constructing a raster does read the *coordinate* variables, since a `Sampled` or `Projected`
+lookup is those coordinate values. It reads none of the data variable.
+
 ## Several files at once
 
 Files that hold *different* variables merge into one store, a layer per file, following

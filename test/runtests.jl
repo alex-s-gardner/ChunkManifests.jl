@@ -25,5 +25,9 @@ using Test
     include("series.jl")
     include("validate.jl")
     include("integration.jl")
+    # Last among the integration files: loading Rasters pulls DimensionalData
+    # and its own extensions into the session, so nothing that checks what is
+    # reachable without them may run after this point.
+    include("rasters.jl")
     include("s3.jl")
 end
