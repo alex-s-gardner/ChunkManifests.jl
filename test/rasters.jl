@@ -325,6 +325,33 @@ _ra_decode(hv) = Union{Missing,Float64}[
             @test Rasters.crs(projected) == Rasters.EPSG(3031)
             @test collect(Rasters.lookup(Rasters.dims(projected, Rasters.X))) == xv
         end
+
+        @testset "the projection parameters reach a CF reader" begin
+            # Delivering these faithfully is where this package's job ends.
+            # Turning them into a CRS is Rasters' side, and the method that
+            # would do it is `_dims(var, crs, mappedcrs)` — the one the
+            # extension already calls — so a Raster built here picks a CRS up
+            # with no change on this side once Rasters reads these keys.
+            cm = scan(HDF5Driver(), _RA_ITSLIVE_PATH)
+            ds = ZarrDatasets.ZarrDataset(cm)
+
+            # The data variable names its grid-mapping variable, which is the
+            # link a CF reader follows.
+            @test _RA_CDM.attrib(ds["grounded"], "grid_mapping") == "mapping"
+
+            gm = _RA_CDM.attribs(ds["mapping"])
+            @test gm["grid_mapping_name"] == "polar_stereographic"
+            @test only(gm["spatial_epsg"]) == 3031
+            @test occursin("+proj=stere", gm["spatial_proj"])
+            @test only(gm["standard_parallel"]) == -71.0
+            @test only(gm["semi_major_axis"]) == 6.378137e6
+
+            # Recorded because it decides whether a reader can use them:
+            # spatial_epsg is numeric here, not a string, which is how HDF5
+            # stores it and not an artifact of passing through this store.
+            @test gm["spatial_epsg"] isa AbstractVector
+            @test gm["spatial_proj"] isa AbstractString
+        end
     else
         @warn "ItsLiveMasks fixture not found; skipping real-file Rasters tests" _RA_ITSLIVE_PATH
     end
