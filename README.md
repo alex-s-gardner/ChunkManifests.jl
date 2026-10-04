@@ -49,6 +49,20 @@ real Zarr store takes.
 Constructing a raster does read the *coordinate* variables, since a `Sampled` or `Projected`
 lookup is those coordinate values. It reads none of the data variable.
 
+## What one scan includes
+
+Scanning one variable brings in the variables it cannot be interpreted without — its
+dimension scales, whatever its `coordinates` attribute names, and its `grid_mapping`
+variable. A single-variable scan is therefore georeferenced on its own, with no need to
+scan the whole file:
+
+```julia
+keys(arraysof(scan(HDF5Driver(), "masks.nc"; group="/grounded")))
+# "grounded", "mapping", "x", "y"
+```
+
+Pass `siblings=false` to take exactly the variable named and nothing else.
+
 ## Several files at once
 
 Files that hold *different* variables merge into one store, a layer per file, following

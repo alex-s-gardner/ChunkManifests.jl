@@ -484,4 +484,94 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
             @test attrsof(mb) == attrs
         end
     end
+
+    @testset "CF sibling inclusion" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "siblings.h5")
+
+        function _fixedstr(n)
+            dt = HDF5.Datatype(HDF5.API.h5t_copy(HDF5.API.H5T_C_S1))
+            HDF5.API.h5t_set_size(dt, n)
+            return dt
+        end
+
+        h5open(fn, "w") do f
+            x = create_dataset(f, "x", datatype(Int32), dataspace((4,)); chunk=(2,))
+            write(x, Int32.(1:4))
+            t = create_dataset(f, "time", datatype(Int32), dataspace((6,)); chunk=(3,))
+            write(t, Int32.(1:6))
+            lat = create_dataset(f, "lat", datatype(Int32), dataspace((4,)); chunk=(2,))
+            write(lat, Int32.(11:14))
+            crsvar = create_dataset(f, "crs", _fixedstr(1), dataspace(()))
+            HDF5.attributes(crsvar)["grid_mapping_name"] = "latitude_longitude"
+
+            d = create_dataset(f, "h", datatype(Int32), dataspace((4, 6)); chunk=(2, 3))
+            write(d, reshape(Int32.(1:24), 4, 6))
+            HDF5.attributes(d)["coordinates"] = "lat"
+            HDF5.attributes(d)["grid_mapping"] = "crs"
+            HDF5.API.h5ds_set_scale(x, "x")
+            HDF5.API.h5ds_set_scale(t, "time")
+            HDF5.API.h5ds_attach_scale(d, t, 0)
+            HDF5.API.h5ds_attach_scale(d, x, 1)
+
+            # A variable referencing nothing stays alone.
+            plain = create_dataset(f, "plain", datatype(Int32), dataspace((3,)); chunk=(3,))
+            write(plain, Int32.(1:3))
+        end
+
+        # Scanning one variable brings its dimension scales, the coordinate
+        # variables its `coordinates` attribute names, and the grid-mapping
+        # variable its `grid_mapping` attribute names.
+        g = scan(HDF5Driver(), fn; group="/h")
+        @test sort(collect(keys(arraysof(g)))) == ["crs", "h", "lat", "time", "x"]
+        @test dimnamesof(arraysof(g)["h"]) == ["x", "time"]
+        @test attrsof(arraysof(g)["crs"])["grid_mapping_name"] == "latitude_longitude"
+
+        # Keys stay relative to the manifest root. One with a leading separator
+        # would read as an unnamed group and send a store walk into recursion.
+        @test !any(startswith('/'), keys(arraysof(g)))
+
+        # Opting out gives exactly the variable asked for.
+        @test collect(keys(arraysof(scan(HDF5Driver(), fn; group="/h", siblings=false)))) ==
+            ["h"]
+
+        # A variable that references nothing gains nothing either way.
+        @test collect(keys(arraysof(scan(HDF5Driver(), fn; group="/plain")))) == ["plain"]
+
+        # A coordinate variable is its own dimension scale, so it does not drag
+        # anything in and does not recurse into itself.
+        @test collect(keys(arraysof(scan(HDF5Driver(), fn; group="/x")))) == ["x"]
+
+        # Taking the siblings must not change what the variable itself reads.
+        @test Zarr.zopen(g)["h"][:, :] ==
+            Zarr.zopen(scan(HDF5Driver(), fn; group="/h", siblings=false))["h"][:, :]
+        @test Zarr.zopen(g)["lat"][:] == Int32.(11:14)
+    end
+
+    if isfile(ITSLIVE_PATH)
+        @testset "a one-variable NetCDF4 scan carries its own grid" begin
+            # Reaching x, y and the grid mapping from `grounded` alone is what
+            # lets a single-variable scan be georeferenced; before, that took
+            # three separate scans assembled by hand.
+            g = scan(HDF5Driver(), ITSLIVE_PATH; group="/grounded")
+            @test sort(collect(keys(arraysof(g)))) == ["grounded", "mapping", "x", "y"]
+            @test dimnamesof(arraysof(g)["grounded"]) == ["x", "y"]
+            @test attrsof(arraysof(g)["mapping"])["grid_mapping_name"] ==
+                "polar_stereographic"
+
+            # x and y hold what the file holds, on the right axes: the lengths
+            # differ, so a swap cannot pass.
+            xv, yv = h5open(ITSLIVE_PATH, "r") do f
+                read(f["x"]), read(f["y"])
+            end
+            z = Zarr.zopen(g)
+            @test z["x"][:] == xv
+            @test z["y"][:] == yv
+            @test shapeof(arraysof(g)["grounded"]) == (length(xv), length(yv))
+
+            @test collect(keys(arraysof(
+                scan(HDF5Driver(), ITSLIVE_PATH; group="/grounded", siblings=false)
+            ))) == ["grounded"]
+        end
+    end
 end

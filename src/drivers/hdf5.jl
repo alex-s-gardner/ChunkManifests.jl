@@ -91,6 +91,110 @@ function _dimnames(f, dset, N)
     return reverse([_scalename(f, first(refs)) for refs in dl])
 end
 
+# Full HDF5 paths of the variables a dataset references and cannot be
+# interpreted without: its dimension scales, the coordinate variables its
+# `coordinates` attribute names, and the grid-mapping variable its
+# `grid_mapping` attribute names. A scan that takes one variable and leaves
+# these behind produces a manifest whose axes have no coordinate values and
+# whose grid has no projection.
+#
+# A name in `coordinates` or `grid_mapping` is resolved against the dataset's
+# own group and then against the file root, which is the order CF's search
+# rule gives for the files this reaches. A dimension scale is reached by
+# object reference and so needs no resolution.
+# `dirname` of a dataset at the file root is "/", and joining that with a name
+# naively doubles the separator. libhdf5 accepts "//mapping", but the array key
+# derived from it keeps a leading "/", which the store reads as an unnamed group
+# nested under the root and walks without end.
+_joinh5(parent::AbstractString, name::AbstractString) =
+    (isempty(parent) || parent == "/") ? "/$name" : "$parent/$name"
+
+function _siblingpaths(f, dset, dsetpath::AbstractString)
+    out = String[]
+
+    if haskey(HDF5.attrs(dset), "DIMENSION_LIST")
+        for refs in HDF5.read_attribute(dset, "DIMENSION_LIST")
+            for r in refs
+                obj = f[r]
+                try
+                    push!(out, HDF5.name(obj))
+                finally
+                    close(obj)
+                end
+            end
+        end
+    end
+
+    parent = dirname(dsetpath)
+    for attr in ("coordinates", "grid_mapping")
+        haskey(HDF5.attrs(dset), attr) || continue
+        value = HDF5.read_attribute(dset, attr)
+        value isa AbstractString || continue
+        for name in split(value)
+            isempty(name) && continue
+            if startswith(name, '/')
+                haskey(f, name) && push!(out, String(name))
+                continue
+            end
+            own = _joinh5(parent, name)
+            if haskey(f, own)
+                push!(out, own)
+            elseif haskey(f, "/$name")
+                push!(out, "/$name")
+            end
+        end
+    end
+
+    return out
+end
+
+# Brings in every variable the already-scanned ones reference, keyed the way
+# the scan root keys its own arrays: by path relative to that root where the
+# sibling lies under it, and by bare name where it does not. Iterates to a
+# fixed point, since a coordinate variable may name a grid mapping of its own.
+function _scansiblings!(arrays, table, fileindex, f, rootpath::AbstractString, filepath)
+    prefix = rootpath == "/" ? "/" : "$rootpath/"
+    # Each entry pairs an array key with the HDF5 path it came from. The two
+    # are not interchangeable: a sibling outside the scan root keeps its bare
+    # name as a key, which says nothing about where in the file it lives.
+    pending = [(key, prefix * key) for key in keys(arrays)]
+    seen = Set(keys(arrays))
+
+    while !isempty(pending)
+        _, objpath = pop!(pending)
+        haskey(f, objpath) || continue
+        dset = f[objpath]
+        paths = try
+            dset isa HDF5.Dataset ? _siblingpaths(f, dset, objpath) : String[]
+        finally
+            close(dset)
+        end
+
+        for p in paths
+            sibkey = startswith(p, prefix) ? p[(length(prefix) + 1):end] : basename(p)
+            # A key is a Zarr path relative to the manifest root. One that
+            # begins with a separator names an unnamed group under the root,
+            # which a store walk follows without end, so it is a bug here
+            # rather than something to pass on.
+            startswith(sibkey, '/') && throw(ArgumentError(
+                "$filepath: sibling $(repr(p)) of scan root $(repr(rootpath)) resolved to " *
+                "the array key $(repr(sibkey)), which is not relative to that root",
+            ))
+            (isempty(sibkey) || sibkey in seen) && continue
+            push!(seen, sibkey)
+            obj = f[p]
+            try
+                obj isa HDF5.Dataset || continue
+                _scandataset!(arrays, table, fileindex, f, obj, sibkey, filepath)
+            finally
+                close(obj)
+            end
+            push!(pending, (sibkey, p))
+        end
+    end
+    return arrays
+end
+
 function _layoutkind(dset)
     HDF5.ischunked(dset) && return :chunked
     HDF5.iscontiguous(dset) && return :contiguous
@@ -298,8 +402,9 @@ whose last-applied filter is shuffle or fletcher32 (see
 function scan(
     driver::HDF5Driver, path::AbstractString;
     group::AbstractString="/", access::SourceAccess=AutoAccess(),
+    siblings::Bool=true,
 )
-    return _scan_hdf5(driver, path, resolve_access(access, driver, path); group)
+    return _scan_hdf5(driver, path, resolve_access(access, driver, path); group, siblings)
 end
 
 # Mechanisms that hand over a local file. The URI recorded in the manifest is
@@ -307,11 +412,14 @@ end
 # for a reader that never saw the cache. The cached file holds the whole
 # object, so its size is the object's size and needs no extra request.
 function _scan_hdf5(
-    driver::HDF5Driver, uri::AbstractString, access::SourceAccess; group::AbstractString
+    driver::HDF5Driver, uri::AbstractString, access::SourceAccess;
+    group::AbstractString, siblings::Bool,
 )
     return withsourcepath(access, uri) do localpath
         recorded = _isremote(uri) ? String(uri) : abspath(localpath)
-        _scan_hdf5_open(driver, localpath, recorded, filesize(localpath), nothing; group)
+        _scan_hdf5_open(
+            driver, localpath, recorded, filesize(localpath), nothing; group, siblings
+        )
     end
 end
 
@@ -330,7 +438,8 @@ function _remoteaccess(::HDF5Driver, uri::AbstractString)
 end
 
 function _scan_hdf5(
-    driver::HDF5Driver, uri::AbstractString, access::ROS3Access; group::AbstractString
+    driver::HDF5Driver, uri::AbstractString, access::ROS3Access;
+    group::AbstractString, siblings::Bool,
 )
     HDF5.has_ros3() || throw(ArgumentError(
         "ROS3Access cannot scan $(repr(uri)): this libhdf5 has no read-only S3 " *
@@ -346,7 +455,7 @@ function _scan_hdf5(
         "give the endpoint form, or scan with DownloadAccess()",
     ))
     h5driver = access.aws === nothing ? HDF5.Drivers.ROS3() : access.aws
-    return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group)
+    return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group, siblings)
 end
 
 function _scan_hdf5_open(
@@ -356,6 +465,7 @@ function _scan_hdf5_open(
     recordedsize,
     h5driver;
     group::AbstractString,
+    siblings::Bool=true,
 )
     table = PathTable()
     arrays = Dict{String,ManifestArray}()
@@ -369,14 +479,23 @@ function _scan_hdf5_open(
             fileindex = push_uri!(table, recorded; size=recordedsize)
             root = group == "/" ? f : f[group]
             try
-                if root isa HDF5.Dataset
+                rootpath = if root isa HDF5.Dataset
                     _scandataset!(arrays, table, fileindex, f, root, basename(group), recorded)
+                    # A dataset keys itself by its own name, so its siblings are
+                    # keyed against the group holding it.
+                    let d = dirname(HDF5.name(root))
+                        isempty(d) ? "/" : d
+                    end
                 else
                     for k in keys(HDF5.attrs(root))
                         groupattrs[k] = HDF5.read_attribute(root, k)
                     end
                     _walk!(arrays, table, fileindex, f, root, "", recorded)
+                    HDF5.name(root)
                 end
+                siblings && _scansiblings!(
+                    arrays, table, fileindex, f, rootpath, recorded
+                )
             finally
                 root === f || close(root)
             end

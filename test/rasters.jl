@@ -253,9 +253,11 @@ _ra_decode(hv) = Union{Missing,Float64}[
 
             counting.count[] = 0
             r = Rasters.Raster(cm, "grounded")
-            # This scan holds no coordinate variables, so there is nothing to
-            # read at all until the data is indexed.
-            @test counting.count[] == 0
+            # The scan brings x and y along with grounded, and each is one
+            # chunk, so building the lookups costs those two reads and nothing
+            # more. No chunk of grounded itself is touched, which is what the
+            # window counts below establish: it has 36 of them.
+            @test counting.count[] == 2
             @test size(r) == shapeof(va)
             @test Rasters.isdisk(r)
 
@@ -370,7 +372,13 @@ _ra_decode(hv) = Union{Missing,Float64}[
             r = Rasters.Raster(cm, "h_li")
             @test size(r) == shapeof(va)
             @test eltype(r) == Union{Missing,Float32}
-            @test map(Rasters.name, Rasters.dims(r)) == (:delta_time,)
+            # The scan brings delta_time along with h_li, so Rasters resolves
+            # the axis to Ti over the real time values rather than leaving it
+            # an unnamed placeholder with no lookup.
+            @test dimnamesof(va) == ["delta_time"]
+            @test map(Rasters.name, Rasters.dims(r)) == (:Ti,)
+            @test Rasters.lookup(Rasters.dims(r, Rasters.Ti)) isa Rasters.Sampled
+            @test length(Rasters.dims(r, Rasters.Ti)) == only(shapeof(va))
 
             stored = h5open(_RA_ATL06_PATH, "r") do f
                 read(f["gt1l/land_ice_segments/h_li"])
