@@ -3,4 +3,3 @@ Manifest.toml
 benchmark/Manifest.toml
 benchmark/last.jls
 benchmark/last_checksums.jls
-test/fixtures.local.jl

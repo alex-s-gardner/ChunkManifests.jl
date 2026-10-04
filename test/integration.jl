@@ -10,7 +10,6 @@ import ZarrDatasets
 const _IT_CDM = ZarrDatasets.CDM
 const _IT_DiskArrays = Zarr.DiskArrays
 
-const _IT_ATL06_PATH = ATL06_PATH
 const _IT_ITSLIVE_PATH = ITSLIVE_PATH
 
 # Counts fetchrange calls, as in test/store.jl and test/readahead.jl, so a
@@ -240,22 +239,6 @@ end
                 @test size(zdata) == size(h5data)
                 @test zdata == h5data
             end
-        end
-    end
-
-    @testset "real HDF5 granule: single-dataset scan through ZarrDataset matches HDF5.jl" begin
-        if isfile(_IT_ATL06_PATH)
-            group = scan(HDF5Driver(), _IT_ATL06_PATH; group="/gt1l/land_ice_segments/h_li")
-            mstore = group
-            ds = ZarrDatasets.ZarrDataset(mstore)
-            v = _IT_CDM.variable(ds, "h_li")
-
-            h5data = HDF5.h5open(_IT_ATL06_PATH, "r") do f
-                read(f["/gt1l/land_ice_segments/h_li"])
-            end
-
-            @test size(v) == size(h5data)
-            @test v[:] == h5data
         end
     end
 

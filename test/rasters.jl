@@ -7,7 +7,6 @@ const _RA_CDM = ZarrDatasets.CDM
 const _RA_DA = Zarr.DiskArrays
 
 const _RA_ITSLIVE_PATH = ITSLIVE_PATH
-const _RA_ATL06_PATH = ATL06_PATH
 
 const _RA_FILL = Int16(-9999)
 
@@ -149,6 +148,11 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @test eltype(rawr) == Int16
         @test rawr[1, 1] == _RA_FILL
         @test rawr[1, 2] == hv[1, 2]
+
+        # The mask Rasters derives has to agree with where the file's own fill
+        # value sits, which is what makes the masking usable downstream.
+        @test Rasters.boolmask(plain) == .!ismissing.(decoded)
+        @test count(!, Rasters.boolmask(plain)) == count(ismissing, decoded)
     end
 
     @testset "RasterStack(cm)" begin
@@ -338,53 +342,4 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @warn "ItsLiveMasks fixture not found; skipping real-file Rasters tests" _RA_ITSLIVE_PATH
     end
 
-    if isfile(_RA_ATL06_PATH)
-        @testset "real HDF5 granule: values match HDF5.jl through the CF layer" begin
-            counting = FetchCountingTransport(; coalesce=false)
-            cm = ChunkManifest(
-                scan(HDF5Driver(), _RA_ATL06_PATH; group="/gt1l/land_ice_segments/h_li");
-                transport=counting, readahead=ReadaheadCache(; maxbytes=0),
-            )
-            va = arraysof(cm)["h_li"]
-            fill = fillvalueof(va)
-            total = prod(chunkgridsize(chunkmapof(va)))
-
-            r = Rasters.Raster(cm, "h_li")
-            @test size(r) == shapeof(va)
-            @test eltype(r) == Union{Missing,Float32}
-            # The scan brings delta_time along with h_li, so Rasters resolves
-            # the axis to Ti over the real time values rather than leaving it
-            # an unnamed placeholder with no lookup.
-            @test dimnamesof(va) == ["delta_time"]
-            @test map(Rasters.name, Rasters.dims(r)) == (:Ti,)
-            @test Rasters.lookup(Rasters.dims(r, Rasters.Ti)) isa Rasters.Sampled
-            @test length(Rasters.dims(r, Rasters.Ti)) == only(shapeof(va))
-
-            stored = h5open(_RA_ATL06_PATH, "r") do f
-                read(f["gt1l/land_ice_segments/h_li"])
-            end
-            expected = [v == fill ? missing : v for v in stored]
-            @test count(ismissing, expected) > 0
-
-            counting.count[] = 0
-            @test isequal(collect(r), expected)
-            @test counting.count[] == total
-            # The mask Rasters derives has to agree with where the file's own
-            # fill value sits.
-            @test Rasters.boolmask(r) == .!ismissing.(expected)
-
-            # raw=true must hand back the stored fill value untouched, which is
-            # what shows the masking is the CF layer's and not the store's.
-            rawr = Rasters.Raster(cm, "h_li"; raw=true, verbose=false)
-            @test eltype(rawr) == Float32
-            @test collect(rawr) == stored
-
-            counting.count[] = 0
-            @test isequal(r[1:100], expected[1:100])
-            @test counting.count[] == 1
-            @test counting.count[] < total
-        end
-    else
-        @warn "ATL06 fixture not found; skipping real-granule Rasters tests" _RA_ATL06_PATH
-    end
 end

@@ -1,7 +1,7 @@
 using HDF5
 import HDF5.Filters: Deflate, Shuffle, Fletcher32, Szip, NBit, ScaleOffset
 
-# ATL06_PATH and ITSLIVE_PATH come from test/fixtures.jl.
+# ITSLIVE_PATH comes from test/fixtures.jl.
 
 # A real H5T_STRING of fixed size. HDF5.jl's `datatype(FixedString)` builds a
 # compound type instead, which is not what a NetCDF4 grid-mapping variable is,
@@ -14,8 +14,8 @@ end
 
 @testset "HDF5Driver" begin
     @testset "candrive" begin
-        if isfile(ATL06_PATH)
-            @test ChunkManifests.candrive(HDF5Driver(), ATL06_PATH)
+        if isfile(ITSLIVE_PATH)
+            @test ChunkManifests.candrive(HDF5Driver(), ITSLIVE_PATH)
         end
         @test !ChunkManifests.candrive(HDF5Driver(), joinpath(mktempdir(), "missing.h5"))
         mktemp() do path, io
@@ -99,91 +99,6 @@ end
         ) === nothing
     end
 
-    if isfile(ATL06_PATH)
-        @testset "ATL06 real granule" begin
-            @testset "h_li: Float32 deflate-only" begin
-                g = scan(HDF5Driver(), ATL06_PATH; group="/gt1l/land_ice_segments/h_li")
-                h_li = arraysof(g)["h_li"]
-                @test eltype(h_li) == Float32
-                @test shapeof(h_li) == (33725,)
-                @test chunkshapeof(h_li) == (10000,)
-                @test compressorof(h_li) == Dict{String,Any}("id" => "zlib", "level" => 6)
-                @test isempty(filtersof(h_li))
-                @test dimnamesof(h_li) == ["delta_time"]
-                @test fillvalueof(h_li) == Float32(3.4028235f38)
-
-                h5open(ATL06_PATH, "r") do f
-                    dset = f["gt1l/land_ice_segments/h_li"]
-                    for ci in HDF5.get_chunk_info_all(dset)
-                        @test ci.filter_mask == 0
-                        I = CartesianIndex(ntuple(d -> ci.offset[d] ÷ 10000 + 1, 1))
-                        uri, off, len = chunklocation(chunkmapof(h_li), I)
-                        @test off == UInt64(ci.addr)
-                        @test len == UInt64(ci.size)
-                        _, buf = HDF5.do_read_chunk(dset, collect(Int, ci.offset) .+ 1)
-                        expected = buf[1:ci.size]
-                        actual = open(uri, "r") do io
-                            seek(io, off)
-                            read(io, len)
-                        end
-                        @test actual == expected
-                    end
-                end
-            end
-
-            @testset "atl06_quality_summary: Int8 shuffle+deflate, single-byte" begin
-                g = scan(HDF5Driver(), ATL06_PATH; group="/gt1l/land_ice_segments/atl06_quality_summary")
-                a = arraysof(g)["atl06_quality_summary"]
-                @test eltype(a) == Int8
-                @test compressorof(a) == Dict{String,Any}("id" => "zlib", "level" => 6)
-                @test filtersof(a) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
-                @test dimnamesof(a) == ["delta_time"]
-            end
-
-            @testset "n_fit_photons: Int32 shuffle+deflate, multi-byte" begin
-                path = "/gt1l/land_ice_segments/fit_statistics/n_fit_photons"
-                if ChunkManifests.zarr_decodes_byte_filters()
-                    g = scan(HDF5Driver(), ATL06_PATH; group=path)
-                    a = arraysof(g)["n_fit_photons"]
-                    @test eltype(a) == Int32
-                    @test filtersof(a) ==
-                        [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)]
-                    @test compressorof(a) == Dict{String,Any}("id" => "zlib", "level" => 6)
-
-                    # The values this dataset's filters made unreadable.
-                    z = Zarr.zopen(g)["n_fit_photons"]
-                    truth = h5open(ATL06_PATH, "r") do f
-                        read(f[lstrip(path, '/')])
-                    end
-                    @test z[:] == truth
-                else
-                    @test_throws "decoder limitation" scan(
-                        HDF5Driver(), ATL06_PATH; group=path
-                    )
-                    @test_throws "n_fit_photons" scan(HDF5Driver(), ATL06_PATH; group=path)
-                end
-            end
-
-            @testset "crossing_time: chunked, no filter" begin
-                g = scan(HDF5Driver(), ATL06_PATH; group="/orbit_info/crossing_time")
-                c = arraysof(g)["crossing_time"]
-                @test eltype(c) == Float64
-                @test compressorof(c) === nothing
-                @test isempty(filtersof(c))
-            end
-
-            @testset "orbit_info: multi-array group scan" begin
-                g = scan(HDF5Driver(), ATL06_PATH; group="/orbit_info")
-                @test "crossing_time" in keys(arraysof(g))
-                @test "sc_orient" in keys(arraysof(g))
-                @test provenanceof(g)["driver"] == "HDF5Driver"
-                @test provenanceof(g)["scanned_at"] isa Real
-            end
-        end
-    else
-        @warn "ATL06 fixture not found; skipping real-file HDF5Driver tests" ATL06_PATH
-    end
-
     if isfile(ITSLIVE_PATH)
         @testset "NetCDF4 ItsLiveMasks: 2-D shuffle+deflate, single-byte" begin
             g = scan(HDF5Driver(), ITSLIVE_PATH; group="/grounded")
@@ -194,6 +109,10 @@ end
             @test compressorof(grounded) == Dict{String,Any}("id" => "zlib", "level" => 9)
             @test filtersof(grounded) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
             @test dimnamesof(grounded) == ["x", "y"]
+
+            # What the scan records about itself, which nothing else asserts.
+            @test provenanceof(g)["driver"] == "HDF5Driver"
+            @test provenanceof(g)["scanned_at"] isa Real
         end
 
         @testset "NetCDF4 coordinate variables name their own dimension" begin

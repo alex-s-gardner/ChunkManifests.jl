@@ -6,28 +6,16 @@
 # allocated storage, filter pipelines in the order libhdf5 recorded them, and
 # arrays large enough that a chunk-grid error cannot hide.
 #
-# The NetCDF4 mask and the GeoTIFF are small enough to live in the repository
-# and are always present. The ATL06 granule is 37 MB and is not committed, so
-# it resolves from CHUNKMANIFESTS_ATL06, or from test/fixtures.local.jl if that
-# untracked file exists and sets it.
+# Both fixtures live in the repository, so every run opens them. The
+# environment variable each one accepts is for pointing a run at a different
+# copy, not for supplying a missing one.
 #
 # A fixture that resolves nowhere removes coverage rather than failing, so
 # `CHUNKMANIFESTS_REQUIRE_FIXTURES` names the ones whose absence is a failure —
 # which is what CI sets, so a green run cannot mean the real files were never
 # opened.
 
-# Loaded before anything resolves, so a developer can point at a local granule
-# without an environment variable and without that path reaching the repository.
-let local_ = joinpath(@__DIR__, "fixtures.local.jl")
-    isfile(local_) && include(local_)
-end
-
 const _FIXTURE_SOURCES = (
-    atl06 = (
-        env="CHUNKMANIFESTS_ATL06",
-        inrepo="data/ATL06_20220404104324_01881512_006_02.h5",
-        what="ICESat-2 ATL06 granule: Float32 and Int8 datasets, deflate and shuffle+deflate pipelines, dimension scales",
-    ),
     itslive = (
         env="CHUNKMANIFESTS_ITSLIVE",
         inrepo="data/antarctic_grounded_ice.nc",
@@ -50,18 +38,14 @@ function _resolvefixture(spec)
     return isfile(inrepo) ? inrepo : ""
 end
 
-const ATL06_PATH = _resolvefixture(_FIXTURE_SOURCES.atl06)
 const ITSLIVE_PATH = _resolvefixture(_FIXTURE_SOURCES.itslive)
 const GEOTIFF_JUNK_PATH = _resolvefixture(_FIXTURE_SOURCES.geotiff)
 
-const _FIXTURE_PATHS = (
-    atl06=ATL06_PATH, itslive=ITSLIVE_PATH, geotiff=GEOTIFF_JUNK_PATH,
-)
+const _FIXTURE_PATHS = (itslive=ITSLIVE_PATH, geotiff=GEOTIFF_JUNK_PATH)
 
 # Which fixtures a missing copy is a failure for. `1`, `true` or `all` requires
-# every one; otherwise a comma-separated list of names. Per-fixture because the
-# two small files are committed and so are always there, while the ATL06
-# granule has to be fetched, so only the job that fetches it can demand it.
+# every one; otherwise a comma-separated list of names. Named per fixture so
+# that one too large to commit could be demanded only where it is present.
 function _requiredfixtures()
     raw = lowercase(strip(get(ENV, "CHUNKMANIFESTS_REQUIRE_FIXTURES", "")))
     isempty(raw) && return Symbol[]
