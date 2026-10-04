@@ -1,7 +1,19 @@
 using ChunkManifests
 using Test
 
+include("fixtures.jl")
+
 @testset verbose=true "ChunkManifests.jl" begin
+    @testset "real-data fixtures" begin
+        missing_ = report_fixtures()
+        # A fixture named in CHUNKMANIFESTS_REQUIRE_FIXTURES but absent is a
+        # failure: the point of naming it is that a green run means the real
+        # file was opened. Fixtures not named may be absent and only reduce
+        # coverage, which report_fixtures has already warned about.
+        required_missing = intersect(FIXTURES_REQUIRED, missing_)
+        @test isempty(required_missing)
+    end
+
     include("pathtable.jl")
     include("chunkmap.jl")
     include("manifestarray.jl")

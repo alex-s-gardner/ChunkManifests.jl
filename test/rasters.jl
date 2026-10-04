@@ -6,8 +6,8 @@ import ZarrDatasets
 const _RA_CDM = ZarrDatasets.CDM
 const _RA_DA = Zarr.DiskArrays
 
-const _RA_ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/antarctic_grounded_ice.nc"
-const _RA_ATL06_PATH = "/Users/gardnera/Documents/GitHub/H5ToTable.jl/data/ATL06_20220404104324_01881512_006_02.h5"
+const _RA_ITSLIVE_PATH = ITSLIVE_PATH
+const _RA_ATL06_PATH = ATL06_PATH
 
 # Counts chunk requests, not I/O operations. Overriding fetchranges with a
 # plain loop bypasses the coalescing default on purpose: the question these

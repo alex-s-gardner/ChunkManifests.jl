@@ -7,7 +7,7 @@ using TiffImages
 # prefixed `_gt_` to avoid colliding with helpers in other test files, which
 # share one `Main` since `@testset` does not introduce scope.
 
-const _GT_JUNK_PATH = "/Users/gardnera/Documents/GitHub/GRACE.jl/junk.tif"
+const _GT_JUNK_PATH = GEOTIFF_JUNK_PATH
 
 const _GT_SHORT = UInt16(3)
 const _GT_LONG = UInt16(4)

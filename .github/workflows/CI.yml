@@ -39,3 +39,35 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        env:
+          # The NetCDF4 mask and the GeoTIFF are committed under test/data, so
+          # every job must open them: without this the real-data cases skip and
+          # a green run says nothing about them. The ATL06 granule is 37 MB and
+          # is not committed, so it is not demanded here — see the
+          # fixtures-atl06 job below.
+          CHUNKMANIFESTS_REQUIRE_FIXTURES: itslive,geotiff
+
+  fixtures-atl06:
+    name: Real-data gate - ATL06 granule
+    # Inert until ATL06_URL is set as a repository variable pointing at a
+    # hosted copy of the granule. The file is 37 MB, which is why it is not
+    # committed; without the variable there is nothing to fetch and demanding
+    # it would fail the job for the wrong reason.
+    if: vars.ATL06_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - name: Fetch the ATL06 granule
+        run: |
+          mkdir -p test/data
+          curl -fsSL "${{ vars.ATL06_URL }}" -o test/data/atl06.h5
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          CHUNKMANIFESTS_ATL06: test/data/atl06.h5
+          CHUNKMANIFESTS_REQUIRE_FIXTURES: all

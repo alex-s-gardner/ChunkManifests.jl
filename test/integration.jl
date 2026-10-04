@@ -10,8 +10,8 @@ import ZarrDatasets
 const _IT_CDM = ZarrDatasets.CDM
 const _IT_DiskArrays = Zarr.DiskArrays
 
-const _IT_ATL06_PATH = "/Users/gardnera/Documents/GitHub/H5ToTable.jl/data/ATL06_20220404104324_01881512_006_02.h5"
-const _IT_ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/antarctic_grounded_ice.nc"
+const _IT_ATL06_PATH = ATL06_PATH
+const _IT_ITSLIVE_PATH = ITSLIVE_PATH
 
 # Counts fetchrange calls, as in test/store.jl and test/readahead.jl, so a
 # laziness test can assert the number of actual I/O calls rather than only

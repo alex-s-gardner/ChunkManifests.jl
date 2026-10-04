@@ -1,8 +1,7 @@
 using HDF5
 import HDF5.Filters: Deflate, Shuffle, Fletcher32, Szip, NBit, ScaleOffset
 
-const ATL06_PATH = "/Users/gardnera/Documents/GitHub/H5ToTable.jl/data/ATL06_20220404104324_01881512_006_02.h5"
-const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/antarctic_grounded_ice.nc"
+# ATL06_PATH and ITSLIVE_PATH come from test/fixtures.jl.
 
 @testset "HDF5Driver" begin
     @testset "candrive" begin
@@ -661,6 +660,84 @@ const ITSLIVE_PATH = "/Users/gardnera/Documents/GitHub/ItsLiveMasks.jl/data/anta
         # values have to match what HDF5.jl reads.
         @test Zarr.zopen(g)["u"][:] == h5open(fn, "r") do f
             read(f["u"])
+        end
+    end
+
+    @testset "fill values, empty datasets, and refused dtypes" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "edges.h5")
+
+        h5open(fn, "w") do f
+            # HDF5 writes a scalar attribute as a one-element array, and CF
+            # readers see the two differently, so both forms have to survive
+            # alongside the dataset's own fill value.
+            d = create_dataset(
+                f, "arrfill", datatype(Float32), dataspace((4,));
+                chunk=(2,), fill_value=Float32(-9),
+            )
+            HDF5.write_dataset(d, datatype(Float32), Float32[1, 2, 3, 4])
+            HDF5.attributes(d)["_FillValue"] = Float32[-9]
+            HDF5.attributes(d)["scalar_attr"] = Float32(2.5)
+
+            # A zero-length dimension, and a chunked dataset with nothing
+            # written to it.
+            create_dataset(f, "zerolen", datatype(Int32), dataspace((0,)); chunk=(2,))
+            create_dataset(f, "nochunks", datatype(Int32), dataspace((4,)); chunk=(2,))
+
+            HDF5.write_dataset(
+                create_dataset(f, "vlen", datatype(String), dataspace((2,))),
+                datatype(String), ["ab", "cd"],
+            )
+            HDF5.write(f, "compound", [(a=Int32(1), b=Float64(2))])
+        end
+
+        @testset "the dataset fill value and an array-valued attribute coexist" begin
+            va = arraysof(scan(HDF5Driver(), fn; group="/arrfill"))["arrfill"]
+            # The fill value comes from the dataset's creation properties and is
+            # scalar; the attribute of the same name passes through as written.
+            @test fillvalueof(va) === Float32(-9)
+            @test attrsof(va)["_FillValue"] == Float32[-9]
+            @test attrsof(va)["scalar_attr"] === Float32(2.5)
+            @test Zarr.zopen(scan(HDF5Driver(), fn; group="/arrfill"))["arrfill"][:] ==
+                Float32[1, 2, 3, 4]
+        end
+
+        @testset "a zero-length dimension yields an empty array, not an error" begin
+            g = scan(HDF5Driver(), fn; group="/zerolen")
+            va = arraysof(g)["zerolen"]
+            @test shapeof(va) == (0,)
+            @test chunkgridsize(chunkmapof(va)) == (0,)
+            doc = JSON.parse(String(ChunkManifests.zarray_json(va)))
+            @test doc["shape"] == [0]
+            @test doc["chunks"] == [2]
+            @test Zarr.zopen(g)["zerolen"][:] == Int32[]
+        end
+
+        @testset "a chunked dataset with nothing written reads its fill value" begin
+            g = scan(HDF5Driver(), fn; group="/nochunks")
+            va = arraysof(g)["nochunks"]
+            @test chunkgridsize(chunkmapof(va)) == (2,)
+            for I in CartesianIndices(chunkgridaxes(chunkmapof(va)))
+                @test chunkstate(chunkmapof(va), I) == MISSING_CHUNK
+            end
+            @test fillvalueof(va) == 0
+            @test Zarr.zopen(g)["nochunks"][:] == zeros(Int32, 4)
+        end
+
+        @testset "variable-length and compound dtypes are refused by name" begin
+            # Both have a layout no Zarr v2 dtype describes. Serving their bytes
+            # as opaque would hand back numbers that decode to nothing.
+            for nm in ("vlen", "compound")
+                err = try
+                    scan(HDF5Driver(), fn; group="/$nm")
+                    nothing
+                catch e
+                    e
+                end
+                @test err isa ArgumentError
+                @test occursin("no faithful Zarr v2 dtype", err.msg)
+                @test occursin("dataset \"$nm\"", err.msg)
+            end
         end
     end
 end
