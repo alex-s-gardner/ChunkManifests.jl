@@ -1,0 +1,18 @@
+[deps]
+ChunkManifests = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
+
+[sources]
+ChunkManifests = {path = ".."}
+# `[sources]` is honored only in the active project, so the pin in the root
+# Project.toml does not reach this environment and has to be repeated. Keep the
+# two in step: a docs build against registered Zarr resolves a different
+# version than the test suite runs on.
+Zarr = {url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-filter-fix"}
+
+[compat]
+Documenter = "1"
+Zarr = "0.10"
+# Above the package's own lower bound: `[sources]` needs Julia 1.11.
+julia = "1.11"

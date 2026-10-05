@@ -462,13 +462,12 @@ holds that one array, keyed by its own name.
 
 Chunked datasets become a [`ExplicitChunkMap`](@ref); contiguous datasets
 become an [`AffineChunkMap`](@ref) of one block. A chunk HDF5 never
-allocated is recorded as [`MISSING_INDEX`](@ref) so a read returns the
+allocated is recorded as [`MISSING_CHUNK`](@ref) so a read returns the
 array's fill value for it. Every filter in a dataset's pipeline is mapped to
-a Zarr v2 codec via [`build_codecs`](@ref); a filter with no byte-compatible
-Zarr v2 codec, a chunk with a nonzero `filter_mask`, or a multi-byte dataset
-whose last-applied filter is shuffle or fletcher32 (see
-[`check_last_filter_multibyte`](@ref)) each raise an `ArgumentError` naming
-`path` and the offending dataset.
+a Zarr v2 codec; a filter with no byte-compatible Zarr v2 codec, a chunk with
+a nonzero `filter_mask`, or a multi-byte dataset whose last-applied filter is
+shuffle or fletcher32 each raise an `ArgumentError` naming `path` and the
+offending dataset.
 """
 function scan(
         path::AbstractString, driver::HDF5Driver;
@@ -515,10 +514,11 @@ function _scan_hdf5(
     HDF5.has_ros3() || throw(
         ArgumentError(
             "ROS3Access cannot scan $(repr(uri)): this libhdf5 has no read-only S3 " *
-                "virtual file driver (HDF5.has_ros3() is false, and the binaries shipped " *
-                "by HDF5_jll are built without it). Point HDF5.jl at a libhdf5 built with " *
-                "that driver, or scan with DownloadAccess(), which fetches the object " *
-                "once and works anywhere",
+                "virtual file driver (HDF5.has_ros3() is false). HDF5_jll carries it " *
+                "from 2.2.3 onward, so an earlier one resolved here is the usual cause; " *
+                "upgrade it, point HDF5.jl at a system libhdf5 built with that driver, " *
+                "or scan with DownloadAccess(), which fetches the object once and works " *
+                "anywhere",
         )
     )
     (startswith(uri, "https://") || startswith(uri, "http://")) || throw(

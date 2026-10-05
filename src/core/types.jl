@@ -303,7 +303,7 @@ Bounded cache of fetched chunk bytes, keyed by source file and byte offset.
 
 Reductions and broadcast walk a Zarr array one chunk at a time through
 `store_readchunk`, which never reaches
-[`Zarr.read_items!`](@ref) and so gets no range coalescing. Filling this cache
+`Zarr.read_items!` and so gets no range coalescing. Filling this cache
 with a run of byte-adjacent chunks on each miss restores it for those access
 patterns. `maxbytes = 0` disables readahead; `chunks` bounds how far ahead a
 single miss reads.
@@ -421,7 +421,7 @@ end
 
 An on-disk representation of a [`ChunkManifest`](@ref). Formats are types rather
 than flags so a new one is a new subtype plus [`save`](@ref) and
-[`load`](@ref) methods, never an edit to a central dispatch function.
+[`ChunkManifest`](@ref) methods, never an edit to a central dispatch function.
 """
 abstract type ManifestFormat end
 
@@ -587,9 +587,14 @@ end
 Read the object in place through HDF5's read-only S3 virtual file driver, so
 only the metadata libhdf5 actually touches is transferred.
 
-Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports and
-the HDF5 binaries shipped by `HDF5_jll` do not have; pointing HDF5.jl at a
-system library that does is what makes this available.
+Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports.
+`HDF5_jll` carries it from 2.2.3 onward; an environment resolving an earlier
+one needs HDF5.jl pointed at a system library that has it.
+
+`aws` is the `HDF5.Drivers.ROS3` to open the object with, and `nothing` takes
+`HDF5.Drivers.ROS3()`, which declares no region. libhdf5 addresses an object by
+S3-style endpoint URL and parses it before issuing any request, so a URL it
+does not recognize as one fails there whatever the region says.
 """
 struct ROS3Access <: SourceAccess
     aws::Any
