@@ -127,16 +127,16 @@ than a package-local synonym.
 ### CHUNK-012: investigate-in-place-byte-fetch
 - **Kind**: `investigate`
 - **Description**: Tier 2 (2g). `fetchrange → Vector{UInt8}` and `fetchranges → Vector{Vector{UInt8}}` allocate per call on the hottest path in the package. Establish whether a `fetchrange!(buf, t, uri, r)` variant can actually be consumed — the question is whether Zarr's `read_items!` boundary and `ReadaheadCache` can hand over a reusable buffer at all, or whether the allocation is forced at the interface. Measure before designing; do not add an in-place variant that nothing can call.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: Investigated; **conclusion: do not add an in-place fetch**. It is a structural impossibility on this path, not an open measurement. In `_read_items!` (`src/store/manifeststore.jl:247-250`) every fetched `Vector{UInt8}` acquires two owners with independent lifetimes: `put!(c, idx => bytes[k])` hands it to Zarr's consumer to decode, and `_cache_put!` retains the same object — `cache.entries[key] = bytes` at `src/store/readahead.jl:31`, no copy. A caller-owned scratch buffer would therefore either have to be copied into the cache, moving the allocation rather than removing it, or be overwritten while the consumer is still decoding it, which is a correctness bug. The allocation *is* the cache entry, and the cache is what turns 12 fetches into 1. `inlinebytes` has the same shape, returning the stored vector itself.
 
 ### CHUNK-013: version-bump
 - **Kind**: `version-bump`
 - **Breaking**: yes
 - **Depends on**: CHUNK-005, CHUNK-006, CHUNK-009, CHUNK-010, CHUNK-011
 - **Description**: Bump version per breaking changes (0.x → minor). Update CHANGELOG. Note: at `0.1.0-DEV` with no registered version, this may amount to confirming `0.1.0` is still the right first release rather than bumping anything.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: No bump. `0.1.0-DEV` has never been registered, so there is no released version for the breaking changes in CHUNK-005, 006, 009, 010 and 011 to break away from — they are all pre-first-release. The version stays as it is and `0.1.0` remains the right first release. No CHANGELOG exists to update; one belongs with the Documenter work, not here.
 
 ## Session ledger
 <!-- The implementer appends one line after each session: `- YYYY-MM-DD CHUNK-XXX (name) → next: CHUNK-YYY` -->
@@ -151,8 +151,18 @@ than a package-local synonym.
 - 2026-10-04 CHUNK-009 (decide-explicitchunkmap-type-parameter-symmetry) → next: CHUNK-010
 - 2026-10-04 CHUNK-010 (decide-selector-argument-position) → next: CHUNK-011
 - 2026-10-04 CHUNK-011 (decide-save-load-export-status) → next: CHUNK-012
+- 2026-10-04 CHUNK-012 (investigate-in-place-byte-fetch) → next: CHUNK-013
+- 2026-10-04 CHUNK-013 (version-bump) → plan complete
 
 ## Open Questions
 
-- CHUNK-009, CHUNK-010 and CHUNK-011 are `decide` chunks: the direction matters and either answer is defensible, so they need a call before implementation rather than a guess.
-- CHUNK-012 is deliberately `investigate`: whether an in-place fetch is reachable at all is unknown, and designing one blind risks adding an API nothing can use.
+All thirteen chunks are complete; nothing in this plan is outstanding.
+
+Two things it deliberately did **not** do, recorded so a later pass does not
+re-litigate them:
+
+- `scan(path)` as a sniff-then-scan spelling. CHUNK-010 makes it natural and
+  `sniff_driver` already exists, but it was not part of the decision and it
+  overlaps `ChunkManifest(path)`, which sniffs *and* reads saved manifests.
+- An in-place `fetchrange!`. See CHUNK-012: the fetched buffer is the cache
+  entry, so there is nothing to reuse.
