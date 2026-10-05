@@ -1,20 +1,26 @@
 # AbstractDriver interface and the driver registry used for optional sniffing.
 #
-# Passing a driver explicitly, as in scan(HDF5Driver(), path), is the
+# Passing a driver explicitly, as in scan(path, HDF5Driver()), is the
 # documented way to scan a file. The registry below exists only to support
 # best-effort format sniffing from a bare path.
 
 """
-    scan(driver::AbstractDriver, path; kwargs...) -> ChunkManifest
+    scan(path, driver::AbstractDriver; kwargs...) -> ChunkManifest
 
 Scan the source at `path` with `driver`, returning a [`ChunkManifest`](@ref)
 whose manifests point into `path` without copying or decoding any data.
+
+`path` comes first because it is the data and `driver` selects how to read it,
+matching `ChunkManifests.save(path, group, fmt)` and
+[`ChunkManifest`](@ref)`(path, fmt)`. `driver` is positional rather than a
+keyword because it is the dispatch argument a driver's package adds a method
+on.
 
 Every concrete driver must add a method for its own driver type. This
 fallback throws so a driver that omits one fails at the call site rather than
 returning something silently wrong.
 """
-function scan(driver::AbstractDriver, path; kwargs...)
+function scan(path, driver::AbstractDriver; kwargs...)
     throw(ArgumentError(
         "scan is not implemented for driver $(typeof(driver)) (path=$(repr(path)))"
     ))

@@ -59,7 +59,7 @@ variable. A single-variable scan is therefore georeferenced on its own, with no 
 scan the whole file:
 
 ```julia
-keys(arraysof(scan(HDF5Driver(), "masks.nc"; group="/grounded")))
+keys(arraysof(scan("masks.nc", HDF5Driver(); group="/grounded")))
 # "grounded", "mapping", "x", "y"
 ```
 
@@ -120,8 +120,8 @@ decides whether scanning a remote object is cheap, so the mechanism is explicit:
 | `RangeAccess` | metadata only, coalesced through this package's transports | **not implemented** — needs a custom libhdf5 virtual file driver |
 
 ```julia
-scan(HDF5Driver(), "https://host/granule.h5"; access=DownloadAccess())
-scan(HDF5Driver(), url; access=DownloadAccess(; cachedir="/data/cache", keep=true))
+scan("https://host/granule.h5", HDF5Driver(); access=DownloadAccess())
+scan(url, HDF5Driver(); access=DownloadAccess(; cachedir="/data/cache", keep=true))
 ```
 
 `AutoAccess` (the default) picks per path *and* per available capability; a mechanism you
@@ -157,7 +157,7 @@ archive and publish the manifests next to the data for others to read:
 
 ```julia
 ChunkManifests.save("s3://bucket/manifests/granule", cm, ZarrManifest())
-cm = ChunkManifests.load("s3://bucket/manifests/granule", ZarrManifest())
+cm = ChunkManifest("s3://bucket/manifests/granule", ZarrManifest())
 ```
 
 An `s3://` path needs AWS credentials at the point the store is constructed, before any

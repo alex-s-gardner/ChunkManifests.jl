@@ -359,7 +359,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             # rowbytes = 7*4 = 28; chunkbytes=112 targets 4 rows/chunk, and
             # 12 is divisible by 4 — unrelated to the 5-row strips on disk.
-            group = ChunkManifests.scan(GeoTIFFDriver(; chunkbytes=112), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver(; chunkbytes=112))
             va = ChunkManifests.arraysof(group)["0"]
 
             @test size(va) == (width, height)
@@ -387,7 +387,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=rows, gapbefore=[0, 16],
             )
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test chunkmapof(va) isa ExplicitChunkMap
             @test chunkshapeof(va) == (width, rowsperstrip)
@@ -405,7 +405,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             fakecompressed = [rand(UInt8, 20), rand(UInt8, 14)]
             path = joinpath(dir, "shortstrip.tif")
             _gt_striped(path; width, height, rowsperstrip, bits=16, compression=8, payload=fakecompressed)
-            @test_throws "not a multiple of ROWSPERSTRIP" ChunkManifests.scan(GeoTIFFDriver(), path)
+            @test_throws "not a multiple of ROWSPERSTRIP" ChunkManifests.scan(path, GeoTIFFDriver())
         end
 
         @testset "a short, unpadded final chunk is not a valid Zarr chunk (empirical check)" begin
@@ -449,7 +449,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             path = joinpath(dir, "tiled_deflate.tif")
             _gt_tiled(path; width, height, tilewidth, tilelength, bits=16, compression=8, payload)
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (width, height)
             @test chunkshapeof(va) == (tilewidth, tilelength)
@@ -469,7 +469,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 path; width, height, rowsperstrip, bits=16, compression=8, predictor=2,
                 payload=[Zarr.zcompress(data, Zarr.ZlibCompressor())],
             )
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test length(filtersof(va)) == 1
             @test filtersof(va)[1]["id"] == "tiff_predictor"
@@ -484,7 +484,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 path; width, height, rowsperstrip, bits=32, sampleformat=3, compression=1, predictor=3,
                 payload=_gt_striprows(rand(Float32, width, height), rowsperstrip),
             )
-            @test_throws "Predictor 3" ChunkManifests.scan(GeoTIFFDriver(), path)
+            @test_throws "Predictor 3" ChunkManifests.scan(path, GeoTIFFDriver())
         end
 
         @testset "unsupported compressions rejected by name" begin
@@ -495,7 +495,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                     path; width, height, rowsperstrip, bits=16, compression=comp,
                     payload=[rand(UInt8, 32)],
                 )
-                @test_throws needle ChunkManifests.scan(GeoTIFFDriver(), path)
+                @test_throws needle ChunkManifests.scan(path, GeoTIFFDriver())
             end
         end
 
@@ -507,7 +507,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 path; width, height, rowsperstrip, bits=16, samplesperpixel=1, planarconfig=2,
                 payload=_gt_striprows(data, rowsperstrip),
             )
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (width, height)
             @test dimnamesof(va) == ["x", "y"]
@@ -531,7 +531,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             attrs = attrsof(va)
             @test length(attrs["GeoTransform"]) == 16
@@ -560,7 +560,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test attrsof(va)["crs"] == "EPSG:4326"
         end
@@ -578,7 +578,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test fillvalueof(va) == -9999
         end
@@ -595,7 +595,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             )
             path = joinpath(dir, "page.tif")
             _gt_writetiff(path, tags1, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             @test collect(keys(arraysof(group))) == ["0"]
         end
 
@@ -612,7 +612,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=[Vector{UInt8}(reinterpret(UInt8, vec(data3)))],
             )
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, width, height)
@@ -651,7 +651,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 samplesperpixel=nsp, planarconfig=1, photometric=2, payload,
             )
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, tilewidth, tilelength)
@@ -683,7 +683,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=[compressed],
             )
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test length(filtersof(va)) == 1
             @test filtersof(va)[1]["samplesperpixel"] == nsp
@@ -705,7 +705,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 payload=_gt_planarpayload(data3, rowsperstrip),
             )
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (width, height, nsp)
             @test chunkshapeof(va) == (width, rowsperstrip, 1)
@@ -738,7 +738,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 _gt_entry(279, _GT_LONG, UInt32[width * height * nsp * 2]),
             ]
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * nsp * 2)])
-            @test_throws "BITSPERSAMPLE must be the same for every band" ChunkManifests.scan(GeoTIFFDriver(), path)
+            @test_throws "BITSPERSAMPLE must be the same for every band" ChunkManifests.scan(path, GeoTIFFDriver())
         end
 
         # A full-resolution page (width 9, height 4) plus two reduced-resolution
@@ -763,7 +763,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(9, 4), _gt_pyramidpixels(5, 2), _gt_pyramidpixels(3, 1)]
             _gt_buildpyramid(path, [p0, p1, p2], [2, 3, 0], pixeldata)
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) == ["0", "1", "2"]
             va0, va1, va2 = ChunkManifests.arraysof(group)["0"], ChunkManifests.arraysof(group)["1"], ChunkManifests.arraysof(group)["2"]
 
@@ -839,7 +839,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(overwidth, overheight)]
             _gt_buildpyramid(path, [p0, p1], [2, 0], pixeldata)
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             vaover = ChunkManifests.arraysof(group)["1"]
             expected = ChunkManifests.geotransform_from_scale_tiepoint(ownscale, owntiepoint)
             @test attrsof(vaover)["GeoTransform"] == collect(expected.matrix)
@@ -865,7 +865,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(subwidth, subheight)]
             _gt_buildpyramid(path, [p0, p1], [0, 0], pixeldata)
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) == ["0", "0.sub1"]
             vasub = ChunkManifests.arraysof(group)["0.sub1"]
             @test size(vasub) == (subwidth, subheight)
@@ -884,7 +884,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             p0 = vcat(_gt_pyramidtags(width, height, 0), Any[(330, _GT_LONG, [_GTPageRef(1)])])  # points at itself
             _gt_buildpyramid(path, [p0], [0], [_gt_pyramidpixels(width, height)])
 
-            task = @async ChunkManifests.scan(GeoTIFFDriver(), path)
+            task = @async ChunkManifests.scan(path, GeoTIFFDriver())
             status = timedwait(() -> istaskdone(task), 10.0)
             @test status === :ok  # must terminate well within the timeout, not hang
             status === :ok && @test_throws "revisits" fetch(task)
@@ -898,7 +898,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(width, height)]
             _gt_buildpyramid(path, [p0, pmask], [2, 0], pixeldata)
 
-            group = ChunkManifests.scan(GeoTIFFDriver(), path)
+            group = ChunkManifests.scan(path, GeoTIFFDriver())
             vamask = ChunkManifests.arraysof(group)["1"]
             @test attrsof(vamask)["mask"] == true
             @test attrsof(vamask)["reduced_resolution"] == false
@@ -908,7 +908,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
     @testset "real file: $_GT_JUNK_PATH" begin
         if isfile(_GT_JUNK_PATH)
-            group = ChunkManifests.scan(GeoTIFFDriver(), _GT_JUNK_PATH)
+            group = ChunkManifests.scan(_GT_JUNK_PATH, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (720, 360)
             @test chunkshapeof(va) == (720, 1)
@@ -937,7 +937,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
         end
 
         err = try
-            scan(GeoTIFFDriver(), fn)
+            scan(fn, GeoTIFFDriver())
             nothing
         catch e
             e

@@ -443,7 +443,7 @@ function _walk!(arrays, table, fileindex, f, group, prefix::AbstractString, file
 end
 
 """
-    scan(driver::HDF5Driver, path::AbstractString; group::AbstractString="/") -> ChunkManifest
+    scan(path::AbstractString, driver::HDF5Driver; group::AbstractString="/") -> ChunkManifest
 
 Scan the HDF5 or NetCDF4 file at `path`, starting from `group` (the file
 root, `"/"`, by default). Returns a [`ChunkManifest`](@ref) whose array keys
@@ -463,7 +463,7 @@ whose last-applied filter is shuffle or fletcher32 (see
 `path` and the offending dataset.
 """
 function scan(
-    driver::HDF5Driver, path::AbstractString;
+    path::AbstractString, driver::HDF5Driver;
     group::AbstractString="/", access::SourceAccess=AutoAccess(),
     siblings::Bool=true,
 )

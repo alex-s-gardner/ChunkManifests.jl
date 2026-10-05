@@ -26,6 +26,29 @@ than a package-local synonym.
 ## Decisions
 <!-- Answers to `decide` chunks land here, with the chunk ID. -->
 
+- **CHUNK-009** — Pin `TL` to `UInt64`, and document why each column's eltype is
+  what it is. Reframing without breaking-change cost reversed the earlier lean
+  toward loosening `TI`/`TO`: that is not merely breaking, it is wrong.
+  `INLINE_INDEX == typemax(UInt32)`, so a wider index column turns the inline
+  sentinel into a legitimate table row, and `_chunkstate`/`_remapindex` are
+  typed on `UInt32`. `TO` must be `UInt64` for offsets past 4 GiB. `TL`'s
+  freedom was unused — every driver writes `zeros(UInt64, …)` — so it is the
+  one column where uniformity costs nothing.
+- **CHUNK-010** — `scan(path, driver)`. Both `driver` and `fmt` are dispatch
+  arguments and so cannot be keywords; position was the only question. Base
+  leads with a selector when it is a *type* (`parse`, `convert`) or a stateful
+  context (`rand(rng, …)`), but puts a strategy *instance* after the data
+  (`sort(v; alg=)`). A driver is a strategy instance, and data-first is this
+  review's own rule 2b, already followed by `save` and `load`.
+- **CHUNK-011** — Fold `load` into the constructor; `save` stays unexported.
+  The obstacle was never breakage: FileIO.jl exports `save` and `load`, so
+  exporting them here makes the bare names ambiguous for anyone who also loads
+  an image. `load(path, fmt)` constructs a `ChunkManifest` and
+  `ChunkManifest(path)` already existed, so `ChunkManifest(path, fmt)` retires
+  a clashing name instead of hiding it. `Base.write` was considered and
+  rejected for `save`: it promises bytes and a count, while a `ZarrManifest`
+  writes a directory tree.
+
 ## Chunks
 
 ### CHUNK-001: preflight
@@ -86,20 +109,20 @@ than a package-local synonym.
 ### CHUNK-009: decide-explicitchunkmap-type-parameter-symmetry
 - **Kind**: `decide`
 - **Description**: Tier 2 (2k). `ExplicitChunkMap` (`src/core/types.jl:96-101`) pins `TI<:AbstractArray{UInt32,N}` and `TO<:AbstractArray{UInt64,N}` to exact eltypes while leaving `TL<:AbstractArray{<:Unsigned,N}` free, so a caller may supply a narrow array for chunk lengths but not for offsets, for no stated reason. Two defensible directions: loosen `TI`/`TO` to `<:Unsigned` for symmetry (non-breaking, but admits e.g. `UInt8` offset arrays that overflow on a real file — the caller's choice, surfaced at scan time), or pin `TL` to `UInt64` to match (breaking, and costs the memory saving a narrow length column buys on a large grid). Decide which, then implement.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: `TL` pinned to `AbstractArray{UInt64,N}`. The struct docstring now states the reason for each eltype — sentinel scheme for `index`, >4 GiB offsets for `offset`, match-`offset` for `nbytes` — and distinguishes the fixed element types from the free container types, which a `view` test exercises.
 
 ### CHUNK-010: decide-selector-argument-position
 - **Kind**: `decide`
 - **Description**: Tier 3 (T3-3). The selector object swaps ends across the package: `scan(driver, path)` puts it first, `save(path, group, fmt)` and `load(path, fmt)` put it last. Both have Base precedent — `rand(rng, …)` and `parse(Int, s)` lead with the selector, `read(path, String)` trails it — so neither is wrong, but carrying both in one package makes the surface guessable in neither direction. Options: leave as-is and note the rationale (dispatch object leads, format follows the data it applies to); or align on one. Aligning is breaking.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: `scan(path, driver)` across the fallback (`drivers/driver.jl`), `HDF5Driver` (`drivers/hdf5.jl`), and the `GeoTIFFDriver` method in the TiffImages extension, plus 84 call sites in `test/` and `README.md`. `src/frompath.jl` was done by hand: two of its occurrences are inside error-message strings, which a regex would have mangled — and did, on the first attempt, because `$(` interpolated as a perl special variable. `scan(path)` as sniff-then-scan is now a natural spelling but was not added: not part of the decision.
 
 ### CHUNK-011: decide-save-load-export-status
 - **Kind**: `decide`
 - **Description**: Tier 3 (T3-4). Four sibling entry points carry three different export decisions: `concat` exported; `combine` deliberately not, to avoid clashing with `Rasters.combine` (recorded); `save`/`load` not, with no reason recorded anywhere — presumably the `FileIO.save`/`FileIO.load` clash, which is a good reason that is not written down. Options: leave unexported and record why; export them and accept the clash; or rename to `savemanifest`/`loadmanifest` and export. The second is the only non-breaking-but-hostile option; the third is breaking.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: `load` is gone as a name. Its five methods became `ChunkManifest` constructors across `serialize/zarrnative.jl`, `serialize/kerchunkjson.jl` and the Parquet2 extension; the `function load end` declaration and its fallback became a `ChunkManifest(::Any, ::ManifestFormat)` fallback. `_loadsaved` was deleted rather than ported: its `applicable(load, …)` guard would now always pass, since the fallback applies to everything, and the fallback's own message already names the package to load. `save` keeps its name, unexported, with the FileIO collision finally recorded in a comment. `Parquet2.load` call sites left alone.
 
 ### CHUNK-012: investigate-in-place-byte-fetch
 - **Kind**: `investigate`
@@ -124,7 +147,10 @@ than a package-local synonym.
 - 2026-10-04 CHUNK-005 (regularize-accessor-names) → next: CHUNK-006
 - 2026-10-04 CHUNK-006 (unify-mutator-return-contract) → next: CHUNK-007
 - 2026-10-04 CHUNK-007 (accept-callable-first-in-register_codec) → next: CHUNK-008
-- 2026-10-04 CHUNK-008 (document-the-dimension-spelling-split) → next: CHUNK-009 (needs a decision)
+- 2026-10-04 CHUNK-008 (document-the-dimension-spelling-split) → next: CHUNK-009
+- 2026-10-04 CHUNK-009 (decide-explicitchunkmap-type-parameter-symmetry) → next: CHUNK-010
+- 2026-10-04 CHUNK-010 (decide-selector-argument-position) → next: CHUNK-011
+- 2026-10-04 CHUNK-011 (decide-save-load-export-status) → next: CHUNK-012
 
 ## Open Questions
 

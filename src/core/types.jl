@@ -89,15 +89,24 @@ abstract type AbstractChunkMap{N} end
     ExplicitChunkMap{N}
 
 Chunk map holding one explicit entry per chunk as parallel columns shaped like
-the chunk grid. The column types are free: `Array` for an in-memory manifest,
-a constant-valued array when every chunk shares one file, or a `Zarr.ZArray`
-to page a manifest too large to materialize.
+the chunk grid. The *container* types are free: `Array` for an in-memory
+manifest, a constant-valued array when every chunk shares one file, a `view`
+over a larger grid, or a `Zarr.ZArray` to page a manifest too large to
+materialize.
+
+The element types are fixed, each for its own reason. `index` is `UInt32`
+because the sentinels marking a chunk's state are `0` and `typemax(UInt32)`:
+widening the column would turn the inline sentinel into a legitimate table
+row. `offset` is `UInt64` because a chunk's byte
+offset routinely exceeds what 32 bits can address. `nbytes` is `UInt64` to
+match `offset`; a narrower column would save kilobytes on a realistic grid and
+cost a reader wondering why one of three parallel columns differs.
 """
 struct ExplicitChunkMap{
     N,
     TI<:AbstractArray{UInt32,N},
     TO<:AbstractArray{UInt64,N},
-    TL<:AbstractArray{<:Unsigned,N},
+    TL<:AbstractArray{UInt64,N},
 } <: AbstractChunkMap{N}
     table::PathTable
     index::TI
@@ -451,16 +460,18 @@ function KerchunkParquet(; recordsize::Integer=10000)
     return KerchunkParquet(Int(recordsize))
 end
 
+# Not exported: FileIO.jl exports `save`, and `using FileIO, ChunkManifests`
+# would make the bare name ambiguous for anyone who also loads an image.
+# Reading has no such problem — it is a `ChunkManifest` constructor.
 function save end
-function load end
 
-# The package a format's save/load methods arrive with, for formats whose
+# The package a format's methods arrive with, for formats whose
 # implementation lives in an extension.
 const FORMAT_BACKEND = Dict{Symbol,String}(:KerchunkParquet => "Parquet2")
 
-# Reached only when no concrete save/load method applies, which for an
-# extension-gated format means its triggering package is not loaded. A bare
-# MethodError would name no remedy.
+# Reached only when no concrete method applies, which for an extension-gated
+# format means its triggering package is not loaded. A bare MethodError would
+# name no remedy.
 function _noformatmethod(fmt::ManifestFormat, verb::AbstractString)
     name = nameof(typeof(fmt))
     pkg = get(FORMAT_BACKEND, name, nothing)
@@ -472,7 +483,7 @@ end
 
 save(::Any, ::ChunkManifest, fmt::ManifestFormat; kwargs...) =
     _noformatmethod(fmt, "save")
-load(::Any, fmt::ManifestFormat; kwargs...) = _noformatmethod(fmt, "load")
+ChunkManifest(::Any, fmt::ManifestFormat; kwargs...) = _noformatmethod(fmt, "read")
 
 """
     AbstractDriver

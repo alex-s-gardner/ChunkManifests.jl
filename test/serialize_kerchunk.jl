@@ -42,7 +42,7 @@ import Zarr
 
             manifestpath = joinpath(dir, "refs.json")
             ChunkManifests.save(manifestpath, group, KerchunkJSON())
-            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
+            loaded = ChunkManifest(manifestpath, KerchunkJSON())
 
             @test attrsof(loaded) == attrsof(group)
             va2 = arraysof(loaded)["arr"]
@@ -100,7 +100,7 @@ import Zarr
             manifestpath = joinpath(dir, "fixture.json")
             write(manifestpath, fixturejson)
 
-            group = ChunkManifests.load(manifestpath, KerchunkJSON())
+            group = ChunkManifest(manifestpath, KerchunkJSON())
             @test attrsof(group) == Dict{String,Any}("title" => "fixture")
 
             va = arraysof(group)["arr"]
@@ -168,7 +168,7 @@ import Zarr
             @test haskey(doc["refs"], "arr/0")
             @test !haskey(doc["refs"], "arr/1")
 
-            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
+            loaded = ChunkManifest(manifestpath, KerchunkJSON())
             @test chunkstate(chunkmapof(arraysof(loaded)["arr"]), CartesianIndex(2)) == MISSING_CHUNK
 
             zv = Zarr.zopen(loaded)["arr"]
@@ -203,7 +203,7 @@ import Zarr
                 @test startswith(doc["refs"]["arr/$k"], "base64:")
             end
 
-            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
+            loaded = ChunkManifest(manifestpath, KerchunkJSON())
             m2 = chunkmapof(arraysof(loaded)["arr"])
             for I in CartesianIndices(gridsize)
                 @test chunkstate(m2, I) == INLINE_CHUNK
@@ -240,7 +240,7 @@ import Zarr
 
             manifestpath = joinpath(dir, "refs.json")
             ChunkManifests.save(manifestpath, group, KerchunkJSON())
-            loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
+            loaded = ChunkManifest(manifestpath, KerchunkJSON())
 
             @test Set(keys(arraysof(loaded))) == Set(["a", "grp/b"])
             table_a = tableof(chunkmapof(arraysof(loaded)["a"]))
@@ -258,13 +258,13 @@ import Zarr
                 return path
             end
 
-            @test_throws "missing required \"version\"" ChunkManifests.load(
+            @test_throws "missing required \"version\"" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}("refs" => Dict{String,Any}()))), KerchunkJSON()
             )
-            @test_throws "unsupported kerchunk reference-set version" ChunkManifests.load(
+            @test_throws "unsupported kerchunk reference-set version" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}("version" => 2, "refs" => Dict{String,Any}()))), KerchunkJSON()
             )
-            @test_throws "programmatic reference generation" ChunkManifests.load(
+            @test_throws "programmatic reference generation" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}("version" => 1, "gen" => [], "refs" => Dict{String,Any}()))),
                 KerchunkJSON(),
             )
@@ -278,14 +278,14 @@ import Zarr
                 "compressor" => nothing, "fill_value" => nothing, "order" => "C", "filters" => nothing,
             ))
 
-            @test_throws "no faithful round trip" ChunkManifests.load(
+            @test_throws "no faithful round trip" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1, "refs" => Dict{String,Any}("arr/.zarray" => badzarray)
                 ))),
                 KerchunkJSON(),
             )
 
-            @test_throws "does not parse for array" ChunkManifests.load(
+            @test_throws "does not parse for array" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1,
                     "refs" => Dict{String,Any}("arr/.zarray" => okzarray, "arr/notachunk" => "unused"),
@@ -293,7 +293,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "1 or 3 elements" ChunkManifests.load(
+            @test_throws "1 or 3 elements" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1,
                     "refs" => Dict{String,Any}("arr/.zarray" => okzarray, "arr/0" => [1, 2, 3, 4]),
@@ -301,7 +301,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "a reference value must be" ChunkManifests.load(
+            @test_throws "a reference value must be" ChunkManifest(
                 _write(JSON.json(Dict{String,Any}(
                     "version" => 1,
                     "refs" => Dict{String,Any}("arr/.zarray" => okzarray, "arr/0" => 42),
@@ -333,7 +333,7 @@ import Zarr
             ChunkManifests.save(store, "refs.json", group, KerchunkJSON())
             @test store["refs.json"] !== nothing
 
-            loaded = ChunkManifests.load(store, "refs.json", KerchunkJSON())
+            loaded = ChunkManifest(store, "refs.json", KerchunkJSON())
             m2 = chunkmapof(arraysof(loaded)["arr"])
             for I in CartesianIndices(gridsize)
                 @test chunklocation(m2, I) == chunklocation(manifest, I)

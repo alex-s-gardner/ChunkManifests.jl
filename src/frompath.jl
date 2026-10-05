@@ -7,7 +7,7 @@
 # formats a driver claims but says nothing about whether the file's codecs or
 # layout are supported — that is still settled inside `scan`.
 #
-# `scan(driver, path)` and `load(path, format)` remain the precise entry
+# `scan(path, driver)` and `ChunkManifest(path, format)` remain the precise entry
 # points, and are what to reach for when the driver, the format, or an option
 # like an HDF5 group needs to be stated rather than inferred.
 
@@ -40,15 +40,6 @@ function _savedformat(path::AbstractString)
     return nothing
 end
 
-function _loadsaved(path::AbstractString, fmt::ManifestFormat)
-    applicable(load, path, fmt) || throw(ArgumentError(
-        "$(repr(path)) holds a $(nameof(typeof(fmt))) manifest, but no method can " *
-        "read it. Loading that format needs an extension that is not loaded; for " *
-        "the kerchunk Parquet format, `using Parquet2`",
-    ))
-    return load(path, fmt)
-end
-
 function _scansource(path::AbstractString, access::SourceAccess)
     driver = sniff_driver(path)
     driver === nothing && throw(ArgumentError(
@@ -57,9 +48,9 @@ function _scansource(path::AbstractString, access::SourceAccess)
         "$(join(string.(nameof.(typeof.(DRIVER_REGISTRY))), ", ")). Drivers for " *
         "other formats arrive with their packages — scanning a TIFF or COG needs " *
         "`using TiffImages`. To state the driver yourself, call " *
-        "scan(SomeDriver(), $(repr(path)))",
+        "scan($(repr(path)), SomeDriver())",
     ))
-    return scan(driver, path; access)
+    return scan(path, driver; access)
 end
 
 function _frompath(path::AbstractString, access::SourceAccess)
@@ -73,14 +64,16 @@ function _frompath(path::AbstractString, access::SourceAccess)
             "manifest over a remote URI is not implemented, and a remote source " *
             "cannot be recognized without fetching it. Name the driver and the " *
             "access mechanism instead, as in " *
-            "scan(HDF5Driver(), $(repr(path)); access=DownloadAccess()). Only this " *
+            "scan($(repr(path)), HDF5Driver(); access=DownloadAccess()). Only this " *
             "file is affected — the chunks a manifest references may live " *
             "anywhere, which is what its transport resolves",
         ))
     end
 
+    # A format whose reader lives in an unloaded extension reaches the
+    # ManifestFormat fallback, which names the package to load.
     fmt = ispath(path) ? _savedformat(path) : nothing
-    fmt === nothing || return _loadsaved(path, fmt)
+    fmt === nothing || return ChunkManifest(path, fmt)
 
     isdir(path) && throw(ArgumentError(
         "$(repr(path)) is a directory holding no manifest this package wrote: " *
@@ -110,9 +103,9 @@ manifest *references* may live anywhere, which is what `transport` resolves.
 
 Scanning is the expensive step, so the usual workflow is to scan once, `save`
 the result, and build from the saved manifest afterwards. Call
-[`scan`](@ref)`(driver, path)` or `load(path, format)` directly to state the
-driver or format rather than have it inferred, or to pass an option such as an
-HDF5 group.
+[`scan`](@ref)`(path, driver)` or `ChunkManifest(path, format)` directly to
+state the driver or format rather than have it inferred, or to pass an option
+such as an HDF5 group.
 """
 function ChunkManifest(
     path::AbstractString;

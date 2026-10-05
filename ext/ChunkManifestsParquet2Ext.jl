@@ -246,7 +246,7 @@ function _loadarray(
 end
 
 """
-    load(path, fmt::KerchunkParquet) -> ChunkManifest
+    ChunkManifest(path, fmt::KerchunkParquet) -> ChunkManifest
 
 Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
 the directory `path`. Every array comes back as a [`ExplicitChunkMap`](@ref):
@@ -262,7 +262,7 @@ to do. `fmt.recordsize` must match the directory's own recorded
 `record_size`; group `provenance` is not part of the kerchunk schema and
 comes back empty.
 """
-function ChunkManifests.load(path::AbstractString, fmt::ChunkManifests.KerchunkParquet)
+function ChunkManifests.ChunkManifest(path::AbstractString, fmt::ChunkManifests.KerchunkParquet)
     zmetapath = joinpath(path, ".zmetadata")
     isfile(zmetapath) || throw(ArgumentError(
         "load: \"$path\" has no .zmetadata; not a KerchunkParquet directory"

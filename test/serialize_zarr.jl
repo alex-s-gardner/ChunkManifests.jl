@@ -69,7 +69,7 @@ end
 
             fmt = ZarrManifest(; chunkcells=4, compressor="zstd")
             outdir = ChunkManifests.save(joinpath(dir, "manifest_out"), group, fmt)
-            group2 = ChunkManifests.load(outdir, fmt)
+            group2 = ChunkManifest(outdir, fmt)
             va2 = arraysof(group2)[""]
             manifest2 = chunkmapof(va2)
 
@@ -138,7 +138,7 @@ end
 
             fmt = ZarrManifest()
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
-            group2 = ChunkManifests.load(outdir, fmt)
+            group2 = ChunkManifest(outdir, fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])
             table2 = tableof(manifest2)
 
@@ -165,7 +165,7 @@ end
 
             fmt = ZarrManifest()
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
-            group2 = ChunkManifests.load(outdir, fmt)
+            group2 = ChunkManifest(outdir, fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])
 
             @test manifest2 isa AffineChunkMap
@@ -188,7 +188,7 @@ end
 
             fmt = ZarrManifest()
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
-            group2 = ChunkManifests.load(outdir, fmt)
+            group2 = ChunkManifest(outdir, fmt)
 
             @test Set(collect(keys(arraysof(group2)))) == Set(collect(keys(arrays)))
             for key in keys(arrays)
@@ -237,7 +237,7 @@ end
                 " manifest files (", totalbytes_touched, " of ", totalbytes_before, " manifest bytes)",
             )
 
-            group2 = ChunkManifests.load(outdir, fmt)
+            group2 = ChunkManifest(outdir, fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])
             @test chunklocation(manifest2, I_update)[2] == UInt64(999_000)
             for I in CartesianIndices((n,))
@@ -268,7 +268,7 @@ end
 
             fmt = ZarrManifest(; chunkcells=2)
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
-            manifest2 = chunkmapof(arraysof(ChunkManifests.load(outdir, fmt))["a"])
+            manifest2 = chunkmapof(arraysof(ChunkManifest(outdir, fmt))["a"])
             for I in CartesianIndices(gridsize)
                 @test chunklocation(manifest2, I)[2] == chunklocation(manifest, I)[2]
             end
@@ -289,7 +289,7 @@ end
             fmt = ZarrManifest()
 
             @testset "missing directory" begin
-                @test_throws "no such directory" ChunkManifests.load(joinpath(dir, "nope"), fmt)
+                @test_throws "no such directory" ChunkManifest(joinpath(dir, "nope"), fmt)
             end
 
             va, _ = _contig_zarr_va(dir, 4)
@@ -301,7 +301,7 @@ end
                 doc = JSON.parse(read(jsonpath, String); dicttype=Dict{String,Any})
                 delete!(doc, "format_version")
                 write(jsonpath, JSON.json(doc))
-                @test_throws "format_version" ChunkManifests.load(outdir, fmt)
+                @test_throws "format_version" ChunkManifest(outdir, fmt)
             end
 
             @testset "wrong format_version value" begin
@@ -310,7 +310,7 @@ end
                 doc = JSON.parse(read(jsonpath, String); dicttype=Dict{String,Any})
                 doc["format_version"] = 999
                 write(jsonpath, JSON.json(doc))
-                @test_throws "format_version 999" ChunkManifests.load(outdir, fmt)
+                @test_throws "format_version 999" ChunkManifest(outdir, fmt)
             end
 
             @testset "column shape contradicts recorded chunk grid" begin
@@ -319,7 +319,7 @@ end
                 doc = JSON.parse(read(jsonpath, String); dicttype=Dict{String,Any})
                 doc["arrays"][1]["manifest"]["gridsize"] = [2]
                 write(jsonpath, JSON.json(doc))
-                @test_throws "chunk grid" ChunkManifests.load(outdir, fmt)
+                @test_throws "chunk grid" ChunkManifest(outdir, fmt)
             end
         end
     end
@@ -339,7 +339,7 @@ end
             @test store["manifest.json"] !== nothing
             @test store["arrays/0/index/.zarray"] !== nothing
 
-            group2 = ChunkManifests.load(store, "", fmt)
+            group2 = ChunkManifest(store, "", fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])
             for I in CartesianIndices(chunkgridaxes(manifest))
                 @test chunklocation(manifest2, I) == chunklocation(manifest, I)
@@ -361,7 +361,7 @@ end
             ChunkManifests.save(store, "scans/one", group, fmt)
             @test store["scans/one/manifest.json"] !== nothing
 
-            group2 = ChunkManifests.load(store, "scans/one", fmt)
+            group2 = ChunkManifest(store, "scans/one", fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])
             for I in CartesianIndices(chunkgridaxes(manifest))
                 @test chunklocation(manifest2, I) == chunklocation(manifest, I)
@@ -372,7 +372,7 @@ end
     @testset "store-agnostic: read through Zarr.HTTPStore" begin
         # Zarr.HTTPStore issues one plain GET per key (no Range header), so a
         # server that answers whole-file GETs by relative path is enough to
-        # read a manifest saved locally, by the same `load(store, prefix,
+        # read a manifest saved locally, by the same `ChunkManifest(store, prefix,
         # fmt)` method a DictStore round trip uses above.
         mktempdir() do dir
             va, _ = _contig_zarr_va(dir, 4)
@@ -395,7 +395,7 @@ end
             end
             try
                 url = "http://127.0.0.1:$(HTTP.port(server))"
-                group2 = ChunkManifests.load(Zarr.HTTPStore(url), "", fmt)
+                group2 = ChunkManifest(Zarr.HTTPStore(url), "", fmt)
                 manifest2 = chunkmapof(arraysof(group2)["a"])
                 for I in CartesianIndices(chunkgridaxes(manifest))
                     @test chunklocation(manifest2, I) == chunklocation(manifest, I)
@@ -407,7 +407,7 @@ end
                 # which a manifest directory does not have. Publishing a
                 # manifest for others to read depends on this path working, not
                 # only on the store-based method above.
-                group3 = ChunkManifests.load(url, fmt)
+                group3 = ChunkManifest(url, fmt)
                 manifest3 = chunkmapof(arraysof(group3)["a"])
                 for I in CartesianIndices(chunkgridaxes(manifest))
                     @test chunklocation(manifest3, I) == chunklocation(manifest, I)

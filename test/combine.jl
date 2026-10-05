@@ -22,8 +22,8 @@ end
         _cc_write_h5(fileA, "x", dataA, (2, 3))
         _cc_write_h5(fileB, "x", dataB, (2, 3))
 
-        vaA = arraysof(scan(HDF5Driver(), fileA; group="/x"))["x"]
-        vaB = arraysof(scan(HDF5Driver(), fileB; group="/x"))["x"]
+        vaA = arraysof(scan(fileA, HDF5Driver(); group="/x"))["x"]
+        vaB = arraysof(scan(fileB, HDF5Driver(); group="/x"))["x"]
 
         merged = concat([vaA, vaB]; dims=2)
         @test size(merged) == (4, 15)
