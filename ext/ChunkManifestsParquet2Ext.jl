@@ -1,8 +1,8 @@
 module ChunkManifestsParquet2Ext
 
 using ChunkManifests
-using Parquet2
-using PooledArrays
+import Parquet2
+import PooledArrays
 
 # fsspec's LazyReferenceMapper lays out one directory per Zarr "field" (a
 # key's path with its last, "/"-joined component removed) holding

@@ -1,13 +1,14 @@
 module ChunkManifestsAWSS3Ext
 
 using ChunkManifests
-using AWSS3
+import AWSS3
+import AWS
 
 # Wraps an AWS config together with extra HTTP headers (currently just the
 # requester-pays header) so both can travel in S3Transport's single `aws`
 # field without widening the struct declared in the main package.
 struct _S3Config
-    aws::AWSS3.AWS.AbstractAWSConfig
+    aws::AWS.AbstractAWSConfig
     headers::Dict{String,String}
 end
 
@@ -20,14 +21,14 @@ _headers(aws::_S3Config) = aws.headers
     S3Transport(bucket; aws=nothing, requesterpays=false)
 
 Construct an [`S3Transport`](@ref) for `bucket`. `aws` defaults to
-`AWSS3.AWS.current_aws_config()`. Set `requesterpays=true` to send
+`AWS.current_aws_config()`. Set `requesterpays=true` to send
 `x-amz-request-payer: requester` with every request, as NASA/ESA archive
 buckets commonly require.
 """
 function ChunkManifests.S3Transport(
     bucket::AbstractString; aws=nothing, requesterpays::Bool=false
 )
-    config = aws === nothing ? AWSS3.AWS.current_aws_config() : aws
+    config = aws === nothing ? AWS.current_aws_config() : aws
     wrapped = requesterpays ? _S3Config(config, Dict("x-amz-request-payer" => "requester")) : config
     return ChunkManifests.S3Transport(String(bucket), wrapped)
 end
