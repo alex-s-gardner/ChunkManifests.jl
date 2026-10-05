@@ -152,7 +152,7 @@ end
                 AutoAccess(), HDF5Driver(), "s3://b/k.h5"
             ) isa DownloadAccess
             @test_throws "endpoint form" ChunkManifests.scan(
-                HDF5Driver(), "s3://b/k.h5"; access=ROS3Access()
+                "s3://b/k.h5", HDF5Driver(); access=ROS3Access()
             )
         else
             # The binaries shipped by HDF5_jll are built without the driver, so

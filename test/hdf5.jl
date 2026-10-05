@@ -259,7 +259,7 @@ end
                     [Dict{String,Any}("id" => "shuffle", "elementsize" => sizeof(eltype(a2)))]
             else
                 @test_throws "decoder limitation" scan(
-                    HDF5Driver(), fn; group="/shuffle_multi"
+                    fn, HDF5Driver(); group="/shuffle_multi"
                 )
                 @test_throws "shuffle_multi" scan(fn, HDF5Driver(); group="/shuffle_multi")
             end
