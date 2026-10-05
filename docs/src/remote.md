@@ -49,33 +49,51 @@ same object is local.
 
 ## S3
 
-[`ROS3Access`](@ref) requires an `https://` endpoint rather than an `s3://` URI, because the
-region an `s3://` URI resolves to cannot be recovered from the URI alone.
+[`ROS3Access`](@ref) takes an `https://` endpoint, an `http://` one, or an `s3://` URI.
 
-### A region is required, and usually already in the URL
+### The region
 
 libhdf5 will not open anything without an AWS region, and reports that from inside its own S3
-layer rather than saying what is missing, so the region is resolved before opening.
+layer rather than saying what is missing, so the region is resolved before opening — and in
+most cases without anything being configured.
 
-An AWS endpoint names its region in the host, and that is where it comes from first — so a
-standard S3 URL needs nothing configured:
+An AWS endpoint names its region in the host:
 
 ```julia
 scan("https://bucket.s3.us-west-2.amazonaws.com/granule.h5", HDF5Driver(); access = ROS3Access())
 ```
 
-Both endpoint forms carry it, as do the dualstack and older `s3-<region>` spellings; the
-regionless global endpoints (`bucket.s3.amazonaws.com`) mean `us-east-1`. A host outside
-`amazonaws.com` names no region — an S3-compatible service has its own naming, and a wrong
-guess costs a failed request instead of an error saying what to pass — so for one of those
-the region comes from `region`, then `AWS_REGION`, then `AWS_DEFAULT_REGION`:
+Both endpoint forms carry it, as do the dualstack and older `s3-<region>` spellings.
+
+An `s3://` URI names none, and neither does a regionless endpoint like
+`bucket.s3.amazonaws.com` — a bucket in any region answers there, and S3 redirects rather than
+serving it. So the bucket is asked: one `HEAD` to the regionless endpoint returns
+`x-amz-bucket-region`, without credentials, and on an error response as well as a successful
+one, which resolves a private or requester-pays bucket you cannot read.
+
+```julia
+scan("s3://bucket/granule.h5", HDF5Driver(); access = ROS3Access())
+```
+
+The sources, in order of how specific each is to the object:
+
+| source | costs |
+|---|---|
+| `region` passed to `ROS3Access` | nothing |
+| a region the URL names | nothing |
+| S3's answer for the bucket | one `HEAD` |
+| `AWS_REGION`, then `AWS_DEFAULT_REGION` | nothing |
+
+Scanning throws naming all of them when none answers. A host outside `amazonaws.com` is never
+asked — an S3-compatible service has its own naming, and probing an unrelated host's root is
+not this package's business — so one of those needs `region` or the environment:
 
 ```julia
 scan(url, HDF5Driver(); access = ROS3Access(; region = "us-west-2"))
 ```
 
-Scanning throws naming all three when none resolves. An explicit `region` overrides what the
-URL names.
+The environment comes last on purpose: `AWS_REGION` is an ambient default, and reading a
+`us-west-2` bucket as whatever it happens to say fails the request.
 
 A region on its own reads unauthenticated, which is what a public bucket wants. An
 authenticated bucket needs the driver supplied outright, which overrides `region`:

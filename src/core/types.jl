@@ -595,12 +595,20 @@ Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports.
 `HDF5_jll` carries it from 2.2.3 onward; an environment resolving an earlier
 one needs HDF5.jl pointed at a system library that has it.
 
-libhdf5 needs an AWS region before it will open anything. An AWS endpoint URL
-names its own in the host, as `https://bucket.s3.us-west-2.amazonaws.com/key`
-does, and that is used, so nothing has to be configured to read one. Otherwise
-the region comes from `region`, then `AWS_REGION`, then `AWS_DEFAULT_REGION`,
-and scanning throws naming all three when none resolves. An explicit `region`
-overrides what the URL names.
+Takes an `https://` endpoint, an `http://` one, or an `s3://` URI. An `s3://`
+URI is turned into the endpoint libhdf5 can address; the manifest records the
+URI as given, so chunks are read back through whichever transport it names.
+
+libhdf5 needs an AWS region before it will open anything, and it is resolved
+from the most specific source available: `region`, then a region the URL names
+in its host, then S3's own answer for the bucket — one `HEAD` returning
+`x-amz-bucket-region`, which works without credentials and on an error
+response, so a bucket that cannot be read still resolves — then `AWS_REGION`,
+then `AWS_DEFAULT_REGION`. Scanning throws naming all of them when none
+answers.
+
+A host outside `amazonaws.com` is never asked, since an S3-compatible service
+has its own naming, so one of those needs `region` or the environment.
 
 A region alone reads unauthenticated, which is what a public bucket wants.
 

@@ -185,9 +185,19 @@ What is known, from pointing the driver at URLs of various shapes:
   for the object size, even when that server answers HEAD with
   `Content-Length` and `Accept-Ranges`. Whether libhdf5 requires something
   further of the response, or HTTPS, or genuine S3 semantics, was not run down.
+- Against a real endpoint it did not fail, but it did not finish either. A
+  scan of one GOES-16 NetCDF4 granule in the public `noaa-goes16` bucket, by
+  both `s3://` and regional-endpoint form, ran about fourteen minutes without
+  completing and was stopped. That is not evidence of a hang: the granule is
+  large, ROS3 issues many small ranged GETs with no coalescing of its own, and
+  the run's output was block-buffered so no progress was visible. It does mean
+  a first successful read needs a deliberate attempt — a small object, a
+  timeout, unbuffered logging — rather than being a quick check.
 
-So verifying this needs a real endpoint, and until one read succeeds
-`AutoAccess` selects `DownloadAccess` for every remote URI.
+So verifying this needs a real endpoint and a dedicated attempt. Until one read
+succeeds, `AutoAccess` selects `DownloadAccess` for every remote URI, and the
+absence of any timeout control over libhdf5's own requests is a second reason
+not to put it on the default path.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 
