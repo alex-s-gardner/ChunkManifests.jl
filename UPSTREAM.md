@@ -2,9 +2,9 @@
 
 Each entry is something another repository has to change. Nothing here is a
 defect in this package, and nothing here has been posted by this package's
-authors except where noted. States verified 2026-10-04.
+authors except where noted. States verified 2026-10-05.
 
-## Zarr.jl #354 — merged, release pending
+## Zarr.jl #354 — merged, release pending on #356
 
 [JuliaIO/Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), "Fix
 reading v2 arrays with a shuffle or fletcher32 filter", **merged 2026-10-03**.
@@ -17,7 +17,15 @@ pin blocks registration.
 The fix landed in `ZarrCore/src/Compressors/Compressors.jl`, so it reaches a
 release through `ZarrCore` rather than through the `Zarr` package this one
 depends on — see the next entry. No released version carries it yet:
-`ZarrCore` 0.11.0 was published before the merge.
+`ZarrCore` 0.11.0 was published 2026-09-18, before the merge, and `version` on
+`main` is still `0.11.0`, so the fix sits in an already-released version
+number.
+
+[JuliaIO/Zarr.jl#356](https://github.com/JuliaIO/Zarr.jl/pull/356), "Bump
+ZarrCore to 0.11.1", open. **Opened from this project**, as the one-line change
+that lets a release carry the fix. It bumps the patch version and offers
+`0.12.0` instead, since one of the four unreleased `ZarrCore` commits adds the
+Zarr v3 `dimension_names` field and may be minor-bump territory.
 
 The runtime `zarr_decodes_byte_filters()` probe stays either way: a patched
 branch is version-indistinguishable from an unpatched one, so a version bound
