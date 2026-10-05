@@ -129,24 +129,57 @@ end
                 DownloadAccess
         end
 
+        @testset "the region an endpoint names" begin
+            # Both AWS endpoint forms carry the region in the host, as do the
+            # dualstack and older `s3-<region>` spellings. The regionless
+            # global endpoints mean us-east-1. A host outside amazonaws.com
+            # names none rather than being guessed at.
+            for (uri, region) in (
+                    "https://bkt.s3.us-west-2.amazonaws.com/k.h5" => "us-west-2",
+                    "https://s3.us-west-2.amazonaws.com/bkt/k.h5" => "us-west-2",
+                    "https://bkt.s3.dualstack.eu-central-1.amazonaws.com/k" => "eu-central-1",
+                    "https://bkt.s3-ap-south-1.amazonaws.com/k.h5" => "ap-south-1",
+                    "https://bkt.s3.amazonaws.com/k.h5" => "us-east-1",
+                    "https://s3.amazonaws.com/bkt/k.h5" => "us-east-1",
+                    "https://bkt.s3-external-1.amazonaws.com/k.h5" => "us-east-1",
+                    "https://my.bkt.name.s3.ca-central-1.amazonaws.com/k.h5" => "ca-central-1",
+                    # DNS is case-insensitive, so the host is folded.
+                    "https://BKT.S3.US-WEST-2.AMAZONAWS.COM/k.h5" => "us-west-2",
+                    "https://data.nsidc.earthdatacloud.nasa.gov/x/y.h5" => nothing,
+                    "https://minio.example.com:9000/bkt/k.h5" => nothing,
+                    "https://example.invalid/bkt/k.h5" => nothing,
+                )
+                @test ChunkManifests._hostregion(uri) == region
+            end
+        end
+
         @testset "region resolution" begin
-            uri = "https://h/b/k.h5"
+            uri = "https://h/b/k.h5"          # a host naming no region
+            aws = "https://bkt.s3.us-west-2.amazonaws.com/k.h5"
             withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => nothing) do
                 @test_throws "needs an AWS region" ChunkManifests._ros3driver(
                     ROS3Access(), uri
                 )
+                # An AWS endpoint needs nothing configured at all.
+                @test ChunkManifests._ros3driver(ROS3Access(), aws).aws_region ==
+                    "us-west-2"
                 given = ChunkManifests._ros3driver(ROS3Access(; region = "us-west-2"), uri)
                 @test given.aws_region == "us-west-2"
                 # A region on its own reads unauthenticated.
                 @test given.authenticate == false
             end
-            # AWS_REGION wins over AWS_DEFAULT_REGION, and an explicit region
-            # wins over both.
             withenv("AWS_REGION" => "eu-central-1", "AWS_DEFAULT_REGION" => "ap-south-1") do
+                # AWS_REGION wins over AWS_DEFAULT_REGION for a host naming
+                # neither...
                 @test ChunkManifests._ros3driver(ROS3Access(), uri).aws_region ==
                     "eu-central-1"
+                # ...but the endpoint's own region wins over the environment,
+                # which is an ambient default and would fail the request here.
+                @test ChunkManifests._ros3driver(ROS3Access(), aws).aws_region ==
+                    "us-west-2"
+                # An explicit region wins over both.
                 @test ChunkManifests._ros3driver(
-                    ROS3Access(; region = "us-east-1"), uri
+                    ROS3Access(; region = "us-east-1"), aws
                 ).aws_region == "us-east-1"
             end
             withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => "ap-south-1") do

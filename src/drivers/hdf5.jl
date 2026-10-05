@@ -520,7 +520,8 @@ function _scan_hdf5(
             "ROS3Access needs an http:// or https:// endpoint, got $(repr(uri)). " *
                 "libhdf5's read-only S3 driver addresses objects by endpoint URL, and the " *
                 "region an s3:// URI resolves to is not recoverable from the URI alone — " *
-                "give the endpoint form, or scan with DownloadAccess()",
+                "give the endpoint form, https://bucket.s3.us-west-2.amazonaws.com/key, " *
+                "which names the region as well, or scan with DownloadAccess()",
         )
     )
     return _scan_hdf5_open(
@@ -528,17 +529,51 @@ function _scan_hdf5(
     )
 end
 
+# The region an S3 endpoint URL names, or `nothing` for a host that names none.
+#
+# Both AWS endpoint forms carry it in the host — `<bucket>.s3.<region>.amazonaws.com`
+# and `s3.<region>.amazonaws.com/<bucket>` — as do the dualstack and older
+# `s3-<region>` spellings. The regionless global endpoints mean us-east-1.
+#
+# A host outside amazonaws.com names no region: an S3-compatible service has
+# its own naming, and a wrong guess costs a failed request rather than an
+# error that says what to pass.
+function _hostregion(uri::AbstractString)
+    m = match(r"^https?://([^/?#]+)", uri)
+    m === nothing && return nothing
+    host = first(split(lowercase(m[1]), ':'))
+    endswith(host, ".amazonaws.com") || return nothing
+    labels = split(host, '.')
+    for (i, label) in pairs(labels)
+        (label == "s3" || startswith(label, "s3-")) || continue
+        rest = labels[(i + 1):end]
+        length(rest) >= 2 && first(rest) == "dualstack" && return String(rest[2])
+        length(rest) >= 3 && return String(first(rest))
+        if startswith(label, "s3-")
+            suffix = chop(label; head = 3, tail = 0)
+            return suffix in ("external-1", "accelerate") ? "us-east-1" : String(suffix)
+        end
+        return "us-east-1"
+    end
+    return nothing
+end
+
 # The driver libhdf5 opens an object with. A region is required: with none,
 # libhdf5 fails inside its own S3 layer rather than reporting what is missing,
 # so this resolves one first and says so when it cannot.
 #
-# `AWS_REGION` then `AWS_DEFAULT_REGION` is the order the AWS tools agree on.
+# An endpoint that names its own region is preferred over the environment: the
+# URL is specific to the object, while `AWS_REGION` is an ambient default, and
+# reading a us-west-2 URL as us-east-1 fails the request. Between the two
+# variables, `AWS_REGION` first is the order the AWS tools agree on.
+#
 # A region on its own reads unauthenticated, which is what a public bucket
 # wants; the three-argument `ROS3` form turns authentication on and so needs
 # credentials, which is what `aws` is for.
 function _ros3driver(access::ROS3Access, uri::AbstractString)
     access.aws === nothing || return access.aws
     region = access.region
+    region === nothing && (region = _hostregion(uri))
     if region === nothing
         for var in ("AWS_REGION", "AWS_DEFAULT_REGION")
             value = get(ENV, var, "")
@@ -551,7 +586,9 @@ function _ros3driver(access::ROS3Access, uri::AbstractString)
     region === nothing && throw(
         ArgumentError(
             "ROS3Access cannot scan $(repr(uri)): libhdf5's read-only S3 driver needs an " *
-                "AWS region and none was given. Pass one as ROS3Access(; region=\"us-west-2\"), " *
+                "AWS region, and this URL names none. An AWS endpoint carries its region " *
+                "in the host, as https://bucket.s3.us-west-2.amazonaws.com/key does; " *
+                "another host does not. Pass one as ROS3Access(; region=\"us-west-2\"), " *
                 "set AWS_REGION or AWS_DEFAULT_REGION, give a configured driver as " *
                 "ROS3Access(; aws=HDF5.Drivers.ROS3(region, id, key)) to read an " *
                 "authenticated bucket, or scan with DownloadAccess(), which fetches the " *
