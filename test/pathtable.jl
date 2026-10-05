@@ -70,8 +70,8 @@
         i2 = push_uri!(t, "s3://old-bucket/b.h5")
         i3 = push_uri!(t, "s3://other-bucket/c.h5")
 
-        n = replace_prefix!(t, "s3://old-bucket" => "s3://new-bucket")
-        @test n == 2
+        # Returns the table, as Base.replace! does, so the call chains.
+        @test replace_prefix!(t, "s3://old-bucket" => "s3://new-bucket") === t
         @test uriof(t, i1) == "s3://new-bucket/a.h5"
         @test uriof(t, i2) == "s3://new-bucket/b.h5"
         @test uriof(t, i3) == "s3://other-bucket/c.h5"

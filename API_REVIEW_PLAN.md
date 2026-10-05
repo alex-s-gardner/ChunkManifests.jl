@@ -68,20 +68,20 @@ than a package-local synonym.
 - **Breaking**: yes
 - **Cluster**: mutator-contract
 - **Description**: Tier 1 (T1-1) + Tier 3 (T3-2), one question twice. Four mutators on the same type family return four different things: `push_uri! → UInt32`, `seturi! → PathTable`, `replace_prefix! → Int`, `setchunk! → m`. Base's `replace!(A, pair)` returns `A`, so `replace_prefix!` should return the `PathTable`; expose the replacement count separately if callers need it (check call sites in `src/` and `test/` first). `push_uri!` returning the assigned index is a defensible deviation — the caller cannot proceed without it — but state that in its docstring rather than leaving it unexplained.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: `replace_prefix!` now returns the `PathTable`, matching `Base.replace!`. The replacement count is dropped rather than relocated: no caller in `src/` read it, and the only reader was one assertion in `test/pathtable.jl`, now asserting `=== t` instead. `push_uri!`'s index return is documented as a deliberate deviation — a chunk map stores that index, so the caller cannot proceed without it.
 
 ### CHUNK-007: accept-callable-first-in-register_codec
 - **Kind**: `implement`
 - **Description**: Tier 2 (2h). `register_codec!(D, filter_id, role, convert)` (`src/codecs/mapping.jl:41`) puts the callable last, so `do`-block syntax is unavailable on a registration call that is exactly the shape `do` is for. Add a method taking the callable first, keeping the existing one. Purely additive.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: Added `register_codec!(convert, D, filter_id, role)` delegating to the existing method. Test in `test/tiffpredictor.jl` registers the same codec both ways against two throwaway driver types and compares role and converted output.
 
 ### CHUNK-008: document-the-dimension-spelling-split
 - **Kind**: `implement`
 - **Description**: Tier 3 (T3-5). Dimensions are addressed three ways — `concat(…; dims::Integer)`, `ManifestSeries(paths, dim)` taking a name, `dimnameof`. The split is deliberate and well-argued (one integer cannot serve a whole group, since `time` is dimension 3 of a data variable and dimension 1 of its own coordinate) but nothing in the API states that integers are within-array and names are across-group. Documentation only, no signature change.
-- **Status**: `not-started`
-- **Notes**:
+- **Status**: `complete`
+- **Notes**: Documented in `concat`'s group-level docstring: a number identifies the same axis in every array under a shared key, which is why `concat` takes one, whereas across a group it would not, which is why `ManifestSeries` takes a name. The `ManifestSeries` docstring already argued the naming side.
 
 ### CHUNK-009: decide-explicitchunkmap-type-parameter-symmetry
 - **Kind**: `decide`
@@ -122,6 +122,9 @@ than a package-local synonym.
 - 2026-10-04 CHUNK-003 (enforce-shared-table-invariant-in-chunkmanifest) → next: CHUNK-004
 - 2026-10-04 CHUNK-004 (report-which-package-to-load-for-extension-gated-entry-points) → next: CHUNK-005
 - 2026-10-04 CHUNK-005 (regularize-accessor-names) → next: CHUNK-006
+- 2026-10-04 CHUNK-006 (unify-mutator-return-contract) → next: CHUNK-007
+- 2026-10-04 CHUNK-007 (accept-callable-first-in-register_codec) → next: CHUNK-008
+- 2026-10-04 CHUNK-008 (document-the-dimension-spelling-split) → next: CHUNK-009 (needs a decision)
 
 ## Open Questions
 

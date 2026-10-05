@@ -284,6 +284,14 @@ transport is a fresh [`TransportContainers`](@ref) that resolves each URI by
 scheme — concatenating a local scan with a remote one yields a manifest whose
 files span both. Use `ChunkManifest(result; transport=...)` to supply
 credentials or restrict what may be fetched.
+
+`dims` is a number here and a name in [`ManifestSeries`](@ref) because the two
+address different things. Every array under a shared key has the same
+dimension order, so one number identifies the same axis in all of them;
+across a whole group it would not, since `time` is dimension 3 of a data
+variable and dimension 1 of its own coordinate. Use
+`ChunkManifests.combine(ManifestSeries(…, :time))` when the arrays disagree on
+where the dimension sits, and this when they agree.
 """
 function concat(
     gs::Union{AbstractVector{<:ChunkManifest},Tuple{Vararg{ChunkManifest}}};

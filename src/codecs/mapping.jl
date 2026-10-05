@@ -34,14 +34,22 @@ const CODEC_REJECTIONS = Dict{Tuple{DataType,Int},String}()
 
 """
     register_codec!(D::Type{<:AbstractDriver}, filter_id, role::CodecRole, convert)
+    register_codec!(convert, D::Type{<:AbstractDriver}, filter_id, role::CodecRole)
 
 Register how driver `D` maps source filter `filter_id` to a Zarr v2 codec.
 `convert` has the signature described in [`CodecMapping`](@ref).
+
+The second form takes the callable first so a registration whose conversion
+runs to several lines can be written as a `do` block.
 """
 function register_codec!(D::Type{<:AbstractDriver}, filter_id::Integer, role::CodecRole, convert)
     CODEC_REGISTRY[(D, Int(filter_id))] = CodecMapping(role, convert)
     return nothing
 end
+
+register_codec!(
+    convert, D::Type{<:AbstractDriver}, filter_id::Integer, role::CodecRole
+) = register_codec!(D, filter_id, role, convert)
 
 """
     register_rejection!(D::Type{<:AbstractDriver}, filter_id, reason::AbstractString)
