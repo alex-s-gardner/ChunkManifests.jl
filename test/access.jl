@@ -122,19 +122,13 @@ end
 
     @testset "ROS3Access" begin
         if HDF5.has_ros3()
-            # A local HTTP server cannot stand in for S3 here. libhdf5's
-            # s3comms URL parser rejects `http://127.0.0.1:<port>/<name>`
-            # before any request is made, and naming a region does not change
-            # that, so reading a real file through the driver needs a genuine
-            # S3-style endpoint and cannot be covered in this suite. What is
-            # covered is that the attempt fails as libhdf5's error rather than
-            # silently reading nothing. The exception type is asserted, not its
-            # text, which differs between platforms.
-            _acc_withserver(read(src), "src.h5") do url
-                @test_throws HDF5.API.H5Error ChunkManifests.scan(
-                    url, HDF5Driver(); access = ROS3Access()
-                )
-            end
+            # Nothing here points the driver at a live server. A local HTTP
+            # server cannot stand in for S3 — libhdf5 addresses an object by a
+            # URL it reads a bucket and a key out of — and an attempt through
+            # one leaves the test process unable to exit on Windows: every
+            # testset passes and the run then sits idle until the job's
+            # timeout. Reading through this driver needs a real endpoint, so it
+            # is covered nowhere.
 
             # On such a build AutoAccess prefers reading in place.
             @test ChunkManifests.resolve_access(
