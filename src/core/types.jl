@@ -549,9 +549,13 @@ abstract type SourceAccess end
 """
     AutoAccess()
 
-Choose a mechanism per path and per available capability: a local path is read
-directly, and a remote one is read in place where the driver and the
-underlying library can, otherwise fetched to a local cache.
+Choose a mechanism per path: a local path is read directly, a remote one is
+fetched to a local cache.
+
+A driver whose library can read a remote object in place may select that
+instead, but none does: [`ROS3Access`](@ref) is the only such mechanism and
+reading through it is unverified, so it is asked for by name rather than
+chosen here.
 """
 struct AutoAccess <: SourceAccess end
 
@@ -582,7 +586,7 @@ struct DownloadAccess <: SourceAccess
 end
 
 """
-    ROS3Access(; aws=nothing)
+    ROS3Access(; region=nothing, aws=nothing)
 
 Read the object in place through HDF5's read-only S3 virtual file driver, so
 only the metadata libhdf5 actually touches is transferred.
@@ -591,16 +595,35 @@ Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports.
 `HDF5_jll` carries it from 2.2.3 onward; an environment resolving an earlier
 one needs HDF5.jl pointed at a system library that has it.
 
-`aws` is the `HDF5.Drivers.ROS3` to open the object with, and `nothing` takes
-`HDF5.Drivers.ROS3()`, which declares no region. libhdf5 addresses an object by
-S3-style endpoint URL and parses it before issuing any request, so a URL it
-does not recognize as one fails there whatever the region says.
+libhdf5 needs an AWS region before it will open anything, and takes one from
+`region`, or failing that from `AWS_REGION` or `AWS_DEFAULT_REGION`. A region
+alone reads unauthenticated, which is what a public bucket wants. Scanning
+throws, naming all three, when no region resolves.
+
+`aws` supplies an `HDF5.Drivers.ROS3` outright and overrides `region`, which is
+the way to read an authenticated bucket:
+
+```julia
+ROS3Access(; aws = HDF5.Drivers.ROS3(region, secret_id, secret_key))
+```
+
+libhdf5 addresses an object by a URL it can read a bucket and a key out of, so
+a URL carrying neither — one with a single path segment — is refused by its
+parser before any request is made.
+
+!!! warning
+    No read through this driver has been verified end to end. [`AutoAccess`](@ref)
+    therefore chooses [`DownloadAccess`](@ref) for a remote object and never
+    this, so reading in place is something you ask for by name.
 """
 struct ROS3Access <: SourceAccess
+    region::Union{Nothing, String}
     aws::Any
 end
 
-ROS3Access(; aws = nothing) = ROS3Access(aws)
+function ROS3Access(; region = nothing, aws = nothing)
+    return ROS3Access(region === nothing ? nothing : String(region), aws)
+end
 
 function DownloadAccess(;
         transport::AbstractTransport = TransportContainers(),

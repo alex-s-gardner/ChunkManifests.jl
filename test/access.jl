@@ -121,50 +121,78 @@ end
     end
 
     @testset "ROS3Access" begin
+        # AutoAccess never reads in place, on any build: no read through the
+        # driver has been verified, and it refuses URLs an automatic choice
+        # would be handed. Reading in place is asked for by name.
+        for uri in ("https://h/b/k.h5", "http://h/b/k.h5", "s3://b/k.h5")
+            @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), uri) isa
+                DownloadAccess
+        end
+
+        @testset "region resolution" begin
+            uri = "https://h/b/k.h5"
+            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => nothing) do
+                @test_throws "needs an AWS region" ChunkManifests._ros3driver(
+                    ROS3Access(), uri
+                )
+                given = ChunkManifests._ros3driver(ROS3Access(; region = "us-west-2"), uri)
+                @test given.aws_region == "us-west-2"
+                # A region on its own reads unauthenticated.
+                @test given.authenticate == false
+            end
+            # AWS_REGION wins over AWS_DEFAULT_REGION, and an explicit region
+            # wins over both.
+            withenv("AWS_REGION" => "eu-central-1", "AWS_DEFAULT_REGION" => "ap-south-1") do
+                @test ChunkManifests._ros3driver(ROS3Access(), uri).aws_region ==
+                    "eu-central-1"
+                @test ChunkManifests._ros3driver(
+                    ROS3Access(; region = "us-east-1"), uri
+                ).aws_region == "us-east-1"
+            end
+            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => "ap-south-1") do
+                @test ChunkManifests._ros3driver(ROS3Access(), uri).aws_region ==
+                    "ap-south-1"
+            end
+            # A driver supplied outright is used as it stands, region ignored.
+            configured = HDF5.Drivers.ROS3(1, true, "us-east-2", "id", "key")
+            @test ChunkManifests._ros3driver(
+                ROS3Access(; region = "unused", aws = configured), uri
+            ) === configured
+        end
+
         if HDF5.has_ros3()
-            # A local HTTP server cannot stand in for S3 here. libhdf5's
-            # s3comms URL parser rejects `http://127.0.0.1:<port>/<name>`
-            # before any request is made, and naming a region does not change
-            # that, so reading a real file through the driver needs a genuine
-            # S3-style endpoint and cannot be covered in this suite. What is
-            # covered is that the attempt fails as libhdf5's error rather than
-            # silently reading nothing. The exception type is asserted, not its
-            # text, which differs between platforms.
-            _acc_withserver(read(src), "src.h5") do url
+            # An s3:// URI cannot be addressed even by name: the region it
+            # resolves to is not recoverable from the URI.
+            @test_throws "endpoint form" ChunkManifests.scan(
+                "s3://b/k.h5", HDF5Driver(); access = ROS3Access(; region = "us-west-2")
+            )
+
+            # A local HTTP server cannot stand in for S3. libhdf5 parses a URL
+            # it can read a bucket and a key out of, so the two-segment path
+            # here gets past that, and then fails inside its own S3 layer. What
+            # is covered is that the attempt surfaces libhdf5's error rather
+            # than silently reading nothing; the exception type is asserted,
+            # not its text, which differs between platforms.
+            _acc_withserver(read(src), "b/src.h5") do url
                 @test_throws HDF5.API.H5Error ChunkManifests.scan(
-                    url, HDF5Driver(); access = ROS3Access()
+                    url, HDF5Driver(); access = ROS3Access(; region = "us-west-2")
                 )
             end
-
-            # On such a build AutoAccess prefers reading in place.
-            @test ChunkManifests.resolve_access(
-                AutoAccess(), HDF5Driver(), "https://h/k.h5"
-            ) isa ROS3Access
-
-            # An s3:// URI still cannot be addressed: the region is not
-            # recoverable from the URI, so it falls back to fetching.
-            @test ChunkManifests.resolve_access(
-                AutoAccess(), HDF5Driver(), "s3://b/k.h5"
-            ) isa DownloadAccess
-            @test_throws "endpoint form" ChunkManifests.scan(
-                "s3://b/k.h5", HDF5Driver(); access = ROS3Access()
-            )
         else
             # HDF5_jll carries the driver from 2.2.3 onward, so this branch is
             # what an environment resolving an earlier one takes. The message
             # has to name the alternative rather than just fail.
             msg = try
-                ChunkManifests.scan("https://h/k.h5", HDF5Driver(); access = ROS3Access())
+                ChunkManifests.scan(
+                    "https://h/b/k.h5", HDF5Driver();
+                    access = ROS3Access(; region = "us-west-2"),
+                )
                 ""
             catch e
                 sprint(showerror, e)
             end
             @test occursin("has_ros3", msg)
             @test occursin("DownloadAccess", msg)
-            # AutoAccess must not pick a mechanism this build cannot honor.
-            @test ChunkManifests.resolve_access(
-                AutoAccess(), HDF5Driver(), "https://h/k.h5"
-            ) isa DownloadAccess
         end
     end
 

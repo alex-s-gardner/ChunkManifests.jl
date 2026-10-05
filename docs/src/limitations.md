@@ -62,10 +62,15 @@ bitshuffle, and any nonzero per-chunk `filter_mask`.
 ## Remote scanning
 
 Only [`DownloadAccess`](@ref) and [`LocalAccess`](@ref) are verified end to end.
-[`ROS3Access`](@ref) is implemented but unverified. It needs a libhdf5 built with the
-read-only S3 driver, which `HDF5_jll` ships from 2.2.3 onward; `HDF5.has_ros3()` is the
-check, since an environment may resolve an earlier one. Range-based scanning is not
-implemented; it needs a custom libhdf5 virtual file driver. See [Remote sources](@ref).
+[`ROS3Access`](@ref) is implemented but unverified: no read through libhdf5's read-only S3
+driver has been confirmed end to end, which is why [`AutoAccess`](@ref) never selects it and
+[`DownloadAccess`](@ref) is the mechanism to rely on for a remote object. It also needs a
+libhdf5 built with that driver — `HDF5_jll` ships one from 2.2.3, and `HDF5.has_ros3()` is
+the check since an environment may resolve an earlier one — an AWS region, and a URL naming
+both a bucket and a key.
+
+Range-based scanning is not implemented; it needs a custom libhdf5 virtual file driver. See
+[Remote sources](@ref).
 
 ## Not in scope
 

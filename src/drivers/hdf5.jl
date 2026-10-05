@@ -496,17 +496,11 @@ end
 # libhdf5 reads the object in place, so only the metadata it touches moves.
 # No local copy exists to take a size from, and asking for one would cost a
 # request that nothing here needs.
-# Prefer reading an object in place where libhdf5 can, so only the metadata
-# moves. An s3:// URI is fetched instead: libhdf5's driver addresses objects by
-# endpoint URL, and the region one resolves to cannot be recovered from the URI,
-# so a caller wanting it in place passes the https:// form explicitly.
-function _remoteaccess(::HDF5Driver, uri::AbstractString)
-    if HDF5.has_ros3() && (startswith(uri, "https://") || startswith(uri, "http://"))
-        return ROS3Access()
-    end
-    return DownloadAccess()
-end
-
+# This driver does not override `_remoteaccess`, so AutoAccess fetches a remote
+# object rather than reaching ROS3Access, even where libhdf5 has the S3 driver.
+# No read through that driver has been verified, and its URL parser refuses a
+# URL it cannot read a bucket and a key out of, so it is not something an
+# automatic choice can rest on. Reading in place is asked for by name.
 function _scan_hdf5(
         driver::HDF5Driver, uri::AbstractString, access::ROS3Access;
         group::AbstractString, siblings::Bool,
@@ -529,8 +523,42 @@ function _scan_hdf5(
                 "give the endpoint form, or scan with DownloadAccess()",
         )
     )
-    h5driver = access.aws === nothing ? HDF5.Drivers.ROS3() : access.aws
-    return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group, siblings)
+    return _scan_hdf5_open(
+        driver, uri, String(uri), nothing, _ros3driver(access, uri); group, siblings
+    )
+end
+
+# The driver libhdf5 opens an object with. A region is required: with none,
+# libhdf5 fails inside its own S3 layer rather than reporting what is missing,
+# so this resolves one first and says so when it cannot.
+#
+# `AWS_REGION` then `AWS_DEFAULT_REGION` is the order the AWS tools agree on.
+# A region on its own reads unauthenticated, which is what a public bucket
+# wants; the three-argument `ROS3` form turns authentication on and so needs
+# credentials, which is what `aws` is for.
+function _ros3driver(access::ROS3Access, uri::AbstractString)
+    access.aws === nothing || return access.aws
+    region = access.region
+    if region === nothing
+        for var in ("AWS_REGION", "AWS_DEFAULT_REGION")
+            value = get(ENV, var, "")
+            if !isempty(value)
+                region = value
+                break
+            end
+        end
+    end
+    region === nothing && throw(
+        ArgumentError(
+            "ROS3Access cannot scan $(repr(uri)): libhdf5's read-only S3 driver needs an " *
+                "AWS region and none was given. Pass one as ROS3Access(; region=\"us-west-2\"), " *
+                "set AWS_REGION or AWS_DEFAULT_REGION, give a configured driver as " *
+                "ROS3Access(; aws=HDF5.Drivers.ROS3(region, id, key)) to read an " *
+                "authenticated bucket, or scan with DownloadAccess(), which fetches the " *
+                "object once and works anywhere",
+        )
+    )
+    return HDF5.Drivers.ROS3(1, false, region, "", "")
 end
 
 function _scan_hdf5_open(

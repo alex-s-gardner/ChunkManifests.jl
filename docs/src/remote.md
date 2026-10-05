@@ -16,7 +16,7 @@ inferred.
 |---|---|---|
 | [`LocalAccess`](@ref) | a local file, directly | implemented |
 | [`DownloadAccess`](@ref) | the whole object once, into a local cache | implemented; verified end to end over HTTP |
-| [`ROS3Access`](@ref) | metadata only, via libhdf5's read-only S3 driver | implemented, **unverified**; needs a libhdf5 built with that driver, which `HDF5_jll` ships from 2.2.3 onward — check `HDF5.has_ros3()` |
+| [`ROS3Access`](@ref) | metadata only, via libhdf5's read-only S3 driver | implemented, **unverified**; needs a libhdf5 built with that driver (`HDF5_jll` ships one from 2.2.3 — check `HDF5.has_ros3()`) and an AWS region |
 | `RangeAccess` | metadata only, coalesced through this package's transports | **not implemented** — needs a custom libhdf5 virtual file driver |
 
 ```julia
@@ -24,9 +24,13 @@ scan("https://host/granule.h5", HDF5Driver(); access = DownloadAccess())
 scan(url, HDF5Driver(); access = DownloadAccess(; cachedir = "/data/cache", keep = true))
 ```
 
-[`AutoAccess`](@ref), the default, picks per path *and* per available capability. A mechanism
-you name explicitly is never silently substituted, so nothing transfers more than you asked
-for: naming [`ROS3Access`](@ref) on a build of libhdf5 without that driver fails rather than
+[`AutoAccess`](@ref), the default, reads a local path directly and fetches a remote one. It
+never chooses [`ROS3Access`](@ref), on any build: an automatic choice has to work for every
+remote URI, and reading in place neither works for every URI nor has been verified for any.
+Reading in place is something you ask for by name.
+
+A mechanism you name explicitly is never silently substituted, so nothing transfers more than
+you asked for: naming [`ROS3Access`](@ref) on a libhdf5 without that driver fails rather than
 quietly downloading the object.
 
 A manifest built from a cached copy records the **original** URI, so it stays valid for
@@ -48,17 +52,36 @@ same object is local.
 [`ROS3Access`](@ref) requires an `https://` endpoint rather than an `s3://` URI, because the
 region an `s3://` URI resolves to cannot be recovered from the URI alone.
 
-It has to be a real S3-style endpoint. libhdf5 parses the URL as one before issuing any
-request, so an arbitrary HTTP URL that merely serves the bytes — a plain web server, or a
-local one — is rejected at that point, whatever region the driver declares. This is why
-`ROS3Access` is marked unverified: the path cannot be exercised without an actual S3
-endpoint.
+### A region is required
 
-The driver itself is configured by passing one to `aws`:
+libhdf5 will not open anything without an AWS region, and reports that from inside its own S3
+layer rather than saying what is missing, so the region is resolved first — from `region`, then
+`AWS_REGION`, then `AWS_DEFAULT_REGION` — and scanning throws naming all three if none does.
+
+```julia
+scan(url, HDF5Driver(); access = ROS3Access(; region = "us-west-2"))
+```
+
+A region on its own reads unauthenticated, which is what a public bucket wants. An
+authenticated bucket needs the driver supplied outright, which overrides `region`:
 
 ```julia
 scan(url, HDF5Driver(); access = ROS3Access(; aws = HDF5.Drivers.ROS3(region, id, key)))
 ```
+
+### The URL must name a bucket and a key
+
+libhdf5 reads a bucket and a key out of the URL before issuing any request. Both the
+virtual-host form (`https://bucket.s3.region.amazonaws.com/key`) and the path form
+(`https://host/bucket/key`) give it those; a URL with a single path segment does not, and is
+refused by its parser. The host itself need not be an AWS one.
+
+### Unverified
+
+No read through this driver has been verified end to end. A local HTTP server does not stand
+in for S3 — libhdf5 parses a two-segment URL and then fails inside its own S3 layer — so
+confirming it needs a real endpoint. Until then [`DownloadAccess`](@ref) is the mechanism to
+rely on, and the one [`AutoAccess`](@ref) picks.
 
 Reaching S3 for *chunk* bytes, as opposed to scanning, is a transport question rather than an
 access question — see [`S3Transport`](@ref) under [Fetching chunk bytes](@ref).
