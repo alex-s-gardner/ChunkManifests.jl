@@ -331,6 +331,88 @@ import Zarr
         end
     end
 
+    @testset "dtypes a document may declare" begin
+        mktempdir() do dir
+            function _load(dtype)
+                doc = Dict{String, Any}(
+                    "version" => 1,
+                    "refs" => Dict{String, Any}(
+                        ".zgroup" => JSON.json(Dict{String, Any}("zarr_format" => 2)),
+                        "arr/.zarray" => JSON.json(
+                            Dict{String, Any}(
+                                "zarr_format" => 2, "shape" => [2], "chunks" => [2],
+                                "dtype" => dtype, "compressor" => nothing,
+                                "fill_value" => nothing, "order" => "C", "filters" => nothing,
+                            )
+                        ),
+                        "arr/.zattrs" => JSON.json(Dict{String, Any}("_ARRAY_DIMENSIONS" => ["d"])),
+                    ),
+                )
+                path = joinpath(dir, "dtype_$(rand(UInt64)).json")
+                write(path, JSON.json(doc))
+                return eltype(arraysof(ChunkManifest(path, KerchunkJSON()))["arr"])
+            end
+
+            # Fixed-length byte strings: the dtype a CF grid-mapping variable
+            # carries, and what `zarr_dtype_string` emits for one. Zarr.jl
+            # decodes `|S1` as ASCIIChar and wider ones as a string type.
+            @test _load("|S1") === Zarr.ASCIIChar
+            @test _load("|S5") === Zarr.MaxLengthString{5, UInt8}
+            @test _load("<S5") === Zarr.MaxLengthString{5, UInt8}
+
+            @test _load("|u1") === UInt8
+            @test _load("<i4") === Int32
+            @test _load("<f8") === Float64
+            @test _load("|b1") === Bool
+            @test _load("<c8") === ComplexF32
+
+            # One byte has no byte order, and numpy writes all three markers
+            # for it interchangeably.
+            @test _load("<u1") === UInt8
+            @test _load(">u1") === UInt8
+
+            # Multi-byte big-endian is refused. Zarr.jl parses the marker and
+            # then ignores it, so decoding would give wrong values instead of
+            # failing.
+            @test_throws "is big-endian, which cannot be served faithfully" _load(">i4")
+            @test_throws "is big-endian, which cannot be served faithfully" _load(">f8")
+
+            # Element types with no exact Zarr v2 encoding stay refused.
+            @test_throws "no faithful round trip" _load("<U10")
+            @test_throws "no faithful round trip" _load("<M8[ns]")
+        end
+    end
+
+    # A NetCDF4 writer gives its CF grid-mapping variable a fixed-length-string
+    # dtype, which none of the synthetic documents above carry.
+    # ITSLIVE_PATH comes from test/fixtures.jl.
+    if isfile(ITSLIVE_PATH)
+        @testset "round trip of a scanned NetCDF4 file" begin
+            mktempdir() do dir
+                cm = ChunkManifest(ITSLIVE_PATH)
+                @test ChunkManifests.zarr_dtype_string(eltype(arraysof(cm)["mapping"])) == "|S1"
+
+                path = joinpath(dir, "mask.json")
+                ChunkManifests.save(path, cm, KerchunkJSON())
+                loaded = ChunkManifest(path, KerchunkJSON())
+
+                @test Set(keys(arraysof(loaded))) == Set(keys(arraysof(cm)))
+                for k in keys(arraysof(cm))
+                    a, b = arraysof(cm)[k], arraysof(loaded)[k]
+                    @test chunkshapeof(a) == chunkshapeof(b)
+                    @test chunkgridsize(chunkmapof(a)) == chunkgridsize(chunkmapof(b))
+                    # Byte-compatible rather than identical: `|S1` decodes as
+                    # ASCIIChar, so the scanned HDF5 string type does not come
+                    # back as itself. The declared dtype is what must match.
+                    @test ChunkManifests.zarr_dtype_string(eltype(a)) ==
+                        ChunkManifests.zarr_dtype_string(eltype(b))
+                end
+            end
+        end
+    else
+        @warn "ItsLiveMasks fixture not found; skipping the scanned-NetCDF4 round trip" ITSLIVE_PATH
+    end
+
     @testset "store-agnostic: round trip through an in-memory Zarr.DictStore" begin
         # `save`/`load` reach the filesystem only by resolving `path` to a
         # store and a key within it; a `DictStore` round trip proves the

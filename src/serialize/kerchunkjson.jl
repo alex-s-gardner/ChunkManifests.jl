@@ -42,10 +42,27 @@ function _parsejsonstring(value, path, key)
     return JSON.parse(value)
 end
 
-# `zarr_dtype_string` only emits Bool, fixed-width (un)signed integers,
-# floating-point and complex-float dtype strings; the inverse accepts
-# exactly that range and rejects everything else (object, fixed-length
-# string, datetime) with the file and key named.
+# Byte-order markers numpy puts at the head of a dtype string. `'|'` spells
+# "does not apply", `'='` the host's order.
+const _DTYPE_BYTEORDERS = ('<', '>', '|', '=')
+
+# Splits "<i4" into ('<', "i4"). A dtype carrying no marker reads as `'|'`.
+function _splitdtype(dtype::AbstractString)
+    isempty(dtype) && return ('|', dtype)
+    order = first(dtype)
+    return order in _DTYPE_BYTEORDERS ? (order, dtype[nextind(dtype, 1):end]) : ('|', dtype)
+end
+
+# A dtype can be read exactly when `zarr_dtype_string` emits it again, so the
+# writer defines the readable set and the two cannot disagree.
+#
+# The byte-order marker is compared separately, because `Zarr.typestr` parses it
+# and then discards it: ">i4" and "<i4" both give `Int32`. A big-endian dtype
+# would therefore decode as little-endian and yield wrong values rather than
+# fail, which is what `_checkbyteorder` refuses for HDF5 datasets and what this
+# refuses here. Single-byte elements and strings have no byte order to get
+# wrong, and numpy writes both "|u1" and "<u1", so the marker is not compared
+# for those.
 function _juliadtype(dtype, path, key)
     dtype isa AbstractString || throw(
         ArgumentError(
@@ -58,11 +75,34 @@ function _juliadtype(dtype, path, key)
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$path: $key: invalid Zarr v2 dtype string $(repr(dtype)): $(e.msg)"))
     end
-    isvalid = T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat || T <: Complex{<:AbstractFloat}
-    isvalid || throw(
+    canonical = try
+        zarr_dtype_string(T)
+    catch e
+        e isa ArgumentError || rethrow()
+        throw(
+            ArgumentError(
+                "$path: $key: dtype $(repr(dtype)) parses to Julia type $T, which has no " *
+                    "faithful round trip through this package's Zarr v2 dtype encoding",
+            )
+        )
+    end
+    order, kind = _splitdtype(dtype)
+    _, canonicalkind = _splitdtype(canonical)
+    kind == canonicalkind || throw(
         ArgumentError(
-            "$path: $key: dtype $(repr(dtype)) parses to Julia type $T, which has no " *
-                "faithful round trip through this package's Zarr v2 dtype encoding",
+            "$path: $key: dtype $(repr(dtype)) parses to Julia type $T, which this " *
+                "package encodes as $(repr(canonical)); reading under one spelling and " *
+                "writing back under the other would change the declared type",
+        )
+    )
+    byteordermatters = sizeof(T) > 1 && first(canonicalkind) != 'S'
+    (order == '>' && byteordermatters) && throw(
+        ArgumentError(
+            "$path: $key: dtype $(repr(dtype)) is big-endian, which cannot be served " *
+                "faithfully. This store passes a source's bytes through untouched and " *
+                "Zarr.jl ignores the byte-order marker when decoding, so the values " *
+                "would be wrong rather than refused. Use $(repr(canonical)) for " *
+                "little-endian data.",
         )
     )
     return T
@@ -248,7 +288,7 @@ end
 
 Write `group` as a kerchunk JSON reference-set document to `path`. `path`
 names one document, not a directory: it is resolved to a store through
-`Zarr.storefromstring`, the same mechanism [`save(path, group, fmt::ZarrManifest)`](@ref)
+`Zarr.storefromstring`, the same mechanism the [`ZarrManifest`](@ref) method
 uses, so `path` may equally be a local file path or an `s3://`, `gs://`,
 `http://`, or `https://` URI.
 
