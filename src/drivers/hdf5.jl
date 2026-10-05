@@ -496,17 +496,11 @@ end
 # libhdf5 reads the object in place, so only the metadata it touches moves.
 # No local copy exists to take a size from, and asking for one would cost a
 # request that nothing here needs.
-# Prefer reading an object in place where libhdf5 can, so only the metadata
-# moves. An s3:// URI is fetched instead: libhdf5's driver addresses objects by
-# endpoint URL, and the region one resolves to cannot be recovered from the URI,
-# so a caller wanting it in place passes the https:// form explicitly.
-function _remoteaccess(::HDF5Driver, uri::AbstractString)
-    if HDF5.has_ros3() && (startswith(uri, "https://") || startswith(uri, "http://"))
-        return ROS3Access()
-    end
-    return DownloadAccess()
-end
-
+# This driver does not override `_remoteaccess`, so AutoAccess fetches a remote
+# object rather than reaching ROS3Access, even where libhdf5 has the S3 driver.
+# No read through that driver has been verified, and its URL parser refuses a
+# URL it cannot read a bucket and a key out of, so it is not something an
+# automatic choice can rest on. Reading in place is asked for by name.
 function _scan_hdf5(
         driver::HDF5Driver, uri::AbstractString, access::ROS3Access;
         group::AbstractString, siblings::Bool,
@@ -521,16 +515,178 @@ function _scan_hdf5(
                 "anywhere",
         )
     )
-    (startswith(uri, "https://") || startswith(uri, "http://")) || throw(
+    _isros3uri(uri) || throw(
         ArgumentError(
-            "ROS3Access needs an http:// or https:// endpoint, got $(repr(uri)). " *
-                "libhdf5's read-only S3 driver addresses objects by endpoint URL, and the " *
-                "region an s3:// URI resolves to is not recoverable from the URI alone — " *
-                "give the endpoint form, or scan with DownloadAccess()",
+            "ROS3Access needs an s3://, http:// or https:// URI, got $(repr(uri)). " *
+                "libhdf5's read-only S3 driver addresses objects by endpoint URL — give " *
+                "one, or an s3:// URI whose bucket this can turn into one, or scan with " *
+                "DownloadAccess()",
         )
     )
-    h5driver = access.aws === nothing ? HDF5.Drivers.ROS3() : access.aws
-    return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group, siblings)
+    region = _ros3region(access, uri)
+    h5driver = access.aws === nothing ?
+        HDF5.Drivers.ROS3(1, false, region, "", "") : access.aws
+    # The recorded URI is the one the caller named, so a manifest built from an
+    # s3:// URI keeps it and reads later through S3Transport, while libhdf5 is
+    # given the endpoint form it can address.
+    return _scan_hdf5_open(
+        driver, _ros3endpoint(uri, region), String(uri), nothing, h5driver; group, siblings
+    )
+end
+
+_isros3uri(uri::AbstractString) =
+    startswith(uri, "https://") || startswith(uri, "http://") || startswith(uri, "s3://")
+
+# The endpoint URL libhdf5 opens. An s3:// URI names no host, so one is built
+# from its bucket and the resolved region; anything else is already an endpoint.
+function _ros3endpoint(uri::AbstractString, region::AbstractString)
+    startswith(uri, "s3://") || return String(uri)
+    rest = SubString(uri, nextind(uri, 0, ncodeunits("s3://") + 1))
+    slash = findfirst('/', rest)
+    (slash === nothing || slash == firstindex(rest)) && throw(
+        ArgumentError(
+            "ROS3Access cannot scan $(repr(uri)): an s3:// URI needs a bucket and a key, " *
+                "as s3://bucket/path/to/granule.h5 does"
+        )
+    )
+    bucket = SubString(rest, firstindex(rest), prevind(rest, slash))
+    key = SubString(rest, nextind(rest, slash))
+    isempty(key) && throw(
+        ArgumentError(
+            "ROS3Access cannot scan $(repr(uri)): an s3:// URI needs a key after the " *
+                "bucket, as s3://bucket/path/to/granule.h5 does"
+        )
+    )
+    return "https://$bucket.s3.$region.amazonaws.com/$key"
+end
+
+# The region an S3 endpoint URL names, or `nothing` for a URL naming none.
+#
+# Both AWS endpoint forms carry it in the host — `<bucket>.s3.<region>.amazonaws.com`
+# and `s3.<region>.amazonaws.com/<bucket>` — as do the dualstack and older
+# `s3-<region>` spellings. `s3-external-1` is a us-east-1 alias.
+#
+# The regionless endpoints name none and are not assumed to be us-east-1: a
+# bucket in any region answers at `<bucket>.s3.amazonaws.com`, and S3 redirects
+# to the right region rather than serving it there, so guessing would hand
+# libhdf5 a region that fails the request. `s3-accelerate` spans regions for
+# the same reason. `_discoverregion` resolves these.
+#
+# A host outside amazonaws.com names no region either: an S3-compatible service
+# has its own naming, and a wrong guess costs a failed request rather than an
+# error that says what to pass.
+function _hostregion(uri::AbstractString)
+    m = match(r"^https?://([^/?#]+)", uri)
+    m === nothing && return nothing
+    host = first(split(lowercase(m[1]), ':'))
+    endswith(host, ".amazonaws.com") || return nothing
+    labels = split(host, '.')
+    for (i, label) in pairs(labels)
+        (label == "s3" || startswith(label, "s3-")) || continue
+        rest = labels[(i + 1):end]
+        length(rest) >= 2 && first(rest) == "dualstack" && return String(rest[2])
+        length(rest) >= 3 && return String(first(rest))
+        if startswith(label, "s3-")
+            suffix = chop(label; head = 3, tail = 0)
+            suffix == "external-1" && return "us-east-1"
+            suffix == "accelerate" && return nothing
+            return String(suffix)
+        end
+        return nothing
+    end
+    return nothing
+end
+
+# The bucket an S3 URI names, for asking S3 which region holds it. `nothing`
+# for a URI with no bucket to name, which includes every host outside
+# amazonaws.com: probing an unrelated host's root is not this package's
+# business.
+function _s3bucket(uri::AbstractString)
+    m = match(r"^s3://([^/?#]+)", uri)
+    m === nothing || return String(m[1])
+    m = match(r"^https?://([^/?#]+)(/[^?#]*)?", uri)
+    m === nothing && return nothing
+    host = first(split(lowercase(m[1]), ':'))
+    endswith(host, ".amazonaws.com") || return nothing
+    labels = split(host, '.')
+    i = findfirst(l -> l == "s3" || startswith(l, "s3-"), labels)
+    i === nothing && return nothing
+    # Virtual-host style puts the bucket before the s3 label, and a bucket name
+    # may itself contain dots. Path style puts it in the first path segment.
+    i > 1 && return join(labels[1:(i - 1)], '.')
+    segments = filter(!isempty, split(something(m[2], ""), '/'))
+    return isempty(segments) ? nothing : String(first(segments))
+end
+
+# S3 reports which region holds a bucket in `x-amz-bucket-region`, on the
+# regionless endpoint, without credentials, and on an error response as well as
+# a successful one — so this resolves the region of a bucket that cannot be
+# read, which is what a private or requester-pays bucket needs.
+_regionprobeurl(bucket::AbstractString) = "https://$bucket.s3.amazonaws.com/"
+
+# One HEAD for the region, best effort. A probe that cannot be made says
+# nothing rather than failing: the caller has further sources to try and raises
+# a message naming all of them if none answers. Redirects are not followed,
+# because the redirect itself carries the header.
+function _discoverregion(probeurl::AbstractString; timeout::Real = 10)
+    response = try
+        HTTP.request(
+            "HEAD", probeurl;
+            status_exception = false, redirect = false, retry = false,
+            readtimeout = timeout, connect_timeout = timeout,
+        )
+    catch e
+        e isa InterruptException && rethrow()
+        @debug "S3 region probe failed" probeurl exception = e
+        return nothing
+    end
+    region = HTTP.header(response, "x-amz-bucket-region", "")
+    return isempty(region) ? nothing : String(region)
+end
+
+# The region libhdf5 opens the object with. One is required: given none,
+# libhdf5 fails inside its own S3 layer rather than reporting what is missing,
+# so it is resolved here and its absence reported plainly.
+#
+# Sources in order of how specific each is to the object being read. A region
+# passed in is the caller's instruction. A region the URL names is next, being
+# a fact about that URL. S3's own answer for the bucket comes next and costs
+# one request, which is why a URL that already names a region never makes it.
+# `AWS_REGION` then `AWS_DEFAULT_REGION`, the order the AWS tools agree on, are
+# last: they are ambient defaults, and reading a us-west-2 bucket as whatever
+# the environment happens to say fails the request.
+#
+# A driver given as `aws` carries its own region, which is also what builds an
+# endpoint from an s3:// URI.
+function _ros3region(access::ROS3Access, uri::AbstractString)
+    access.region === nothing || return access.region
+    if access.aws !== nothing
+        given = hasproperty(access.aws, :aws_region) ? String(access.aws.aws_region) : ""
+        isempty(given) || return given
+    end
+    hosted = _hostregion(uri)
+    hosted === nothing || return hosted
+    bucket = _s3bucket(uri)
+    if bucket !== nothing
+        discovered = _discoverregion(_regionprobeurl(bucket))
+        discovered === nothing || return discovered
+    end
+    for var in ("AWS_REGION", "AWS_DEFAULT_REGION")
+        value = get(ENV, var, "")
+        isempty(value) || return value
+    end
+    return throw(
+        ArgumentError(
+            "ROS3Access cannot scan $(repr(uri)): libhdf5's read-only S3 driver needs an " *
+                "AWS region. This URL names none, and asking S3 which region holds the " *
+                "bucket did not answer either — a host outside amazonaws.com is not asked " *
+                "at all. Pass one as ROS3Access(; region=\"us-west-2\"), set AWS_REGION or " *
+                "AWS_DEFAULT_REGION, give a configured driver as " *
+                "ROS3Access(; aws=HDF5.Drivers.ROS3(region, id, key)) to read an " *
+                "authenticated bucket, or scan with DownloadAccess(), which fetches the " *
+                "object once and works anywhere",
+        )
+    )
 end
 
 function _scan_hdf5_open(

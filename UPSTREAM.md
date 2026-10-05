@@ -166,9 +166,38 @@ is why `HDF5.has_ros3()` stays the gate: a caller may sit on an older JLL
 whatever the newest release contains.
 
 **`ROS3Access` remains unverified.** That the driver is now compiled in is not
-the same as the code path working: nothing here has yet opened a real
-`https://` S3 endpoint through it. Confirming `HDF5.has_ros3()` on a resolved
-2.2.3 is the first step, not the whole of it.
+the same as the code path working. `HDF5.has_ros3()` is true on a resolved
+2.2.3, and a region plus a bucket-and-key URL gets past libhdf5's URL parser,
+but no read has completed.
+
+What is known, from pointing the driver at URLs of various shapes:
+
+- `H5FD__s3comms_parse_url` needs a bucket *and* a key. A single path segment
+  (`https://host/file.h5`) is refused; two (`https://host/bucket/file.h5`) and
+  the virtual-host form (`https://bucket.s3.region.amazonaws.com/file.h5`) are
+  accepted. The host need not be an AWS one, so this is not a check for an
+  S3-style endpoint.
+- Without a region, libhdf5 fails in its own S3 layer rather than reporting
+  what is missing. `HDF5.Drivers.ROS3()` carries none, so `_ros3driver`
+  resolves one before opening.
+- A local HTTP server does not stand in for S3. With a two-segment path it
+  gets past the parser and then fails in `H5FD__s3comms_s3r_getsize`, the HEAD
+  for the object size, even when that server answers HEAD with
+  `Content-Length` and `Accept-Ranges`. Whether libhdf5 requires something
+  further of the response, or HTTPS, or genuine S3 semantics, was not run down.
+- Against a real endpoint it did not fail, but it did not finish either. A
+  scan of one GOES-16 NetCDF4 granule in the public `noaa-goes16` bucket, by
+  both `s3://` and regional-endpoint form, ran about fourteen minutes without
+  completing and was stopped. That is not evidence of a hang: the granule is
+  large, ROS3 issues many small ranged GETs with no coalescing of its own, and
+  the run's output was block-buffered so no progress was visible. It does mean
+  a first successful read needs a deliberate attempt — a small object, a
+  timeout, unbuffered logging — rather than being a quick check.
+
+So verifying this needs a real endpoint and a dedicated attempt. Until one read
+succeeds, `AutoAccess` selects `DownloadAccess` for every remote URI, and the
+absence of any timeout control over libhdf5's own requests is a second reason
+not to put it on the default path.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 
