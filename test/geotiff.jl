@@ -362,7 +362,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             group = ChunkManifests.scan(GeoTIFFDriver(; chunkbytes=112), path)
             va = ChunkManifests.arraysof(group)["0"]
 
-            @test shapeof(va) == (width, height)
+            @test size(va) == (width, height)
             @test chunkshapeof(va) == (width, 4)
             @test chunkmapof(va) isa AffineChunkMap
             @test compressorof(va) === nothing
@@ -451,7 +451,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             group = ChunkManifests.scan(GeoTIFFDriver(), path)
             va = ChunkManifests.arraysof(group)["0"]
-            @test shapeof(va) == (width, height)
+            @test size(va) == (width, height)
             @test chunkshapeof(va) == (tilewidth, tilelength)
             @test chunkmapof(va) isa ExplicitChunkMap
             @test compressorof(va) == Dict{String,Any}("id" => "zlib", "level" => -1)
@@ -509,7 +509,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             )
             group = ChunkManifests.scan(GeoTIFFDriver(), path)
             va = ChunkManifests.arraysof(group)["0"]
-            @test shapeof(va) == (width, height)
+            @test size(va) == (width, height)
             @test dimnamesof(va) == ["x", "y"]
 
             store = group
@@ -614,7 +614,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             group = ChunkManifests.scan(GeoTIFFDriver(), path)
             va = ChunkManifests.arraysof(group)["0"]
-            @test shapeof(va) == (nsp, width, height)
+            @test size(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, width, height)
             @test dimnamesof(va) == ["band", "x", "y"]
             @test chunkmapof(va) isa AffineChunkMap
@@ -653,7 +653,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             group = ChunkManifests.scan(GeoTIFFDriver(), path)
             va = ChunkManifests.arraysof(group)["0"]
-            @test shapeof(va) == (nsp, width, height)
+            @test size(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, tilewidth, tilelength)
             @test chunkmapof(va) isa ExplicitChunkMap
 
@@ -707,7 +707,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             group = ChunkManifests.scan(GeoTIFFDriver(), path)
             va = ChunkManifests.arraysof(group)["0"]
-            @test shapeof(va) == (width, height, nsp)
+            @test size(va) == (width, height, nsp)
             @test chunkshapeof(va) == (width, rowsperstrip, 1)
             @test dimnamesof(va) == ["x", "y", "band"]
             @test chunkmapof(va) isa ExplicitChunkMap
@@ -767,9 +767,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) == ["0", "1", "2"]
             va0, va1, va2 = ChunkManifests.arraysof(group)["0"], ChunkManifests.arraysof(group)["1"], ChunkManifests.arraysof(group)["2"]
 
-            @test shapeof(va0) == (9, 4)
-            @test shapeof(va1) == (5, 2)
-            @test shapeof(va2) == (3, 1)
+            @test size(va0) == (9, 4)
+            @test size(va1) == (5, 2)
+            @test size(va2) == (3, 1)
             @test attrsof(va0)["reduced_resolution"] == false
             @test attrsof(va1)["reduced_resolution"] == true
             @test attrsof(va2)["reduced_resolution"] == true
@@ -868,7 +868,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             group = ChunkManifests.scan(GeoTIFFDriver(), path)
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) == ["0", "0.sub1"]
             vasub = ChunkManifests.arraysof(group)["0.sub1"]
-            @test shapeof(vasub) == (subwidth, subheight)
+            @test size(vasub) == (subwidth, subheight)
             @test attrsof(vasub)["reduced_resolution"] == true
             @test attrsof(vasub)["parent"] == "0"
             @test attrsof(vasub)["crs"] == "EPSG:32610"
@@ -910,7 +910,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
         if isfile(_GT_JUNK_PATH)
             group = ChunkManifests.scan(GeoTIFFDriver(), _GT_JUNK_PATH)
             va = ChunkManifests.arraysof(group)["0"]
-            @test shapeof(va) == (720, 360)
+            @test size(va) == (720, 360)
             @test chunkshapeof(va) == (720, 1)
             @test chunkmapof(va) isa ExplicitChunkMap
             @test compressorof(va) == Dict{String,Any}("id" => "zstd", "level" => 0)

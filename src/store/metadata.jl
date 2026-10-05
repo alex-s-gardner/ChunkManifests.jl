@@ -62,7 +62,7 @@ function zarray_json(va::ManifestArray{T,N}) where {T,N}
         # Collected as Int, not left to the tuple's own eltype: a
         # zero-dimensional array's empty tuple collects to a Vector{Union{}},
         # which JSON writes as `{}` rather than the `[]` the spec requires.
-        "shape" => collect(Int, reverse(shapeof(va))),
+        "shape" => collect(Int, reverse(size(va))),
         "chunks" => collect(Int, reverse(chunkshapeof(va))),
         "dtype" => zarr_dtype_string(T),
         "compressor" => compressorof(va),
@@ -139,7 +139,7 @@ function parse_chunkkey(va::ManifestArray{T,N}, key::AbstractString) where {T,N}
         return key == "0" ? CartesianIndex() : nothing
     end
     _countcomponents(key) == N || return nothing
-    shape, chunkshape = shapeof(va), chunkshapeof(va)
+    shape, chunkshape = size(va), chunkshapeof(va)
     gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
     # Zarr key components are Julia dimensions in reverse order (C order).
     # Addressed by position rather than split into a vector: this runs once per

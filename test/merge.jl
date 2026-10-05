@@ -115,9 +115,9 @@ end
         a = _mg_write_h5(joinpath(dir, "a.h5"), ["z" => (Int32.(1:8), (4,))])
         b = _mg_write_h5(joinpath(dir, "b.h5"), ["z" => (Int32.(9:16), (4,))])
         m = ChunkManifest([a, b])
-        @test length(pathtable(m)) == 2
+        @test length(tableof(m)) == 2
         for va in values(arraysof(m))
-            @test pathtable(chunkmapof(va)) === pathtable(m)
+            @test tableof(chunkmapof(va)) === tableof(m)
         end
     end
 

@@ -108,7 +108,7 @@ function concat(
 
     runningshift = 0
     for (i, m) in enumerate(ms)
-        remap = _remaptable!(merged, pathtable(m))
+        remap = _remaptable!(merged, tableof(m))
         index, offset, nbytes, inline = _materialize(m, remap)
         indices[i] = index
         offsets[i] = offset
@@ -223,8 +223,8 @@ function concat(
             "concat: array $i has dimnames $(dimnamesof(a)), expected $(dimnamesof(ref)) (from array 1)"
         ))
 
-        shape = shapeof(a)
-        refshape = shapeof(ref)
+        shape = size(a)
+        refshape = size(ref)
         for d in eachindex(shape)
             d == dims && continue
             shape[d] == refshape[d] || throw(ArgumentError(
@@ -236,7 +236,7 @@ function concat(
 
     for (i, a) in enumerate(xs)
         i == length(xs) && continue
-        extent = shapeof(a)[dims]
+        extent = size(a)[dims]
         chunklen = chunkshapeof(a)[dims]
         r = extent % chunklen
         r == 0 || throw(ArgumentError(
@@ -253,7 +253,7 @@ function concat(
 
     mergedmanifest = concat(collect(AbstractChunkMap, chunkmapof.(xs)); dims, table)
 
-    mergedshape = ntuple(d -> d == dims ? sum(shapeof(a)[dims] for a in xs) : shapeof(ref)[d], N)
+    mergedshape = ntuple(d -> d == dims ? sum(size(a)[dims] for a in xs) : size(ref)[d], N)
 
     return ManifestArray{eltype(ref)}(
         mergedmanifest,

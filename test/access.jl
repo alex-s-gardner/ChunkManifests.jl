@@ -76,8 +76,8 @@ end
             for I in CartesianIndices(chunkgridaxes(m))
                 @test chunklocation(m, I)[1] == url
             end
-            @test length(pathtable(cm)) == 1
-            @test pathtable(cm)[1].size == UInt64(filesize(src))
+            @test length(tableof(cm)) == 1
+            @test tableof(cm)[1].size == UInt64(filesize(src))
 
             # End to end: the manifest built from a downloaded copy reads its
             # chunks back over HTTP through the transport.
@@ -138,7 +138,7 @@ end
                 end
                 # Nothing was fetched whole, so no size is recorded for the
                 # entry; see _scan_hdf5 for ROS3Access.
-                @test pathtable(cm)[1].size === nothing
+                @test tableof(cm)[1].size === nothing
             end
 
             # On such a build AutoAccess prefers reading in place.

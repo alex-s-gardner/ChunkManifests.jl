@@ -242,7 +242,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
             # more. No chunk of grounded itself is touched, which is what the
             # window counts below establish: it has 36 of them.
             @test counting.count[] == 2
-            @test size(r) == shapeof(va)
+            @test size(r) == size(va)
             @test Rasters.isdisk(r)
 
             counting.count[] = 0

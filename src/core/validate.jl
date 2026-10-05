@@ -207,7 +207,7 @@ function _validate_core(m::AbstractChunkMap, transport::AbstractTransport, stric
     missing_files = FileCheck[]
     mismatched = FileCheck[]
 
-    t = pathtable(m)
+    t = tableof(m)
     for i in eachindex(t.entries)
         entry = t.entries[i]
         status, reason = _probefile(entry, transport)

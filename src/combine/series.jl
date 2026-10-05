@@ -89,8 +89,8 @@ function _checkshared(
         a = arraysof(ms[i])[key]
         eltype(a) == eltype(ref) ||
             disagrees(i, "has element type $(eltype(a)), not $(eltype(ref))")
-        shapeof(a) == shapeof(ref) ||
-            disagrees(i, "has shape $(shapeof(a)), not $(shapeof(ref))")
+        size(a) == size(ref) ||
+            disagrees(i, "has shape $(size(a)), not $(size(ref))")
         chunkshapeof(a) == chunkshapeof(ref) ||
             disagrees(i, "has chunkshape $(chunkshapeof(a)), not $(chunkshapeof(ref))")
         dimnamesof(a) == dimnamesof(ref) ||

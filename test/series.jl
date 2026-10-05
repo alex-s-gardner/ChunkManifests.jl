@@ -59,10 +59,10 @@ end
         cm = ChunkManifests.combine(ManifestSeries([s1, s2], :time))
 
         @test sort(collect(keys(arraysof(cm)))) == ["h", "time", "x"]
-        @test shapeof(arraysof(cm)["h"]) == (4, 15)
-        @test shapeof(arraysof(cm)["time"]) == (15,)
+        @test size(arraysof(cm)["h"]) == (4, 15)
+        @test size(arraysof(cm)["time"]) == (15,)
         # x has no time dimension, so one copy survives rather than growing.
-        @test shapeof(arraysof(cm)["x"]) == (4,)
+        @test size(arraysof(cm)["x"]) == (4,)
         @test dimnamesof(arraysof(cm)["h"]) == ["x", "time"]
         @test provenanceof(cm) ==
             Dict{String,Any}("driver" => "combine", "ninputs" => 2, "dim" => "time")
@@ -77,15 +77,15 @@ end
         @test z["time"][:] == Int32.(1:15)
 
         # Every array of the result shares the one merged table.
-        @test length(pathtable(cm)) == 2
+        @test length(tableof(cm)) == 2
         for va in values(arraysof(cm))
-            @test pathtable(chunkmapof(va)) === pathtable(cm)
+            @test tableof(chunkmapof(va)) === tableof(cm)
         end
     end
 
     @testset "a one-member series still resolves and validates" begin
         cm = ChunkManifests.combine(ManifestSeries([s1], :time))
-        @test shapeof(arraysof(cm)["h"]) == (4, 6)
+        @test size(arraysof(cm)["h"]) == (4, 6)
         @test Zarr.zopen(cm)["h"][:, :] == h1
     end
 
@@ -96,8 +96,8 @@ end
 
         # :shape cannot see the difference — identical shape, chunks, dtype and
         # dimnames — which is exactly why :values exists.
-        @test shapeof(arraysof(ChunkManifests.combine(ser))["x"]) == (4,)
-        @test shapeof(arraysof(ChunkManifests.combine(ser; check=:none))["x"]) == (4,)
+        @test size(arraysof(ChunkManifests.combine(ser))["x"]) == (4,)
+        @test size(arraysof(ChunkManifests.combine(ser; check=:none))["x"]) == (4,)
 
         err = try
             ChunkManifests.combine(ser; check=:values)
@@ -134,8 +134,8 @@ end
         lenient = ChunkManifests.combine(
             ManifestSeries([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time); check=:none
         )
-        @test shapeof(arraysof(lenient)["x"]) == (4,)
-        @test shapeof(arraysof(lenient)["h"]) == (8,)
+        @test size(arraysof(lenient)["x"]) == (4,)
+        @test size(arraysof(lenient)["h"]) == (8,)
 
         @test_throws "check=:bogus is not one of" ChunkManifests.combine(ser; check=:bogus)
     end
@@ -160,7 +160,7 @@ end
 
         # As the last member it is accepted.
         ok = ChunkManifests.combine(ManifestSeries([s1, ragged], :time))
-        @test shapeof(arraysof(ok)["h"]) == (4, 16)
+        @test size(arraysof(ok)["h"]) == (4, 16)
         @test Zarr.zopen(ok)["h"][:, :] == hcat(h1, reshape(Int32.(1:40), 4, 10))
     end
 
@@ -234,7 +234,7 @@ end
             ManifestSeries([m1, m2], :time); attrs=Dict("mission" => "M")
         )
         @test attrsof(override) == Dict{String,Any}("mission" => "M")
-        @test shapeof(arraysof(override)["h"]) == (8,)
+        @test size(arraysof(override)["h"]) == (8,)
     end
 
     @testset "combine is not exported" begin

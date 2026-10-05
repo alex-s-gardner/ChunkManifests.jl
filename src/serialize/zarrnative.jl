@@ -193,7 +193,7 @@ function _save_chunkmanifest(
     return Dict{String,Any}(
         "kind" => "chunk",
         "gridsize" => collect(gridsize),
-        "pathtable" => _pathtable_to_json(manifest.table),
+        "tableof" => _pathtable_to_json(manifest.table),
         "inline" => inline,
     )
 end
@@ -202,7 +202,7 @@ function _save_affinemanifest(manifest::AffineChunkMap)
     return Dict{String,Any}(
         "kind" => "affine",
         "gridsize" => collect(manifest.gridsize),
-        "pathtable" => _pathtable_to_json(manifest.table),
+        "tableof" => _pathtable_to_json(manifest.table),
         "fileindex" => manifest.fileindex,
         "base" => manifest.base,
         "strides" => collect(manifest.strides),
@@ -244,7 +244,7 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
         doc = Dict{String,Any}(
             "path" => key,
             "dtype" => zarr_dtype_string(eltype(va)),
-            "shape" => collect(shapeof(va)),
+            "shape" => collect(size(va)),
             "chunkshape" => collect(chunkshapeof(va)),
             "fillvalue" => fillvalueof(va),
             "compressor" => compressorof(va),
@@ -307,7 +307,7 @@ end
 function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, arraydoc, label::AbstractString)
     mdoc = arraydoc["manifest"]
     kind = mdoc["kind"]
-    table = _pathtable_from_json(mdoc["pathtable"])
+    table = _pathtable_from_json(mdoc["tableof"])
     gridsize = NTuple{length(mdoc["gridsize"]),Int}(mdoc["gridsize"])
 
     if kind == "chunk"

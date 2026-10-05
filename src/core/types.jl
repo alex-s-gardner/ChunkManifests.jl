@@ -81,7 +81,7 @@ end
 
 Maps each cell of an `N`-dimensional chunk grid to the bytes backing it.
 Subtypes implement [`chunkgridaxes`](@ref), [`chunkstate`](@ref),
-[`chunklocation`](@ref) and [`pathtable`](@ref).
+[`chunklocation`](@ref) and [`tableof`](@ref).
 """
 abstract type AbstractChunkMap{N} end
 
@@ -135,7 +135,23 @@ struct AffineChunkMap{N} <: AbstractChunkMap{N}
     function AffineChunkMap{N}(
         table, fileindex, gridsize, base, strides, chunkbytes
     ) where {N}
-        return new{N}(table, fileindex, gridsize, base, strides, chunkbytes)
+        gridsizetuple = map(Int, Tuple(gridsize))
+        stridestuple = map(UInt64, Tuple(strides))
+        length(gridsizetuple) == N || throw(DimensionMismatch(
+            "AffineChunkMap{$N}: gridsize has $(length(gridsizetuple)) dimensions"
+        ))
+        length(stridestuple) == N || throw(DimensionMismatch(
+            "AffineChunkMap: gridsize has $N dimensions but strides has " *
+            "$(length(stridestuple))"
+        ))
+        1 <= fileindex <= length(table) || throw(ArgumentError(
+            "AffineChunkMap: fileindex $fileindex is out of range for a path table " *
+            "holding $(length(table)) entries",
+        ))
+        return new{N}(
+            table, UInt32(fileindex), NTuple{N,Int}(gridsizetuple), UInt64(base),
+            NTuple{N,UInt64}(stridestuple), UInt32(chunkbytes),
+        )
     end
 end
 
@@ -165,8 +181,48 @@ struct ManifestArray{T,N,M<:AbstractChunkMap{N}}
     function ManifestArray{T,N,M}(
         manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
     ) where {T,N,M}
+        length(shape) == N || throw(ArgumentError(
+            "ManifestArray: shape has $(length(shape)) dimensions but manifest has $N"
+        ))
+        length(chunkshape) == N || throw(ArgumentError(
+            "ManifestArray: chunkshape has $(length(chunkshape)) dimensions but " *
+            "manifest has $N"
+        ))
+        length(dimnames) == N || throw(ArgumentError(
+            "ManifestArray: dimnames has length $(length(dimnames)) but array has " *
+            "$N dimensions"
+        ))
+        haskey(attrs, "_ARRAY_DIMENSIONS") && throw(ArgumentError(
+            "ManifestArray: attrs must not contain \"_ARRAY_DIMENSIONS\"; it is " *
+            "derived from dimnames at serialization time",
+        ))
+
+        shapetuple = NTuple{N,Int}(Tuple(shape))
+        chunkshapetuple = NTuple{N,Int}(Tuple(chunkshape))
+        expected = cld.(shapetuple, chunkshapetuple)
+        actual = chunkgridsize(manifest)
+        expected == actual || throw(DimensionMismatch(
+            "ManifestArray: manifest chunk grid size $actual does not match " *
+            "cld.(shape, chunkshape) = $expected (shape=$shapetuple, " *
+            "chunkshape=$chunkshapetuple)",
+        ))
+
+        fv = if fillvalue === nothing
+            nothing
+        else
+            try
+                convert(T, fillvalue)
+            catch
+                throw(ArgumentError(
+                    "ManifestArray: fill value $(repr(fillvalue)) is not " *
+                    "representable as the element type $T",
+                ))
+            end
+        end
+
         return new{T,N,M}(
-            manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
+            manifest, shapetuple, chunkshapetuple, fv, compressor, filters, attrs,
+            collect(String, dimnames),
         )
     end
 end
@@ -280,6 +336,20 @@ struct ChunkManifest <: Zarr.AbstractStore
     provenance::Dict{String,Any}
     transport::AbstractTransport
     readahead::ReadaheadCache
+
+    function ChunkManifest(arrays, table, attrs, provenance, transport, readahead)
+        for (key, array) in arrays
+            tableof(chunkmapof(array)) === table || throw(ArgumentError(
+                "ChunkManifest: array $(repr(key)) references a different path " *
+                "table than the manifest. Every array shares the manifest's " *
+                "table by reference, so that repointing a file is one edit and " *
+                "validate costs one request per file rather than per chunk. " *
+                "Use ChunkManifest(; arrays, table), which rewrites the chunk " *
+                "maps onto one table.",
+            ))
+        end
+        return new(arrays, table, attrs, provenance, transport, readahead)
+    end
 end
 
 """
@@ -383,6 +453,26 @@ end
 
 function save end
 function load end
+
+# The package a format's save/load methods arrive with, for formats whose
+# implementation lives in an extension.
+const FORMAT_BACKEND = Dict{Symbol,String}(:KerchunkParquet => "Parquet2")
+
+# Reached only when no concrete save/load method applies, which for an
+# extension-gated format means its triggering package is not loaded. A bare
+# MethodError would name no remedy.
+function _noformatmethod(fmt::ManifestFormat, verb::AbstractString)
+    name = nameof(typeof(fmt))
+    pkg = get(FORMAT_BACKEND, name, nothing)
+    pkg === nothing && throw(ArgumentError(
+        "$verb is not implemented for format $name"
+    ))
+    error("$pkg must be loaded to $verb a $name. Try `using $pkg`.")
+end
+
+save(::Any, ::ChunkManifest, fmt::ManifestFormat; kwargs...) =
+    _noformatmethod(fmt, "save")
+load(::Any, fmt::ManifestFormat; kwargs...) = _noformatmethod(fmt, "load")
 
 """
     AbstractDriver
@@ -511,7 +601,7 @@ function chunkgridsize end
 function chunkstate end
 function chunklocation end
 function inlinebytes end
-function pathtable end
+function tableof end
 function manifestversion end
 
 # PathTable interface.

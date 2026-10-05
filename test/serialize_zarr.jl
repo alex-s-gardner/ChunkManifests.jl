@@ -86,7 +86,7 @@ end
             end
 
             @testset "array and group metadata round-trip" begin
-                @test shapeof(va2) == shape
+                @test size(va2) == shape
                 @test chunkshapeof(va2) == chunkshape
                 @test chunkgridaxes(manifest2) == chunkgridaxes(manifest)
                 @test fillvalueof(va2) == fillvalue
@@ -140,7 +140,7 @@ end
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
             group2 = ChunkManifests.load(outdir, fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])
-            table2 = pathtable(manifest2)
+            table2 = tableof(manifest2)
 
             @test length(table2) == 2
             entryA = table2[idxA]

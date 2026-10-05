@@ -321,7 +321,7 @@ end
         @test Array(Zarr.zopen(back)["d"][:]) == collect(Float64, 1:n)
         # Loading must leave every array on the manifest's own table.
         for a in values(arraysof(back))
-            @test pathtable(chunkmapof(a)) === pathtable(back)
+            @test tableof(chunkmapof(a)) === tableof(back)
         end
     end
 

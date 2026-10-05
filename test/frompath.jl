@@ -59,7 +59,7 @@ end
         ChunkManifests.save(p, ChunkManifest(src), ZarrManifest())
         cm = ChunkManifest(p)
         for a in values(arraysof(cm))
-            @test pathtable(chunkmapof(a)) === pathtable(cm)
+            @test tableof(chunkmapof(a)) === tableof(cm)
         end
     end
 

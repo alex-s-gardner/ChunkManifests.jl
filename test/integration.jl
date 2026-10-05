@@ -246,7 +246,7 @@ end
         if isfile(_IT_ITSLIVE_PATH)
             group = scan(HDF5Driver(), _IT_ITSLIVE_PATH; group="/grounded")
             va = arraysof(group)["grounded"]
-            gridsize = cld.(shapeof(va), chunkshapeof(va))
+            gridsize = cld.(size(va), chunkshapeof(va))
             nchunks = prod(gridsize)
 
             counting = _IT_CountingTransport()

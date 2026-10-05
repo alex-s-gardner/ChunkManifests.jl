@@ -104,7 +104,7 @@ end
             g = scan(HDF5Driver(), ITSLIVE_PATH; group="/grounded")
             grounded = arraysof(g)["grounded"]
             @test eltype(grounded) == UInt8
-            @test shapeof(grounded) == (22896, 18392)
+            @test size(grounded) == (22896, 18392)
             @test chunkshapeof(grounded) == (3816, 3066)
             @test compressorof(grounded) == Dict{String,Any}("id" => "zlib", "level" => 9)
             @test filtersof(grounded) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
@@ -303,7 +303,7 @@ end
         @testset "3-D asymmetric shape and chunking" begin
             g = scan(HDF5Driver(), fn; group="/cube")
             a = arraysof(g)["cube"]
-            @test shapeof(a) == (7, 11, 13)
+            @test size(a) == (7, 11, 13)
             @test chunkshapeof(a) == (3, 4, 5)
             @test ndims(a) == 3
             @test eltype(a) == Float64
@@ -352,7 +352,7 @@ end
         g = scan(HDF5Driver(), fn; group="/mapping")
         va = arraysof(g)["mapping"]
         @test eltype(va) == HDF5.FixedString{1,0}
-        @test shapeof(va) == ()
+        @test size(va) == ()
         @test fillvalueof(va) === nothing
         @test attrsof(va)["grid_mapping_name"] == "polar_stereographic"
         # Zarr.jl accepts no fill value for this dtype, so the NUL byte HDF5
@@ -381,7 +381,7 @@ end
 
             mapping = arraysof(g)["mapping"]
             @test eltype(mapping) == HDF5.FixedString{1,0}
-            @test shapeof(mapping) == ()
+            @test size(mapping) == ()
             attrs = attrsof(mapping)
             @test attrs["grid_mapping_name"] == "polar_stereographic"
             @test only(attrs["spatial_epsg"]) == 3031
@@ -479,7 +479,7 @@ end
             z = Zarr.zopen(g)
             @test z["x"][:] == xv
             @test z["y"][:] == yv
-            @test shapeof(arraysof(g)["grounded"]) == (length(xv), length(yv))
+            @test size(arraysof(g)["grounded"]) == (length(xv), length(yv))
 
             @test collect(keys(arraysof(
                 scan(HDF5Driver(), ITSLIVE_PATH; group="/grounded", siblings=false)
@@ -566,7 +566,7 @@ end
 
         g = scan(HDF5Driver(), fn; group="/u")
         va = arraysof(g)["u"]
-        @test shapeof(va) == (3,)
+        @test size(va) == (3,)
         @test chunkshapeof(va) == (4,)
         @test chunkgridsize(chunkmapof(va)) == (1,)
         # The trailing partial chunk must not be trimmed or mis-sized: the
@@ -618,7 +618,7 @@ end
         @testset "a zero-length dimension yields an empty array, not an error" begin
             g = scan(HDF5Driver(), fn; group="/zerolen")
             va = arraysof(g)["zerolen"]
-            @test shapeof(va) == (0,)
+            @test size(va) == (0,)
             @test chunkgridsize(chunkmapof(va)) == (0,)
             doc = JSON.parse(String(ChunkManifests.zarray_json(va)))
             @test doc["shape"] == [0]

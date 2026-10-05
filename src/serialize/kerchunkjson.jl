@@ -62,7 +62,7 @@ function _juliadtype(dtype, path, key)
     return T
 end
 
-# parse_chunkkey only consults shapeof/chunkshapeof, so a throwaway
+# parse_chunkkey only consults size/chunkshapeof, so a throwaway
 # ManifestArray over an AffineChunkMap sized to match the real chunk grid is
 # enough to reuse it before the real manifest exists; it is discarded once
 # the chunk loop below finishes.

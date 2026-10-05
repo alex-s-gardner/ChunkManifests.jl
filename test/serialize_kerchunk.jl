@@ -46,7 +46,7 @@ import Zarr
 
             @test attrsof(loaded) == attrsof(group)
             va2 = arraysof(loaded)["arr"]
-            @test shapeof(va2) == shapeof(va)
+            @test size(va2) == size(va)
             @test chunkshapeof(va2) == chunkshapeof(va)
             @test eltype(va2) == eltype(va)
             @test fillvalueof(va2) == fillvalueof(va)
@@ -104,7 +104,7 @@ import Zarr
             @test attrsof(group) == Dict{String,Any}("title" => "fixture")
 
             va = arraysof(group)["arr"]
-            @test shapeof(va) == (5,)
+            @test size(va) == (5,)
             @test chunkshapeof(va) == (1,)
             @test eltype(va) == UInt8
             @test fillvalueof(va) == UInt8(255)
@@ -243,8 +243,8 @@ import Zarr
             loaded = ChunkManifests.load(manifestpath, KerchunkJSON())
 
             @test Set(keys(arraysof(loaded))) == Set(["a", "grp/b"])
-            table_a = pathtable(chunkmapof(arraysof(loaded)["a"]))
-            table_b = pathtable(chunkmapof(arraysof(loaded)["grp/b"]))
+            table_a = tableof(chunkmapof(arraysof(loaded)["a"]))
+            table_b = tableof(chunkmapof(arraysof(loaded)["grp/b"]))
             @test table_a === table_b
             @test length(table_a) == 2
         end
