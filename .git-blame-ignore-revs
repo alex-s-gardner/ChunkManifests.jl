@@ -1,0 +1,11 @@
+# Revisions listed here are skipped by `git blame`, so a whole-tree reformat
+# does not mask the commit that last changed a line's meaning.
+#
+# Use with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (already set locally; each clone has to set it once, as git does not read
+# repository config for this.)
+
+# runic formatting (PR #5). This is the commit that introduced the reformat,
+# not its merge commit: a merge introduces no lines of its own, so blame
+# attributes reformatted lines here.
+d5cb46c7711b0ee5963f3b9ce5a7c3ac86c15d7b
