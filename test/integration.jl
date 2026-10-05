@@ -30,17 +30,17 @@ end
 # ChunkManifest with an array at "" makes Zarr.zopen return that array
 # directly, whereas ZarrDatasets.ZarrDataset needs an actual ZGroup to walk.
 function _it_named_group(
-    ::Type{T}=Float64;
-    shape, chunkshape, dimnames, fillvalue=nothing, attrs=Dict{String,Any}(), data=nothing,
-) where {T}
+        ::Type{T} = Float64;
+        shape, chunkshape, dimnames, fillvalue = nothing, attrs = Dict{String, Any}(), data = nothing,
+    ) where {T}
     gridsize = cld.(shape, chunkshape)
     data = data === nothing ? reshape(collect(T, 1:prod(shape)), shape) : data
-    compressor = Dict{String,Any}("id" => "zlib", "level" => 3)
+    compressor = Dict{String, Any}("id" => "zlib", "level" => 3)
 
     dir = mktempdir()
     za = Zarr.zcreate(
         T, Zarr.DirectoryStore(dir), shape...;
-        chunks=chunkshape, compressor=Zarr.ZlibCompressor(3), fill_value=fillvalue,
+        chunks = chunkshape, compressor = Zarr.ZlibCompressor(3), fill_value = fillvalue,
     )
     za[CartesianIndices(shape)] = data
 
@@ -58,8 +58,8 @@ function _it_named_group(
         manifest, shape, chunkshape; fillvalue, compressor, dimnames, attrs
     )
     group = ChunkManifest(;
-        arrays=Dict{String,ManifestArray}("data" => va),
-        attrs=Dict{String,Any}("title" => "demo"),
+        arrays = Dict{String, ManifestArray}("data" => va),
+        attrs = Dict{String, Any}("title" => "demo"),
     )
     return group, data
 end
@@ -77,7 +77,7 @@ end
         fillvalue = -9999.0
 
         group, data = _it_named_group(;
-            shape, chunkshape, dimnames, fillvalue, attrs=Dict{String,Any}("units" => "m")
+            shape, chunkshape, dimnames, fillvalue, attrs = Dict{String, Any}("units" => "m")
         )
         mstore = group
         ds = ZarrDatasets.ZarrDataset(mstore)
@@ -119,7 +119,7 @@ end
         group, data = _it_named_group(; shape, chunkshape, dimnames)
 
         counting = _IT_CountingTransport()
-        mstore = ChunkManifest(group; transport=counting)
+        mstore = ChunkManifest(group; transport = counting)
         za = Zarr.zopen(mstore).arrays["data"]
 
         @test za isa _IT_DiskArrays.AbstractDiskArray
@@ -151,8 +151,8 @@ end
         # Int16 store with a Float64 result makes an eager decode obvious.
         group, _ = _it_named_group(
             Int16;
-            shape, chunkshape, dimnames=["x", "y"], fillvalue, data=stored,
-            attrs=Dict{String,Any}(
+            shape, chunkshape, dimnames = ["x", "y"], fillvalue, data = stored,
+            attrs = Dict{String, Any}(
                 "scale_factor" => 0.5, "add_offset" => 100.0, "units" => "m"
             ),
         )
@@ -160,7 +160,7 @@ end
         # Readahead would prefetch byte-adjacent chunks and inflate the counts
         # below, which measure how many chunks a window actually requires.
         mstore = ChunkManifest(
-            group; transport=counting, readahead=ReadaheadCache(; maxbytes=0)
+            group; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)
         )
 
         ds = ZarrDatasets.ZarrDataset(mstore)
@@ -174,7 +174,7 @@ end
         @test cfvar isa _IT_CDM.CFVariable
         @test cfvar isa _IT_DiskArrays.AbstractDiskArray
         @test eltype(rawvar) == Int16
-        @test eltype(cfvar) == Union{Missing,Float64}
+        @test eltype(cfvar) == Union{Missing, Float64}
 
         # The chunk grid survives both the ZarrVariable and the CF wrapper.
         za = Zarr.zopen(mstore).arrays["data"]
@@ -184,9 +184,9 @@ end
         @test _IT_DiskArrays.haschunks(cfvar) == _IT_DiskArrays.haschunks(za)
         @test counting.count[] == 0
 
-        decoded = Union{Missing,Float64}[
+        decoded = Union{Missing, Float64}[
             stored[I] == fillvalue ? missing : stored[I] * 0.5 + 100.0
-            for I in CartesianIndices(shape)
+                for I in CartesianIndices(shape)
         ]
 
         # One chunk in, one chunk out — the decode does not force the rest.
@@ -225,7 +225,7 @@ end
             end
 
             for (name, dimnames_expected) in (("grounded", ("x", "y")),)
-                group = scan(_IT_ITSLIVE_PATH, HDF5Driver(); group="/$name")
+                group = scan(_IT_ITSLIVE_PATH, HDF5Driver(); group = "/$name")
                 mstore = group
                 ds = ZarrDatasets.ZarrDataset(mstore)
                 v = _IT_CDM.variable(ds, name)
@@ -244,13 +244,13 @@ end
 
     @testset "partial read on a real file fetches far fewer chunks than exist" begin
         if isfile(_IT_ITSLIVE_PATH)
-            group = scan(_IT_ITSLIVE_PATH, HDF5Driver(); group="/grounded")
+            group = scan(_IT_ITSLIVE_PATH, HDF5Driver(); group = "/grounded")
             va = arraysof(group)["grounded"]
             gridsize = cld.(size(va), chunkshapeof(va))
             nchunks = prod(gridsize)
 
             counting = _IT_CountingTransport()
-            mstore = ChunkManifest(group; transport=counting)
+            mstore = ChunkManifest(group; transport = counting)
             za = Zarr.zopen(mstore).arrays["grounded"]
 
             counting.count[] = 0

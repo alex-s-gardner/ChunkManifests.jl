@@ -17,12 +17,14 @@ _defaultname(path::AbstractString) =
 # input holding several keeps its own keys under the name as a group, since
 # only one of them could take the name itself.
 function _layerkeys!(
-    arrays::Dict{String,ManifestArray}, m::ChunkManifest, nm::AbstractString, i::Integer
-)
+        arrays::Dict{String, ManifestArray}, m::ChunkManifest, nm::AbstractString, i::Integer
+    )
     src = arraysof(m)
-    isempty(src) && throw(ArgumentError(
-        "ChunkManifest: input $i, named $(repr(nm)), holds no arrays"
-    ))
+    isempty(src) && throw(
+        ArgumentError(
+            "ChunkManifest: input $i, named $(repr(nm)), holds no arrays"
+        )
+    )
     single = length(src) == 1
     # Unsorted: nothing downstream depends on insertion order, and
     # `_sharetable!` sorts the keys itself when it builds the shared table.
@@ -30,10 +32,12 @@ function _layerkeys!(
         key = if single
             String(nm)
         else
-            isempty(k) && throw(ArgumentError(
-                "ChunkManifest: input $i, named $(repr(nm)), holds several arrays and one of " *
-                "them has an empty key, which has no place under $(repr(nm))",
-            ))
+            isempty(k) && throw(
+                ArgumentError(
+                    "ChunkManifest: input $i, named $(repr(nm)), holds several arrays and one of " *
+                        "them has an empty key, which has no place under $(repr(nm))",
+                )
+            )
             "$nm/$k"
         end
         # No collision check: `_checknames` has already established that every
@@ -45,27 +49,35 @@ function _layerkeys!(
 end
 
 function _checknames(names::AbstractVector{String}, nmembers::Integer)
-    length(names) == nmembers || throw(ArgumentError(
-        "ChunkManifest: name has $(length(names)) entries but $nmembers manifests were given"
-    ))
-    byname = Dict{String,Int}()
+    length(names) == nmembers || throw(
+        ArgumentError(
+            "ChunkManifest: name has $(length(names)) entries but $nmembers manifests were given"
+        )
+    )
+    byname = Dict{String, Int}()
     for i in eachindex(names)
         nm = names[i]
-        isempty(nm) && throw(ArgumentError(
-            "ChunkManifest: input $i has an empty name, so its arrays have nothing to be " *
-            "keyed under",
-        ))
-        occursin('/', nm) && throw(ArgumentError(
-            "ChunkManifest: name $(repr(nm)) for input $i contains \"/\", which would make it " *
-            "a nested group path rather than one layer",
-        ))
+        isempty(nm) && throw(
+            ArgumentError(
+                "ChunkManifest: input $i has an empty name, so its arrays have nothing to be " *
+                    "keyed under",
+            )
+        )
+        occursin('/', nm) && throw(
+            ArgumentError(
+                "ChunkManifest: name $(repr(nm)) for input $i contains \"/\", which would make it " *
+                    "a nested group path rather than one layer",
+            )
+        )
         prev = get(byname, nm, 0)
-        prev == 0 || throw(ArgumentError(
-            "ChunkManifest: inputs $prev and $i are both named $(repr(nm)), so one would " *
-            "shadow the other. Merging keys one layer per input and never concatenates, so " *
-            "inputs that are successive slices of the same dataset belong in a series: " *
-            "ChunkManifests.combine(ManifestSeries(paths, :time))",
-        ))
+        prev == 0 || throw(
+            ArgumentError(
+                "ChunkManifest: inputs $prev and $i are both named $(repr(nm)), so one would " *
+                    "shadow the other. Merging keys one layer per input and never concatenates, so " *
+                    "inputs that are successive slices of the same dataset belong in a series: " *
+                    "ChunkManifests.combine(ManifestSeries(paths, :time))",
+            )
+        )
         byname[nm] = i
     end
     return names
@@ -75,15 +87,15 @@ end
 # has to do it before scanning, which is the expensive step a colliding name
 # would waste.
 function _mergemanifests(
-    members::AbstractVector{ChunkManifest},
-    names::AbstractVector{String},
-    attrs,
-    transport::AbstractTransport,
-    readahead::ReadaheadCache,
-)
+        members::AbstractVector{ChunkManifest},
+        names::AbstractVector{String},
+        attrs,
+        transport::AbstractTransport,
+        readahead::ReadaheadCache,
+    )
     isempty(members) && throw(ArgumentError("ChunkManifest: no manifests given"))
 
-    arrays = Dict{String,ManifestArray}()
+    arrays = Dict{String, ManifestArray}()
     for i in eachindex(members, names)
         _layerkeys!(arrays, members[i], names[i], i)
     end
@@ -95,8 +107,8 @@ function _mergemanifests(
         attrs, "merged",
     )
 
-    provenance = Dict{String,Any}("driver" => "merge", "ninputs" => length(members))
-    return ChunkManifest(; arrays, attrs=mergedattrs, provenance, transport, readahead)
+    provenance = Dict{String, Any}("driver" => "merge", "ninputs" => length(members))
+    return ChunkManifest(; arrays, attrs = mergedattrs, provenance, transport, readahead)
 end
 
 """
@@ -122,12 +134,12 @@ differing values — which granule-specific attributes routinely do. Pass `attrs
 to set the merged manifest's group attributes outright instead.
 """
 function ChunkManifest(
-    members::Union{AbstractVector{<:ChunkManifest},Tuple{ChunkManifest,Vararg{ChunkManifest}}};
-    name,
-    attrs=nothing,
-    transport::AbstractTransport=TransportContainers(),
-    readahead::ReadaheadCache=ReadaheadCache(),
-)
+        members::Union{AbstractVector{<:ChunkManifest}, Tuple{ChunkManifest, Vararg{ChunkManifest}}};
+        name,
+        attrs = nothing,
+        transport::AbstractTransport = TransportContainers(),
+        readahead::ReadaheadCache = ReadaheadCache(),
+    )
     return _mergemanifests(
         collect(ChunkManifest, members),
         _checknames(collect(String, map(string, name)), length(members)),
@@ -154,13 +166,13 @@ one dataset rather than separate layers; concatenate those with
 `ChunkManifests.combine(`[`ManifestSeries`](@ref)`(paths, :time))`.
 """
 function ChunkManifest(
-    paths::Union{AbstractVector{<:AbstractString},Tuple{AbstractString,Vararg{AbstractString}}};
-    name=map(_defaultname, paths),
-    attrs=nothing,
-    transport::AbstractTransport=TransportContainers(),
-    readahead::ReadaheadCache=ReadaheadCache(),
-    access::SourceAccess=AutoAccess(),
-)
+        paths::Union{AbstractVector{<:AbstractString}, Tuple{AbstractString, Vararg{AbstractString}}};
+        name = map(_defaultname, paths),
+        attrs = nothing,
+        transport::AbstractTransport = TransportContainers(),
+        readahead::ReadaheadCache = ReadaheadCache(),
+        access::SourceAccess = AutoAccess(),
+    )
     isempty(paths) && throw(ArgumentError("ChunkManifest: no paths given"))
     # Names are checked before anything is read: scanning is the expensive
     # step, and a name collision is settled from the paths alone.

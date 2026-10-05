@@ -42,14 +42,16 @@ end
 
 function _scansource(path::AbstractString, access::SourceAccess)
     driver = sniff_driver(path)
-    driver === nothing && throw(ArgumentError(
-        "no registered driver recognizes $(repr(path)), and it holds no saved " *
-        "manifest this package wrote. Registered drivers: " *
-        "$(join(string.(nameof.(typeof.(DRIVER_REGISTRY))), ", ")). Drivers for " *
-        "other formats arrive with their packages — scanning a TIFF or COG needs " *
-        "`using TiffImages`. To state the driver yourself, call " *
-        "scan($(repr(path)), SomeDriver())",
-    ))
+    driver === nothing && throw(
+        ArgumentError(
+            "no registered driver recognizes $(repr(path)), and it holds no saved " *
+                "manifest this package wrote. Registered drivers: " *
+                "$(join(string.(nameof.(typeof.(DRIVER_REGISTRY))), ", ")). Drivers for " *
+                "other formats arrive with their packages — scanning a TIFF or COG needs " *
+                "`using TiffImages`. To state the driver yourself, call " *
+                "scan($(repr(path)), SomeDriver())",
+        )
+    )
     return scan(path, driver; access)
 end
 
@@ -59,15 +61,17 @@ function _frompath(path::AbstractString, access::SourceAccess)
     # Sniffing a source needs only its leading bytes, so that part is deferred
     # to the driver and its access mechanism.
     if _hasscheme(path)
-        throw(ArgumentError(
-            "cannot build a manifest from $(repr(path)): reading a *saved* " *
-            "manifest over a remote URI is not implemented, and a remote source " *
-            "cannot be recognized without fetching it. Name the driver and the " *
-            "access mechanism instead, as in " *
-            "scan($(repr(path)), HDF5Driver(); access=DownloadAccess()). Only this " *
-            "file is affected — the chunks a manifest references may live " *
-            "anywhere, which is what its transport resolves",
-        ))
+        throw(
+            ArgumentError(
+                "cannot build a manifest from $(repr(path)): reading a *saved* " *
+                    "manifest over a remote URI is not implemented, and a remote source " *
+                    "cannot be recognized without fetching it. Name the driver and the " *
+                    "access mechanism instead, as in " *
+                    "scan($(repr(path)), HDF5Driver(); access=DownloadAccess()). Only this " *
+                    "file is affected — the chunks a manifest references may live " *
+                    "anywhere, which is what its transport resolves",
+            )
+        )
     end
 
     # A format whose reader lives in an unloaded extension reaches the
@@ -75,11 +79,13 @@ function _frompath(path::AbstractString, access::SourceAccess)
     fmt = ispath(path) ? _savedformat(path) : nothing
     fmt === nothing || return ChunkManifest(path, fmt)
 
-    isdir(path) && throw(ArgumentError(
-        "$(repr(path)) is a directory holding no manifest this package wrote: " *
-        "expected either $_ZARR_MANIFEST_JSON (a ZarrManifest) or " *
-        "$_KERCHUNK_PARQUET_MARKER (a kerchunk Parquet reference set)",
-    ))
+    isdir(path) && throw(
+        ArgumentError(
+            "$(repr(path)) is a directory holding no manifest this package wrote: " *
+                "expected either $_ZARR_MANIFEST_JSON (a ZarrManifest) or " *
+                "$_KERCHUNK_PARQUET_MARKER (a kerchunk Parquet reference set)",
+        )
+    )
     isfile(path) || throw(ArgumentError("no such file or directory: $(repr(path))"))
 
     return _scansource(path, access)
@@ -108,10 +114,10 @@ state the driver or format rather than have it inferred, or to pass an option
 such as an HDF5 group.
 """
 function ChunkManifest(
-    path::AbstractString;
-    transport::AbstractTransport=TransportContainers(),
-    readahead::ReadaheadCache=ReadaheadCache(),
-    access::SourceAccess=AutoAccess(),
-)
+        path::AbstractString;
+        transport::AbstractTransport = TransportContainers(),
+        readahead::ReadaheadCache = ReadaheadCache(),
+        access::SourceAccess = AutoAccess(),
+    )
     return ChunkManifest(_frompath(path, access); transport, readahead)
 end

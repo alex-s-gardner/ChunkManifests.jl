@@ -17,14 +17,14 @@
 
 const _FIXTURE_SOURCES = (
     itslive = (
-        env="CHUNKMANIFESTS_ITSLIVE",
-        inrepo="data/antarctic_grounded_ice.nc",
-        what="NetCDF4 mask: 22896x18392 UInt8 shuffle+deflate, x/y coordinate variables, fixed-length-string grid mapping",
+        env = "CHUNKMANIFESTS_ITSLIVE",
+        inrepo = "data/antarctic_grounded_ice.nc",
+        what = "NetCDF4 mask: 22896x18392 UInt8 shuffle+deflate, x/y coordinate variables, fixed-length-string grid mapping",
     ),
     geotiff = (
-        env="CHUNKMANIFESTS_GEOTIFF",
-        inrepo="data/junk.tif",
-        what="a GeoTIFF written by GDAL",
+        env = "CHUNKMANIFESTS_GEOTIFF",
+        inrepo = "data/junk.tif",
+        what = "a GeoTIFF written by GDAL",
     ),
 )
 
@@ -41,7 +41,7 @@ end
 const ITSLIVE_PATH = _resolvefixture(_FIXTURE_SOURCES.itslive)
 const GEOTIFF_JUNK_PATH = _resolvefixture(_FIXTURE_SOURCES.geotiff)
 
-const _FIXTURE_PATHS = (itslive=ITSLIVE_PATH, geotiff=GEOTIFF_JUNK_PATH)
+const _FIXTURE_PATHS = (itslive = ITSLIVE_PATH, geotiff = GEOTIFF_JUNK_PATH)
 
 # Which fixtures a missing copy is a failure for. `1`, `true` or `all` requires
 # every one; otherwise a comma-separated list of names. Named per fixture so
@@ -55,7 +55,7 @@ function _requiredfixtures()
         name = Symbol(strip(part))
         haskey(_FIXTURE_SOURCES, name) || error(
             "CHUNKMANIFESTS_REQUIRE_FIXTURES names $(repr(string(name))), which is not a " *
-            "fixture; known fixtures are $(collect(keys(_FIXTURE_SOURCES)))"
+                "fixture; known fixtures are $(collect(keys(_FIXTURE_SOURCES)))"
         )
         push!(names, name)
     end
@@ -96,23 +96,23 @@ struct FetchCountingTransport <: AbstractTransport
     coalesce::Bool
 end
 
-function FetchCountingTransport(; coalesce::Bool=true)
+function FetchCountingTransport(; coalesce::Bool = true)
     return FetchCountingTransport(LocalTransport(), Threads.Atomic{Int}(0), coalesce)
 end
 
 function ChunkManifests.fetchrange(
-    t::FetchCountingTransport, uri::AbstractString, r::ByteRange
-)
+        t::FetchCountingTransport, uri::AbstractString, r::ByteRange
+    )
     Threads.atomic_add!(t.count, 1)
     return ChunkManifests.fetchrange(t.inner, uri, r)
 end
 
 function ChunkManifests.fetchranges(
-    t::FetchCountingTransport, uri::AbstractString, rs::AbstractVector{ByteRange}
-)
+        t::FetchCountingTransport, uri::AbstractString, rs::AbstractVector{ByteRange}
+    )
     t.coalesce && return invoke(
         ChunkManifests.fetchranges,
-        Tuple{AbstractTransport,Any,AbstractVector{ByteRange}}, t, uri, rs,
+        Tuple{AbstractTransport, Any, AbstractVector{ByteRange}}, t, uri, rs,
     )
     return [ChunkManifests.fetchrange(t, uri, r) for r in rs]
 end

@@ -45,30 +45,32 @@ so that tightening the default later is a behavior change rather than a
 signature change.
 """
 struct TransportContainers <: AbstractTransport
-    bindings::Vector{Pair{String,AbstractTransport}}
+    bindings::Vector{Pair{String, AbstractTransport}}
     fallback::AbstractTransport
     authorize::Any
-    defaults::Dict{String,AbstractTransport}
+    defaults::Dict{String, AbstractTransport}
     defaultslock::ReentrantLock
 end
 
 function TransportContainers(
-    bindings::AbstractVector{<:Pair}=Pair{String,AbstractTransport}[];
-    fallback::AbstractTransport=LocalTransport(),
-    authorize=Returns(true),
-)
-    merged = Dict{String,AbstractTransport}()
+        bindings::AbstractVector{<:Pair} = Pair{String, AbstractTransport}[];
+        fallback::AbstractTransport = LocalTransport(),
+        authorize = Returns(true),
+    )
+    merged = Dict{String, AbstractTransport}()
     for (prefix, transport) in bindings
         p = String(prefix)
-        haskey(merged, p) && throw(ArgumentError(
-            "duplicate prefix in TransportContainers bindings: $(repr(p))"
-        ))
+        haskey(merged, p) && throw(
+            ArgumentError(
+                "duplicate prefix in TransportContainers bindings: $(repr(p))"
+            )
+        )
         merged[p] = transport
     end
 
     return TransportContainers(
         collect(merged), fallback, authorize,
-        Dict{String,AbstractTransport}(), ReentrantLock(),
+        Dict{String, AbstractTransport}(), ReentrantLock(),
     )
 end
 
@@ -84,11 +86,13 @@ function _defaulttransport(make, c::TransportContainers, key::AbstractString)
 end
 
 function _s3_bucket(uri::AbstractString)
-    rest = chop(uri; head=5, tail=0) # strip "s3://"
-    bucket = first(split(rest, '/'; limit=2))
-    isempty(bucket) && throw(ArgumentError(
-        "malformed s3:// uri, expected s3://bucket/key, got $(repr(uri))"
-    ))
+    rest = chop(uri; head = 5, tail = 0) # strip "s3://"
+    bucket = first(split(rest, '/'; limit = 2))
+    isempty(bucket) && throw(
+        ArgumentError(
+            "malformed s3:// uri, expected s3://bucket/key, got $(repr(uri))"
+        )
+    )
     return String(bucket)
 end
 
@@ -137,11 +141,13 @@ end
 
 function _authorize!(c::TransportContainers, uri::AbstractString)
     c.authorize(uri) && return nothing
-    throw(ArgumentError(
-        "fetching $(repr(uri)) was rejected by this TransportContainers' " *
-        "authorize predicate; pass an `authorize` function to " *
-        "TransportContainers that returns true for this URI to allow it",
-    ))
+    throw(
+        ArgumentError(
+            "fetching $(repr(uri)) was rejected by this TransportContainers' " *
+                "authorize predicate; pass an `authorize` function to " *
+                "TransportContainers that returns true for this URI to allow it",
+        )
+    )
 end
 
 """

@@ -25,7 +25,7 @@ using ChunkManifests:
             1026, 34737, 13, 0,         # GTCitationGeoKey, asciiparams[1:13]
         ]
         keys = decode_geokeys(
-            directory; doubleparams=[500000.0], asciiparams=asciistring
+            directory; doubleparams = [500000.0], asciiparams = asciistring
         )
         @test keys[1024] === UInt16(1)
         @test keys[3078] === 500000.0
@@ -33,7 +33,7 @@ using ChunkManifests:
 
         # Count > 1 double case returns a vector.
         directory2 = UInt16[1, 1, 0, 1, 2057, 34736, 2, 0]
-        keys2 = decode_geokeys(directory2; doubleparams=[1.0, 2.0])
+        keys2 = decode_geokeys(directory2; doubleparams = [1.0, 2.0])
         @test keys2[2057] == [1.0, 2.0]
 
         @test_throws "at least 4 header values" decode_geokeys(UInt16[1, 1, 0])
@@ -47,10 +47,10 @@ using ChunkManifests:
             UInt16[1, 1, 0, 1, 9999, 34737, 1, 0]
         )
         @test_throws "outside its axes" decode_geokeys(
-            UInt16[1, 1, 0, 1, 9999, 34736, 1, 5]; doubleparams=[1.0]
+            UInt16[1, 1, 0, 1, 9999, 34736, 1, 5]; doubleparams = [1.0]
         )
         @test_throws "outside its length" decode_geokeys(
-            UInt16[1, 1, 0, 1, 9999, 34737, 5, 0]; asciiparams="ab"
+            UInt16[1, 1, 0, 1, 9999, 34737, 5, 0]; asciiparams = "ab"
         )
         @test_throws "unrecognized TIFFTagLocation" decode_geokeys(
             UInt16[1, 1, 0, 1, 9999, 99, 1, 0]
@@ -73,7 +73,7 @@ using ChunkManifests:
 
         @test identify_crs(Dict(GEOKEY_ProjectedCSTypeGeoKey => 32767)) === nothing
         @test identify_crs(Dict(GEOKEY_GeographicTypeGeoKey => 0)) === nothing
-        @test identify_crs(Dict{Int,Any}()) === nothing
+        @test identify_crs(Dict{Int, Any}()) === nothing
 
         # ProjectedCSTypeGeoKey wins when both are present and valid.
         both = Dict(GEOKEY_ProjectedCSTypeGeoKey => 32610, GEOKEY_GeographicTypeGeoKey => 4326)
@@ -94,9 +94,9 @@ using ChunkManifests:
         x, y = pixel_coordinates(gt, 3, 4)
         @test x == [500005.0, 500015.0, 500025.0]
         @test y == [3999995.0, 3999985.0, 3999975.0, 3999965.0]
-        @test issorted(y; rev=true)
+        @test issorted(y; rev = true)
 
-        xpoint, ypoint = pixel_coordinates(gt, 3, 4; rastertype=RASTER_PIXEL_IS_POINT)
+        xpoint, ypoint = pixel_coordinates(gt, 3, 4; rastertype = RASTER_PIXEL_IS_POINT)
         @test xpoint == [500000.0, 500010.0, 500020.0]
         @test ypoint == [4000000.0, 3999990.0, 3999980.0, 3999970.0]
 
@@ -104,7 +104,7 @@ using ChunkManifests:
         @test x[1] - xpoint[1] == 5.0
         @test y[1] - ypoint[1] == -5.0
 
-        @test_throws "RASTER_PIXEL_IS_AREA" pixel_coordinates(gt, 3, 4; rastertype=3)
+        @test_throws "RASTER_PIXEL_IS_AREA" pixel_coordinates(gt, 3, 4; rastertype = 3)
 
         @test_throws "3 values" geotransform_from_scale_tiepoint([1.0, 2.0], tiepoint)
         @test_throws "exactly 6 values" geotransform_from_scale_tiepoint(scale, [1.0, 2.0, 3.0])
@@ -121,12 +121,12 @@ using ChunkManifests:
             0.0, 0.0, 0.0, 1.0,
         ]
 
-        gtboth = geotransform(; pixelscale=scale, tiepoints=tiepoint, transformation=matrix)
-        gtmatrixonly = geotransform(; transformation=matrix)
+        gtboth = geotransform(; pixelscale = scale, tiepoints = tiepoint, transformation = matrix)
+        gtmatrixonly = geotransform(; transformation = matrix)
         @test pixel_to_world(gtboth, 1, 1) == pixel_to_world(gtmatrixonly, 1, 1)
         @test pixel_to_world(gtboth, 1, 1) == (100.0, 200.0, 0.0)
 
-        gttiepointonly = geotransform(; pixelscale=scale, tiepoints=tiepoint)
+        gttiepointonly = geotransform(; pixelscale = scale, tiepoints = tiepoint)
         @test pixel_to_world(gttiepointonly, 1, 1) == (500000.0, 4000000.0, 0.0)
 
         @test_throws "need either" geotransform()

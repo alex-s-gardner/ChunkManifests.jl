@@ -17,7 +17,7 @@ struct ObjectSizeUnsupportedError <: Exception
 end
 
 function Base.showerror(io::IO, e::ObjectSizeUnsupportedError)
-    print(
+    return print(
         io,
         "objectsize is not implemented for transport ", typeof(e.transport),
         "; files reached through it cannot be checked by validate",
@@ -35,7 +35,7 @@ Size in bytes of the local file at `uri` (a plain path, or a `file://` URI),
 read with `filesize` rather than opening the file.
 """
 function objectsize(::LocalTransport, uri::AbstractString)
-    path = startswith(uri, "file://") ? chop(uri; head=7, tail=0) : uri
+    path = startswith(uri, "file://") ? chop(uri; head = 7, tail = 0) : uri
     isfile(path) || throw(ArgumentError("no such file: $path"))
     return UInt64(filesize(path))
 end
@@ -63,7 +63,7 @@ transport: a chunk's byte range overruns its file's recorded size
 [`ChunkManifest`](@ref), and `nothing` otherwise.
 """
 struct ConsistencyIssue
-    label::Union{Nothing,String}
+    label::Union{Nothing, String}
     index::CartesianIndex
     kind::Symbol
     reason::String
@@ -101,7 +101,7 @@ function passed(r::ValidationReport)
 end
 
 function Base.show(io::IO, r::ValidationReport)
-    print(
+    return print(
         io,
         "ValidationReport(verified=", length(r.verified),
         ", unverifiable=", length(r.unverifiable),
@@ -135,7 +135,7 @@ end
 # every non-sentinel index must address an existing path table entry, every
 # INLINE_CHUNK must have bytes, and every chunk's range must fit inside its
 # file's recorded size (when a size was recorded at all).
-function _consistency(m::ExplicitChunkMap{N}, label=nothing) where {N}
+function _consistency(m::ExplicitChunkMap{N}, label = nothing) where {N}
     issues = ConsistencyIssue[]
     t = m.table
     ntable = length(t.entries)
@@ -172,7 +172,7 @@ function _consistency(m::ExplicitChunkMap{N}, label=nothing) where {N}
                         ConsistencyIssue(
                             label, I, :offset_overflow,
                             "chunk $(Tuple(I)) range [$(m.offset[I]), $stop) exceeds recorded " *
-                            "size $(entry.size) of \"$(entry.uri)\"",
+                                "size $(entry.size) of \"$(entry.uri)\"",
                         ),
                     )
                 end
@@ -185,7 +185,7 @@ end
 # AffineChunkMap's offsets are a closed-form function of the chunk index and
 # its grid bounds are checked by chunkstate/chunklocation on every access, so
 # there is no per-chunk state that can go inconsistent.
-_consistency(::AffineChunkMap, label=nothing) = ConsistencyIssue[]
+_consistency(::AffineChunkMap, label = nothing) = ConsistencyIssue[]
 
 # Shared engine behind every validate(...) method: one FileEntry probe per
 # path table entry (never per chunk) plus the chunk-level consistency check
@@ -196,10 +196,12 @@ function _validate_core(m::AbstractChunkMap, transport::AbstractTransport, stric
     if strict && !isempty(consistency)
         c = first(consistency)
         prefix = label === nothing ? "" : "array \"$label\": "
-        throw(ArgumentError(
-            "validate: $(prefix)manifest is internally inconsistent at chunk " *
-            "$(Tuple(c.index)): $(c.reason)",
-        ))
+        throw(
+            ArgumentError(
+                "validate: $(prefix)manifest is internally inconsistent at chunk " *
+                    "$(Tuple(c.index)): $(c.reason)",
+            )
+        )
     end
 
     verified = String[]
@@ -220,9 +222,11 @@ function _validate_core(m::AbstractChunkMap, transport::AbstractTransport, stric
             strict && throw(ArgumentError("validate: \"$(entry.uri)\" is missing: $taggedreason"))
             push!(missing_files, FileCheck(entry.uri, taggedreason))
         else
-            strict && throw(ArgumentError(
-                "validate: \"$(entry.uri)\" size mismatch: $taggedreason"
-            ))
+            strict && throw(
+                ArgumentError(
+                    "validate: \"$(entry.uri)\" size mismatch: $taggedreason"
+                )
+            )
             push!(mismatched, FileCheck(entry.uri, taggedreason))
         end
     end
@@ -242,7 +246,7 @@ no-network consistency check.
 With `strict=true`, throws on the first inconsistency or file problem found
 instead of collecting a full report.
 """
-function validate(m::AbstractChunkMap, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
+function validate(m::AbstractChunkMap, transport::AbstractTransport = LocalTransport(); strict::Bool = false)
     verified, unverifiable, missing_files, mismatched, consistency =
         _validate_core(m, transport, strict, nothing)
     return ValidationReport(verified, unverifiable, missing_files, mismatched, consistency)
@@ -253,7 +257,7 @@ end
 
 Equivalent to `validate(chunkmapof(a), transport; strict)`.
 """
-function validate(a::ManifestArray, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
+function validate(a::ManifestArray, transport::AbstractTransport = LocalTransport(); strict::Bool = false)
     return validate(chunkmapof(a), transport; strict)
 end
 
@@ -265,7 +269,7 @@ checked independently, so a file shared by two arrays' manifests is queried
 once per array rather than once overall; [`ConsistencyIssue`](@ref) and file
 reasons carry the owning array's name.
 """
-function validate(g::ChunkManifest, transport::AbstractTransport=LocalTransport(); strict::Bool=false)
+function validate(g::ChunkManifest, transport::AbstractTransport = LocalTransport(); strict::Bool = false)
     verified = String[]
     unverifiable = FileCheck[]
     missing_files = FileCheck[]
@@ -292,10 +296,12 @@ function _setindex_checked!(col, v, I, label::AbstractString)
         col[I] = v
     catch err
         err isa MethodError || err isa Base.CanonicalIndexError || rethrow()
-        throw(ArgumentError(
-            "setchunk!: the $label column ($(typeof(col))) does not support in-place " *
-            "mutation; it is read-only or backed by a lazy/immutable array",
-        ))
+        throw(
+            ArgumentError(
+                "setchunk!: the $label column ($(typeof(col))) does not support in-place " *
+                    "mutation; it is read-only or backed by a lazy/immutable array",
+            )
+        )
     end
     return nothing
 end
@@ -309,15 +315,15 @@ reusing [`push_uri!`](@ref) to add `uri` to `m`'s path table only if it is
 not already present. No other chunk's columns are read or written.
 """
 function setchunk!(
-    m::ExplicitChunkMap{N},
-    I::CartesianIndex{N},
-    uri::AbstractString,
-    offset::Integer,
-    nbytes::Integer;
-    etag=nothing,
-    size=nothing,
-    mtime=nothing,
-) where {N}
+        m::ExplicitChunkMap{N},
+        I::CartesianIndex{N},
+        uri::AbstractString,
+        offset::Integer,
+        nbytes::Integer;
+        etag = nothing,
+        size = nothing,
+        mtime = nothing,
+    ) where {N}
     idx = push_uri!(m.table, uri; etag, size, mtime)
     _setindex_checked!(m.index, idx, I, "index")
     _setindex_checked!(m.offset, offset, I, "offset")
@@ -335,10 +341,12 @@ needs the `(uri, offset, nbytes)` form of `setchunk!` and `INLINE_CHUNK`
 needs the byte-vector form.
 """
 function setchunk!(m::ExplicitChunkMap{N}, I::CartesianIndex{N}, state::ChunkState) where {N}
-    state == MISSING_CHUNK || throw(ArgumentError(
-        "setchunk!: a bare ChunkState argument must be MISSING_CHUNK (got $state); " *
-        "VIRTUAL_CHUNK needs (uri, offset, nbytes) and INLINE_CHUNK needs a byte vector",
-    ))
+    state == MISSING_CHUNK || throw(
+        ArgumentError(
+            "setchunk!: a bare ChunkState argument must be MISSING_CHUNK (got $state); " *
+                "VIRTUAL_CHUNK needs (uri, offset, nbytes) and INLINE_CHUNK needs a byte vector",
+        )
+    )
     _setindex_checked!(m.index, MISSING_INDEX, I, "index")
     delete!(m.inline, I)
     return m
@@ -366,8 +374,10 @@ there is no supported conversion to a [`ExplicitChunkMap`](@ref); build one
 directly instead.
 """
 function setchunk!(::AffineChunkMap, I, args...; kwargs...)
-    throw(ArgumentError(
-        "setchunk!: AffineChunkMap has no per-chunk storage to repoint and cannot be " *
-        "converted to a ExplicitChunkMap; build a ExplicitChunkMap directly instead",
-    ))
+    throw(
+        ArgumentError(
+            "setchunk!: AffineChunkMap has no per-chunk storage to repoint and cannot be " *
+                "converted to a ExplicitChunkMap; build a ExplicitChunkMap directly instead",
+        )
+    )
 end

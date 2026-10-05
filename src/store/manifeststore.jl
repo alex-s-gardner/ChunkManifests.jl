@@ -44,9 +44,9 @@ function _children(g::ChunkManifest, p::AbstractString)
 end
 
 function _arrayitem(
-    va::ManifestArray, leaf::AbstractString, transport::AbstractTransport,
-    readahead::ReadaheadCache,
-)
+        va::ManifestArray, leaf::AbstractString, transport::AbstractTransport,
+        readahead::ReadaheadCache,
+    )
     leaf == ".zarray" && return zarray_json(va)
     leaf == ".zattrs" && return zattrs_json(va)
     I = parse_chunkkey(va, leaf)
@@ -74,7 +74,7 @@ function Base.getindex(s::ChunkManifest, key::AbstractString)
 
     if prefix == "" || _isgrouppath(s, prefix)
         leaf == ".zgroup" && return zgroup_json()
-        leaf == ".zattrs" && return Vector{UInt8}(JSON.json(prefix == "" ? attrsof(s) : Dict{String,Any}()))
+        leaf == ".zattrs" && return Vector{UInt8}(JSON.json(prefix == "" ? attrsof(s) : Dict{String, Any}()))
     end
     return nothing
 end
@@ -86,10 +86,12 @@ Always throws: a [`ChunkManifest`](@ref) serves bytes from the files it
 describes and never writes to them.
 """
 function Base.setindex!(::ChunkManifest, v, key::AbstractString)
-    throw(ArgumentError(
-        "ChunkManifest is read-only: cannot set key \"$key\"; it serves bytes " *
-        "from the scanned source files and never persists writes",
-    ))
+    throw(
+        ArgumentError(
+            "ChunkManifest is read-only: cannot set key \"$key\"; it serves bytes " *
+                "from the scanned source files and never persists writes",
+        )
+    )
 end
 
 """
@@ -102,11 +104,13 @@ object. Nothing registers a URL pattern for this store, so Zarr.jl never
 reaches this method on its own.
 """
 function Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
-    throw(ArgumentError(
-        "ChunkManifest cannot be constructed from inside Zarr.zopen(\"$s\"); " *
-        "build it first with ChunkManifest(\"$s\") and pass that object, as in " *
-        "Zarr.zopen(ChunkManifest(\"$s\"))",
-    ))
+    throw(
+        ArgumentError(
+            "ChunkManifest cannot be constructed from inside Zarr.zopen(\"$s\"); " *
+                "build it first with ChunkManifest(\"$s\") and pass that object, as in " *
+                "Zarr.zopen(ChunkManifest(\"$s\"))",
+        )
+    )
 end
 
 # The arrays of a ChunkManifest are held in a Dict{String,ManifestArray}, whose
@@ -208,19 +212,19 @@ cache does not change that: each index still resolves to exactly one `put!`,
 either from the cache or from the fetch loop below.
 """
 function Zarr.read_items!(
-    s::ChunkManifest, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
-)
+        s::ChunkManifest, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
+    )
     return _read_items!(chunkmapof(arraysof(s)[p]), c, s.transport, s.readahead, i)
 end
 
 function _read_items!(
-    m::AbstractChunkMap, c::AbstractChannel, transport::AbstractTransport,
-    readahead::ReadaheadCache, i,
-)
+        m::AbstractChunkMap, c::AbstractChannel, transport::AbstractTransport,
+        readahead::ReadaheadCache, i,
+    )
     caching = readahead.maxbytes > 0
     IdxT = eltype(i)
 
-    byuri = Dict{String,Vector{Tuple{IdxT,ByteRange}}}()
+    byuri = Dict{String, Vector{Tuple{IdxT, ByteRange}}}()
     for ii in i
         state = chunkstate(m, ii)
         if state == MISSING_CHUNK
@@ -232,7 +236,7 @@ function _read_items!(
             cached = caching ? _cache_get(readahead, (uri, offset), nbytes) : nothing
             if cached === nothing
                 push!(
-                    get!(() -> Tuple{IdxT,ByteRange}[], byuri, uri),
+                    get!(() -> Tuple{IdxT, ByteRange}[], byuri, uri),
                     (ii, ByteRange(offset, nbytes)),
                 )
             else

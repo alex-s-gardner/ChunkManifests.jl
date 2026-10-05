@@ -3,7 +3,7 @@ using Test
 
 include("fixtures.jl")
 
-@testset verbose=true "ChunkManifests.jl" begin
+@testset verbose = true "ChunkManifests.jl" begin
     @testset "real-data fixtures" begin
         missing_ = report_fixtures()
         # A fixture named in CHUNKMANIFESTS_REQUIRE_FIXTURES but absent is a

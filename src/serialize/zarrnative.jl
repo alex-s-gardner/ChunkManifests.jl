@@ -103,15 +103,17 @@ function _compressor_for(fmt::ZarrManifest)
     name === nothing && return Zarr.NoCompressor()
     name == "zstd" && return Zarr.ZstdCompressor()
     name == "zlib" && return Zarr.ZlibCompressor()
-    throw(ArgumentError(
-        "ZarrManifest: unrecognized compressor $(repr(name)); expected \"zstd\", \"zlib\", or nothing"
-    ))
+    throw(
+        ArgumentError(
+            "ZarrManifest: unrecognized compressor $(repr(name)); expected \"zstd\", \"zlib\", or nothing"
+        )
+    )
 end
 
 # `fmt.chunkcells` applied along every chunk-grid dimension, clamped to that
 # dimension's own length so a grid smaller than `chunkcells` becomes one
 # manifest chunk rather than one padded to `chunkcells`.
-_manifestchunks(fmt::ZarrManifest, gridsize::NTuple{N,Int}) where {N} =
+_manifestchunks(fmt::ZarrManifest, gridsize::NTuple{N, Int}) where {N} =
     ntuple(d -> min(fmt.chunkcells, gridsize[d]), N)
 
 # The position `I` (addressed over `ax`, which may start anywhere) occupies
@@ -120,15 +122,15 @@ _torigin1based(I::CartesianIndex, ax) = CartesianIndex(Tuple(I) .- first.(ax) .+
 
 function _pathtable_to_json(t::PathTable)
     return [
-        Dict{String,Any}("uri" => e.uri, "etag" => e.etag, "size" => e.size, "mtime" => e.mtime)
-        for e in t.entries
+        Dict{String, Any}("uri" => e.uri, "etag" => e.etag, "size" => e.size, "mtime" => e.mtime)
+            for e in t.entries
     ]
 end
 
 function _pathtable_from_json(entries)
     t = PathTable()
     for e in entries
-        push_uri!(t, e["uri"]; etag=get(e, "etag", nothing), size=get(e, "size", nothing), mtime=get(e, "mtime", nothing))
+        push_uri!(t, e["uri"]; etag = get(e, "etag", nothing), size = get(e, "size", nothing), mtime = get(e, "mtime", nothing))
     end
     return t
 end
@@ -141,15 +143,17 @@ function _cartesian_from_key(key::AbstractString, N::Integer)
     # none, so the count check would reject the only key such an array can have.
     N == 0 && return CartesianIndex()
     parts = split(key, ',')
-    length(parts) == N || throw(ArgumentError(
-        "manifest.json: inline chunk key $(repr(key)) has $(length(parts)) components, expected $N"
-    ))
+    length(parts) == N || throw(
+        ArgumentError(
+            "manifest.json: inline chunk key $(repr(key)) has $(length(parts)) components, expected $N"
+        )
+    )
     return CartesianIndex(ntuple(d -> parse(Int, parts[d]), N))
 end
 
 function _save_chunkmanifest(
-    store::Zarr.AbstractStore, prefix::AbstractString, manifest::ExplicitChunkMap{N}, fmt::ZarrManifest
-) where {N}
+        store::Zarr.AbstractStore, prefix::AbstractString, manifest::ExplicitChunkMap{N}, fmt::ZarrManifest
+    ) where {N}
     gridaxes = chunkgridaxes(manifest)
     gridsize = chunkgridsize(manifest)
 
@@ -164,19 +168,19 @@ function _save_chunkmanifest(
 
     za_index = Zarr.zcreate(
         UInt32, store, gridsize...;
-        path=_joinkey(prefix, "index"), chunks=manifestchunks, compressor=_compressor_for(fmt), filters=nothing,
+        path = _joinkey(prefix, "index"), chunks = manifestchunks, compressor = _compressor_for(fmt), filters = nothing,
     )
     za_nbytes = Zarr.zcreate(
         UInt64, store, gridsize...;
-        path=_joinkey(prefix, "nbytes"), chunks=manifestchunks, compressor=_compressor_for(fmt), filters=nothing,
+        path = _joinkey(prefix, "nbytes"), chunks = manifestchunks, compressor = _compressor_for(fmt), filters = nothing,
     )
     # astype must equal dtype: Zarr.jl's DeltaFilter JSON parser (getfilter)
     # drops astype when it differs from dtype, silently reinterpreting as the
     # single-type form; keeping them equal avoids relying on that path.
     za_offset = Zarr.zcreate(
         UInt64, store, gridsize...;
-        path=_joinkey(prefix, "offset"), chunks=manifestchunks, compressor=_compressor_for(fmt),
-        filters=(Zarr.DeltaFilter{UInt64}(),),
+        path = _joinkey(prefix, "offset"), chunks = manifestchunks, compressor = _compressor_for(fmt),
+        filters = (Zarr.DeltaFilter{UInt64}(),),
     )
 
     copyto!(za_index, index)
@@ -185,12 +189,12 @@ function _save_chunkmanifest(
 
     # Inline chunks are the only raw bytes in this otherwise textual document,
     # so they are base64-encoded, matching how the kerchunk format carries them.
-    inline = Dict{String,Any}(
+    inline = Dict{String, Any}(
         _cartesian_key(_torigin1based(I, gridaxes)) => Base64.base64encode(bytes)
-        for (I, bytes) in manifest.inline
+            for (I, bytes) in manifest.inline
     )
 
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "kind" => "chunk",
         "gridsize" => collect(gridsize),
         "tableof" => _pathtable_to_json(manifest.table),
@@ -199,7 +203,7 @@ function _save_chunkmanifest(
 end
 
 function _save_affinemanifest(manifest::AffineChunkMap)
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "kind" => "affine",
         "gridsize" => collect(manifest.gridsize),
         "tableof" => _pathtable_to_json(manifest.table),
@@ -235,13 +239,13 @@ store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
 function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
     arraysprefix = _joinkey(prefix, _ZARR_MANIFEST_ARRAYS_DIR)
 
-    arraydocs = Dict{String,Any}[]
+    arraydocs = Dict{String, Any}[]
     dircounter = 0
     for key in sort!(collect(keys(arraysof(group))))
         va = arraysof(group)[key]
         manifest = chunkmapof(va)
 
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "path" => key,
             "dtype" => zarr_dtype_string(eltype(va)),
             "shape" => collect(size(va)),
@@ -262,15 +266,17 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
             doc["dir"] = nothing
             doc["manifest"] = _save_affinemanifest(manifest)
         else
-            throw(ArgumentError(
-                "save: no ZarrManifest encoding for manifest type $(typeof(manifest)) (array $(repr(key)))"
-            ))
+            throw(
+                ArgumentError(
+                    "save: no ZarrManifest encoding for manifest type $(typeof(manifest)) (array $(repr(key)))"
+                )
+            )
         end
 
         push!(arraydocs, doc)
     end
 
-    toplevel = Dict{String,Any}(
+    toplevel = Dict{String, Any}(
         "format_version" => MANIFEST_FORMAT_VERSION,
         "group_attrs" => attrsof(group),
         "provenance" => provenanceof(group),
@@ -282,21 +288,23 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
 end
 
 function _load_chunkmanifest(
-    store::Zarr.AbstractStore, arrayprefix::AbstractString, table::PathTable, gridsize::NTuple{N,Int},
-    mdoc, label::AbstractString,
-) where {N}
-    index = Zarr.zopen(store; path=_joinkey(arrayprefix, "index"))
-    offset = Zarr.zopen(store; path=_joinkey(arrayprefix, "offset"))
-    nbytes = Zarr.zopen(store; path=_joinkey(arrayprefix, "nbytes"))
+        store::Zarr.AbstractStore, arrayprefix::AbstractString, table::PathTable, gridsize::NTuple{N, Int},
+        mdoc, label::AbstractString,
+    ) where {N}
+    index = Zarr.zopen(store; path = _joinkey(arrayprefix, "index"))
+    offset = Zarr.zopen(store; path = _joinkey(arrayprefix, "offset"))
+    nbytes = Zarr.zopen(store; path = _joinkey(arrayprefix, "nbytes"))
 
     for (name, column) in (("index", index), ("offset", offset), ("nbytes", nbytes))
-        size(column) == gridsize || throw(DimensionMismatch(
-            "load: \"$(_joinkey(label, _joinkey(arrayprefix, name)))\" has shape $(size(column)), " *
-            "but manifest.json records chunk grid $gridsize",
-        ))
+        size(column) == gridsize || throw(
+            DimensionMismatch(
+                "load: \"$(_joinkey(label, _joinkey(arrayprefix, name)))\" has shape $(size(column)), " *
+                    "but manifest.json records chunk grid $gridsize",
+            )
+        )
     end
 
-    inline = Dict{CartesianIndex{N},Vector{UInt8}}()
+    inline = Dict{CartesianIndex{N}, Vector{UInt8}}()
     for (keystr, b64) in mdoc["inline"]
         inline[_cartesian_from_key(keystr, N)] = Base64.base64decode(b64)
     end
@@ -308,25 +316,29 @@ function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, a
     mdoc = arraydoc["manifest"]
     kind = mdoc["kind"]
     table = _pathtable_from_json(mdoc["tableof"])
-    gridsize = NTuple{length(mdoc["gridsize"]),Int}(mdoc["gridsize"])
+    gridsize = NTuple{length(mdoc["gridsize"]), Int}(mdoc["gridsize"])
 
     if kind == "chunk"
         dirname = arraydoc["dir"]
-        dirname === nothing && throw(ArgumentError(
-            "load: array $(repr(arraydoc["path"])) has manifest kind \"chunk\" but no \"dir\" entry"
-        ))
+        dirname === nothing && throw(
+            ArgumentError(
+                "load: array $(repr(arraydoc["path"])) has manifest kind \"chunk\" but no \"dir\" entry"
+            )
+        )
         arrayprefix = _joinkey(_joinkey(prefix, _ZARR_MANIFEST_ARRAYS_DIR), dirname)
         return _load_chunkmanifest(store, arrayprefix, table, gridsize, mdoc, label)
     elseif kind == "affine"
-        strides = NTuple{length(mdoc["strides"]),UInt64}(mdoc["strides"])
+        strides = NTuple{length(mdoc["strides"]), UInt64}(mdoc["strides"])
         return AffineChunkMap(
             table, gridsize, UInt64(mdoc["base"]), strides, UInt32(mdoc["chunkbytes"]);
-            fileindex=mdoc["fileindex"],
+            fileindex = mdoc["fileindex"],
         )
     else
-        throw(ArgumentError(
-            "load: unrecognized manifest kind $(repr(kind)) for array $(repr(arraydoc["path"]))"
-        ))
+        throw(
+            ArgumentError(
+                "load: unrecognized manifest kind $(repr(kind)) for array $(repr(arraydoc["path"]))"
+            )
+        )
     end
 end
 
@@ -342,7 +354,7 @@ be read back lazily.
 """
 function ChunkManifest(path::AbstractString, fmt::ZarrManifest)
     store, prefix = _resolvestore(path, false)
-    return ChunkManifest(store, prefix, fmt; label=path)
+    return ChunkManifest(store, prefix, fmt; label = path)
 end
 
 """
@@ -355,21 +367,25 @@ since a bare store has no path of its own. Not part of the public interface;
 exists so a manifest's store-agnosticism can be exercised directly against
 any `Zarr.AbstractStore`.
 """
-function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString=prefix)
+function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString = prefix)
     jsonbytes = store[prefix, _ZARR_MANIFEST_JSON]
-    jsonbytes === nothing && throw(ArgumentError(
-        "load: \"$label\" has no $_ZARR_MANIFEST_JSON; not a ZarrManifest directory"
-    ))
+    jsonbytes === nothing && throw(
+        ArgumentError(
+            "load: \"$label\" has no $_ZARR_MANIFEST_JSON; not a ZarrManifest directory"
+        )
+    )
 
-    doc = JSON.parse(String(jsonbytes); dicttype=Dict{String,Any})
+    doc = JSON.parse(String(jsonbytes); dicttype = Dict{String, Any})
     version = get(doc, "format_version", nothing)
-    version == MANIFEST_FORMAT_VERSION || throw(ArgumentError(
-        version === nothing ?
-        "load: \"$label\" has no \"format_version\" field; expected $MANIFEST_FORMAT_VERSION" :
-        "load: \"$label\" has format_version $(repr(version)), expected $MANIFEST_FORMAT_VERSION",
-    ))
+    version == MANIFEST_FORMAT_VERSION || throw(
+        ArgumentError(
+            version === nothing ?
+                "load: \"$label\" has no \"format_version\" field; expected $MANIFEST_FORMAT_VERSION" :
+                "load: \"$label\" has format_version $(repr(version)), expected $MANIFEST_FORMAT_VERSION",
+        )
+    )
 
-    arrays = Dict{String,ManifestArray}()
+    arrays = Dict{String, ManifestArray}()
     for arraydoc in doc["arrays"]
         key = arraydoc["path"]::AbstractString
         T = Zarr.typestr(arraydoc["dtype"]::AbstractString)
@@ -379,17 +395,17 @@ function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::Z
 
         arrays[key] = ManifestArray{T}(
             manifest, shape, chunkshape;
-            fillvalue=arraydoc["fillvalue"],
-            compressor=arraydoc["compressor"],
-            filters=Dict{String,Any}[Dict{String,Any}(f) for f in arraydoc["filters"]],
-            attrs=Dict{String,Any}(arraydoc["attrs"]),
-            dimnames=String.(arraydoc["dimnames"]),
+            fillvalue = arraydoc["fillvalue"],
+            compressor = arraydoc["compressor"],
+            filters = Dict{String, Any}[Dict{String, Any}(f) for f in arraydoc["filters"]],
+            attrs = Dict{String, Any}(arraydoc["attrs"]),
+            dimnames = String.(arraydoc["dimnames"]),
         )
     end
 
     return ChunkManifest(;
         arrays,
-        attrs=Dict{String,Any}(doc["group_attrs"]),
-        provenance=Dict{String,Any}(doc["provenance"]),
+        attrs = Dict{String, Any}(doc["group_attrs"]),
+        provenance = Dict{String, Any}(doc["provenance"]),
     )
 end

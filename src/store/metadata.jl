@@ -17,15 +17,17 @@ for an unrecognized type encodes it as opaque raw bytes (`"<Vn"`), which would
 silently discard the type's actual layout rather than fail on it.
 """
 function zarr_dtype_string(::Type{T}) where {T}
-    if T === Bool || T <: Union{Signed,Unsigned} || T <: AbstractFloat ||
-        T <: Complex{<:AbstractFloat}
+    if T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat ||
+            T <: Complex{<:AbstractFloat}
         return Zarr.typestr(T)
     end
-    throw(ArgumentError(
-        "no faithful Zarr v2 dtype for element type $T; supported types are " *
-        "Bool, fixed-width signed/unsigned integers, floating-point, " *
-        "complex-float, and fixed-length byte string types",
-    ))
+    throw(
+        ArgumentError(
+            "no faithful Zarr v2 dtype for element type $T; supported types are " *
+                "Bool, fixed-width signed/unsigned integers, floating-point, " *
+                "complex-float, and fixed-length byte string types",
+        )
+    )
 end
 
 # Fixed-length byte strings, which is the dtype a CF grid-mapping variable
@@ -40,7 +42,7 @@ end
 # either way, and is the right trade against emitting a spelling off-spec.
 # The HDF5 driver adds the method for its own fixed-string eltype, in
 # src/drivers/hdf5.jl: driver-specific type knowledge lives with the driver.
-zarr_dtype_string(::Type{Zarr.MaxLengthString{N,UInt8}}) where {N} = "|S$N"
+zarr_dtype_string(::Type{Zarr.MaxLengthString{N, UInt8}}) where {N} = "|S$N"
 zarr_dtype_string(::Type{Zarr.ASCIIChar}) = "|S1"
 
 """
@@ -55,9 +57,9 @@ This looks like a transposition bug to anyone unaware of the convention, but
 it is exactly what makes Zarr.jl's own parser — which reverses `shape` and
 `chunks` again on read — recover the original Julia-order sizes.
 """
-function zarray_json(va::ManifestArray{T,N}) where {T,N}
+function zarray_json(va::ManifestArray{T, N}) where {T, N}
     filters = filtersof(va)
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "zarr_format" => 2,
         # Collected as Int, not left to the tuple's own eltype: a
         # zero-dimensional array's empty tuple collects to a Vector{Union{}},
@@ -95,14 +97,14 @@ end
 
 Zarr v2 `.zgroup` document.
 """
-zgroup_json() = Vector{UInt8}(JSON.json(Dict{String,Any}("zarr_format" => 2)))
+zgroup_json() = Vector{UInt8}(JSON.json(Dict{String, Any}("zarr_format" => 2)))
 
 """
     chunkkey(va::ManifestArray{T,N}, I::CartesianIndex{N}) -> String
 
 Zarr v2 chunk key for the 1-based Julia chunk index `I`.
 """
-function chunkkey(::ManifestArray{T,N}, I::CartesianIndex{N}) where {T,N}
+function chunkkey(::ManifestArray{T, N}, I::CartesianIndex{N}) where {T, N}
     return Zarr.citostring(_V2_CHUNK_KEY_ENCODING, I)
 end
 
@@ -134,7 +136,7 @@ an index outside the chunk grid. Returning `nothing` rather than throwing
 lets a store distinguish chunk keys from metadata keys (`.zarray`, `.zattrs`,
 ...) without special-casing them first.
 """
-function parse_chunkkey(va::ManifestArray{T,N}, key::AbstractString) where {T,N}
+function parse_chunkkey(va::ManifestArray{T, N}, key::AbstractString) where {T, N}
     if N == 0
         return key == "0" ? CartesianIndex() : nothing
     end

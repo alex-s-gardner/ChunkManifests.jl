@@ -39,10 +39,12 @@ A mechanism that reads an object in place has no local path to offer and does
 not implement this; the driver handles it directly instead.
 """
 function withsourcepath(f, access::SourceAccess, uri::AbstractString)
-    throw(ArgumentError(
-        "$(nameof(typeof(access))) does not resolve $(repr(uri)) to a local path; " *
-        "a driver must open it through that mechanism itself",
-    ))
+    throw(
+        ArgumentError(
+            "$(nameof(typeof(access))) does not resolve $(repr(uri)) to a local path; " *
+                "a driver must open it through that mechanism itself",
+        )
+    )
 end
 
 function withsourcepath(f, ::LocalAccess, uri::AbstractString)
@@ -62,7 +64,7 @@ function withsourcepath(f, access::DownloadAccess, uri::AbstractString)
         isfile(local_path) || _download(access.transport, uri, local_path)
         return f(local_path)
     finally
-        cleanup && rm(dir; recursive=true, force=true)
+        cleanup && rm(dir; recursive = true, force = true)
     end
 end
 
@@ -71,7 +73,7 @@ end
 function _cachename(uri::AbstractString)
     base = last(split(uri, '/'))
     stem = isempty(base) ? "object" : base
-    return string(string(hash(uri); base=16), "-", stem)
+    return string(string(hash(uri); base = 16), "-", stem)
 end
 
 # Fetched in blocks rather than as one range: a source worth scanning remotely
@@ -79,9 +81,9 @@ end
 const _DOWNLOAD_BLOCK = 64 * 1024 * 1024
 
 function _download(
-    transport::AbstractTransport, uri::AbstractString, dest::AbstractString;
-    blocksize::Integer=_DOWNLOAD_BLOCK,
-)
+        transport::AbstractTransport, uri::AbstractString, dest::AbstractString;
+        blocksize::Integer = _DOWNLOAD_BLOCK,
+    )
     blocksize > 0 || throw(ArgumentError("blocksize must be positive, got $blocksize"))
     total = objectsize(transport, uri)
     partial = dest * ".part"
@@ -95,6 +97,6 @@ function _download(
     end
     # Renamed only once complete, so an interrupted fetch cannot leave a
     # truncated file that a later scan would mistake for a cached copy.
-    mv(partial, dest; force=true)
+    mv(partial, dest; force = true)
     return dest
 end

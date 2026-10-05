@@ -32,43 +32,43 @@ end
         @test occursin("nbit", ChunkManifests.rejection_reason(HDF5Driver, 5))
         @test occursin("fixedscaleoffset", ChunkManifests.rejection_reason(HDF5Driver, 6))
 
-        compressor, filters = ChunkManifests.build_codecs(HDF5Driver, [(1, [6])], 4; context="ctx")
-        @test compressor == Dict{String,Any}("id" => "zlib", "level" => 6)
+        compressor, filters = ChunkManifests.build_codecs(HDF5Driver, [(1, [6])], 4; context = "ctx")
+        @test compressor == Dict{String, Any}("id" => "zlib", "level" => 6)
         @test isempty(filters)
 
-        compressor2, filters2 = ChunkManifests.build_codecs(HDF5Driver, [(2, [4]), (1, [5])], 4; context="ctx")
-        @test compressor2 == Dict{String,Any}("id" => "zlib", "level" => 5)
-        @test filters2 == [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)]
+        compressor2, filters2 = ChunkManifests.build_codecs(HDF5Driver, [(2, [4]), (1, [5])], 4; context = "ctx")
+        @test compressor2 == Dict{String, Any}("id" => "zlib", "level" => 5)
+        @test filters2 == [Dict{String, Any}("id" => "shuffle", "elementsize" => 4)]
 
         # fletcher32 after the compressor stays after it once the compressor is extracted.
         compressor3, filters3 = ChunkManifests.build_codecs(
-            HDF5Driver, [(2, [4]), (1, [5]), (3, Int[])], 4; context="ctx"
+            HDF5Driver, [(2, [4]), (1, [5]), (3, Int[])], 4; context = "ctx"
         )
-        @test compressor3 == Dict{String,Any}("id" => "zlib", "level" => 5)
+        @test compressor3 == Dict{String, Any}("id" => "zlib", "level" => 5)
         @test filters3 == [
-            Dict{String,Any}("id" => "shuffle", "elementsize" => 4),
-            Dict{String,Any}("id" => "fletcher32"),
+            Dict{String, Any}("id" => "shuffle", "elementsize" => 4),
+            Dict{String, Any}("id" => "fletcher32"),
         ]
 
-        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(4, Int[])], 4; context="ctx")
-        @test_throws "szip" ChunkManifests.build_codecs(HDF5Driver, [(4, Int[])], 4; context="ctx")
-        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32000, Int[])], 4; context="ctx")
-        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32004, Int[])], 4; context="ctx")
-        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32008, Int[])], 4; context="ctx")
-        @test_throws "no Zarr v2 codec" ChunkManifests.build_codecs(HDF5Driver, [(99999, Int[])], 4; context="ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(4, Int[])], 4; context = "ctx")
+        @test_throws "szip" ChunkManifests.build_codecs(HDF5Driver, [(4, Int[])], 4; context = "ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32000, Int[])], 4; context = "ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32004, Int[])], 4; context = "ctx")
+        @test_throws "ctx" ChunkManifests.build_codecs(HDF5Driver, [(32008, Int[])], 4; context = "ctx")
+        @test_throws "no Zarr v2 codec" ChunkManifests.build_codecs(HDF5Driver, [(99999, Int[])], 4; context = "ctx")
 
         @test_throws "more than one" ChunkManifests.build_codecs(
-            HDF5Driver, [(1, [5]), (32015, [5])], 4; context="ctx"
+            HDF5Driver, [(1, [5]), (32015, [5])], 4; context = "ctx"
         )
 
         # Blosc/Zstd mapping, exercised directly: the HDF5 plugins for either
         # are not installed in this environment, so no real file can carry them.
-        bloscconfig, _ = ChunkManifests.build_codecs(HDF5Driver, [(32001, [2, 1, 4, 400, 5, 1, 2])], 4; context="ctx")
+        bloscconfig, _ = ChunkManifests.build_codecs(HDF5Driver, [(32001, [2, 1, 4, 400, 5, 1, 2])], 4; context = "ctx")
         @test bloscconfig ==
-            Dict{String,Any}("id" => "blosc", "cname" => "lz4hc", "clevel" => 5, "shuffle" => 1, "blocksize" => 0)
+            Dict{String, Any}("id" => "blosc", "cname" => "lz4hc", "clevel" => 5, "shuffle" => 1, "blocksize" => 0)
 
-        zstdconfig, _ = ChunkManifests.build_codecs(HDF5Driver, [(32015, [7])], 4; context="ctx")
-        @test zstdconfig == Dict{String,Any}("id" => "zstd", "level" => 7)
+        zstdconfig, _ = ChunkManifests.build_codecs(HDF5Driver, [(32015, [7])], 4; context = "ctx")
+        @test zstdconfig == Dict{String, Any}("id" => "zstd", "level" => 7)
     end
 
     @testset "check_last_filter_multibyte" begin
@@ -77,37 +77,37 @@ end
         # rather than hardcoding one outcome.
         if ChunkManifests.zarr_decodes_byte_filters()
             @test ChunkManifests.check_last_filter_multibyte(
-                [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
+                [Dict{String, Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
             ) === nothing
             @test ChunkManifests.check_last_filter_multibyte(
-                [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
+                [Dict{String, Any}("id" => "fletcher32")], Float64, "ctx"
             ) === nothing
         else
             @test_throws "decoder limitation" ChunkManifests.check_last_filter_multibyte(
-                [Dict{String,Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
+                [Dict{String, Any}("id" => "shuffle", "elementsize" => 4)], Int32, "ctx"
             )
             @test_throws "decoder limitation" ChunkManifests.check_last_filter_multibyte(
-                [Dict{String,Any}("id" => "fletcher32")], Float64, "ctx"
+                [Dict{String, Any}("id" => "fletcher32")], Float64, "ctx"
             )
         end
         @test ChunkManifests.check_last_filter_multibyte(
-            [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)], Int8, "ctx"
+            [Dict{String, Any}("id" => "shuffle", "elementsize" => 1)], Int8, "ctx"
         ) === nothing
-        @test ChunkManifests.check_last_filter_multibyte(Dict{String,Any}[], Int32, "ctx") === nothing
+        @test ChunkManifests.check_last_filter_multibyte(Dict{String, Any}[], Int32, "ctx") === nothing
         @test ChunkManifests.check_last_filter_multibyte(
-            [Dict{String,Any}("id" => "zlib", "level" => 5)], Int32, "ctx"
+            [Dict{String, Any}("id" => "zlib", "level" => 5)], Int32, "ctx"
         ) === nothing
     end
 
     if isfile(ITSLIVE_PATH)
         @testset "NetCDF4 ItsLiveMasks: 2-D shuffle+deflate, single-byte" begin
-            g = scan(ITSLIVE_PATH, HDF5Driver(); group="/grounded")
+            g = scan(ITSLIVE_PATH, HDF5Driver(); group = "/grounded")
             grounded = arraysof(g)["grounded"]
             @test eltype(grounded) == UInt8
             @test size(grounded) == (22896, 18392)
             @test chunkshapeof(grounded) == (3816, 3066)
-            @test compressorof(grounded) == Dict{String,Any}("id" => "zlib", "level" => 9)
-            @test filtersof(grounded) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
+            @test compressorof(grounded) == Dict{String, Any}("id" => "zlib", "level" => 9)
+            @test filtersof(grounded) == [Dict{String, Any}("id" => "shuffle", "elementsize" => 1)]
             @test dimnamesof(grounded) == ["x", "y"]
 
             # What the scan records about itself, which nothing else asserts.
@@ -118,8 +118,8 @@ end
         @testset "NetCDF4 coordinate variables name their own dimension" begin
             # x and y are dimension scales with no DIMENSION_LIST of their own,
             # so their names come from the CLASS/NAME pair instead.
-            x = arraysof(scan(ITSLIVE_PATH, HDF5Driver(); group="/x"))["x"]
-            y = arraysof(scan(ITSLIVE_PATH, HDF5Driver(); group="/y"))["y"]
+            x = arraysof(scan(ITSLIVE_PATH, HDF5Driver(); group = "/x"))["x"]
+            y = arraysof(scan(ITSLIVE_PATH, HDF5Driver(); group = "/y"))["y"]
             @test dimnamesof(x) == ["x"]
             @test dimnamesof(y) == ["y"]
             @test !haskey(attrsof(x), "NAME")
@@ -133,27 +133,27 @@ end
         dir = mktempdir()
         fn = joinpath(dir, "scales.h5")
         h5open(fn, "w") do f
-            named = create_dataset(f, "lon", datatype(Int32), dataspace((4,)); chunk=(2,))
+            named = create_dataset(f, "lon", datatype(Int32), dataspace((4,)); chunk = (2,))
             write(named, Int32.(1:4))
             HDF5.API.h5ds_set_scale(named, "lon")
 
             # libhdf5 gives a dimension with no variable behind it this exact
             # name, which identifies no dimension.
-            phony = create_dataset(f, "anon", datatype(Int32), dataspace((4,)); chunk=(2,))
+            phony = create_dataset(f, "anon", datatype(Int32), dataspace((4,)); chunk = (2,))
             write(phony, Int32.(1:4))
             HDF5.API.h5ds_set_scale(
                 phony, "This is a netCDF dimension but not a netCDF variable.        4"
             )
 
             # Two dimensions, so NAME cannot say which axis it refers to.
-            square = create_dataset(f, "square", datatype(Int32), dataspace((4, 4)); chunk=(2, 2))
+            square = create_dataset(f, "square", datatype(Int32), dataspace((4, 4)); chunk = (2, 2))
             write(square, reshape(Int32.(1:16), 4, 4))
             HDF5.API.h5ds_set_scale(square, "square")
         end
 
-        @test dimnamesof(arraysof(scan(fn, HDF5Driver(); group="/lon"))["lon"]) == ["lon"]
-        @test dimnamesof(arraysof(scan(fn, HDF5Driver(); group="/anon"))["anon"]) == ["dim_1"]
-        @test dimnamesof(arraysof(scan(fn, HDF5Driver(); group="/square"))["square"]) ==
+        @test dimnamesof(arraysof(scan(fn, HDF5Driver(); group = "/lon"))["lon"]) == ["lon"]
+        @test dimnamesof(arraysof(scan(fn, HDF5Driver(); group = "/anon"))["anon"]) == ["dim_1"]
+        @test dimnamesof(arraysof(scan(fn, HDF5Driver(); group = "/square"))["square"]) ==
             ["dim_1", "dim_2"]
     end
 
@@ -169,7 +169,7 @@ end
             for level in (1, 5, 9)
                 d = create_dataset(
                     f, "deflate_$level", datatype(Int32), dataspace(data2d);
-                    chunk=(5, 10), filters=[Deflate(UInt32(level))],
+                    chunk = (5, 10), filters = [Deflate(UInt32(level))],
                 )
                 write(d, data2d)
             end
@@ -178,52 +178,52 @@ end
             # a multi-byte element type with fletcher32 last is covered by
             # check_last_filter_multibyte above and by shuffle_multi below.
             d = create_dataset(
-                f, "fletcher_only", datatype(Int8), dataspace(data2d8); chunk=(5, 10), filters=[Fletcher32()]
+                f, "fletcher_only", datatype(Int8), dataspace(data2d8); chunk = (5, 10), filters = [Fletcher32()]
             )
             write(d, data2d8)
 
             d = create_dataset(
                 f, "shuffle_single", datatype(Int8), dataspace(data2d8);
-                chunk=(5, 10), filters=[Shuffle(), Deflate(UInt32(5))],
+                chunk = (5, 10), filters = [Shuffle(), Deflate(UInt32(5))],
             )
             write(d, data2d8)
             d = create_dataset(
                 f, "shuffle_multi", datatype(Int32), dataspace(data2d);
-                chunk=(5, 10), filters=[Shuffle(), Deflate(UInt32(5))],
+                chunk = (5, 10), filters = [Shuffle(), Deflate(UInt32(5))],
             )
             write(d, data2d)
 
             d = create_dataset(f, "contig", datatype(Int32), dataspace(data2d))
             write(d, data2d)
 
-            d = create_dataset(f, "partial", datatype(Int32), dataspace(data2d); chunk=(5, 10))
+            d = create_dataset(f, "partial", datatype(Int32), dataspace(data2d); chunk = (5, 10))
             d[1:5, 1:10] = data2d[1:5, 1:10]
 
-            create_dataset(f, "empty", datatype(Int32), dataspace(data2d); chunk=(5, 10))
+            create_dataset(f, "empty", datatype(Int32), dataspace(data2d); chunk = (5, 10))
 
-            d = create_dataset(f, "cube", datatype(Float64), dataspace(data3d); chunk=(3, 4, 5))
+            d = create_dataset(f, "cube", datatype(Float64), dataspace(data3d); chunk = (3, 4, 5))
             write(d, data3d)
 
             d = create_dataset(
-                f, "szip", datatype(Int32), dataspace(data2d); chunk=(5, 10), filters=[Szip()]
+                f, "szip", datatype(Int32), dataspace(data2d); chunk = (5, 10), filters = [Szip()]
             )
             write(d, data2d)
             d = create_dataset(
-                f, "nbit", datatype(Int32), dataspace(data2d); chunk=(5, 10), filters=[NBit()]
+                f, "nbit", datatype(Int32), dataspace(data2d); chunk = (5, 10), filters = [NBit()]
             )
             write(d, data2d)
             d = create_dataset(
                 f, "scaleoffset", datatype(Int32), dataspace(data2d);
-                chunk=(5, 10), filters=[ScaleOffset(Int32(2), Int32(2))],
+                chunk = (5, 10), filters = [ScaleOffset(Int32(2), Int32(2))],
             )
             write(d, data2d)
         end
 
         @testset "deflate-only at several levels" begin
             for level in (1, 5, 9)
-                g = scan(fn, HDF5Driver(); group="/deflate_$level")
+                g = scan(fn, HDF5Driver(); group = "/deflate_$level")
                 a = arraysof(g)["deflate_$level"]
-                @test compressorof(a) == Dict{String,Any}("id" => "zlib", "level" => level)
+                @test compressorof(a) == Dict{String, Any}("id" => "zlib", "level" => level)
                 @test isempty(filtersof(a))
 
                 h5open(fn, "r") do f
@@ -240,33 +240,33 @@ end
         end
 
         @testset "fletcher32 alone" begin
-            g = scan(fn, HDF5Driver(); group="/fletcher_only")
+            g = scan(fn, HDF5Driver(); group = "/fletcher_only")
             a = arraysof(g)["fletcher_only"]
-            @test filtersof(a) == [Dict{String,Any}("id" => "fletcher32")]
+            @test filtersof(a) == [Dict{String, Any}("id" => "fletcher32")]
             @test compressorof(a) === nothing
         end
 
         @testset "shuffle single- vs multi-byte" begin
-            g1 = scan(fn, HDF5Driver(); group="/shuffle_single")
+            g1 = scan(fn, HDF5Driver(); group = "/shuffle_single")
             a1 = arraysof(g1)["shuffle_single"]
-            @test filtersof(a1) == [Dict{String,Any}("id" => "shuffle", "elementsize" => 1)]
-            @test compressorof(a1) == Dict{String,Any}("id" => "zlib", "level" => 5)
+            @test filtersof(a1) == [Dict{String, Any}("id" => "shuffle", "elementsize" => 1)]
+            @test compressorof(a1) == Dict{String, Any}("id" => "zlib", "level" => 5)
 
             if ChunkManifests.zarr_decodes_byte_filters()
-                g2 = scan(fn, HDF5Driver(); group="/shuffle_multi")
+                g2 = scan(fn, HDF5Driver(); group = "/shuffle_multi")
                 a2 = arraysof(g2)["shuffle_multi"]
                 @test filtersof(a2) ==
-                    [Dict{String,Any}("id" => "shuffle", "elementsize" => sizeof(eltype(a2)))]
+                    [Dict{String, Any}("id" => "shuffle", "elementsize" => sizeof(eltype(a2)))]
             else
                 @test_throws "decoder limitation" scan(
-                    fn, HDF5Driver(); group="/shuffle_multi"
+                    fn, HDF5Driver(); group = "/shuffle_multi"
                 )
-                @test_throws "shuffle_multi" scan(fn, HDF5Driver(); group="/shuffle_multi")
+                @test_throws "shuffle_multi" scan(fn, HDF5Driver(); group = "/shuffle_multi")
             end
         end
 
         @testset "contiguous dataset -> AffineChunkMap" begin
-            g = scan(fn, HDF5Driver(); group="/contig")
+            g = scan(fn, HDF5Driver(); group = "/contig")
             a = arraysof(g)["contig"]
             @test chunkmapof(a) isa AffineChunkMap
             @test chunkgridsize(chunkmapof(a)) == (1, 1)
@@ -282,7 +282,7 @@ end
         end
 
         @testset "unallocated chunks -> MISSING_INDEX" begin
-            g = scan(fn, HDF5Driver(); group="/partial")
+            g = scan(fn, HDF5Driver(); group = "/partial")
             a = arraysof(g)["partial"]
             m = chunkmapof(a)
             @test chunkstate(m, 1, 1) == VIRTUAL_CHUNK
@@ -294,14 +294,14 @@ end
             end
             @test missingcount == length(CartesianIndices(chunkgridaxes(m))) - 1
 
-            g2 = scan(fn, HDF5Driver(); group="/empty")
+            g2 = scan(fn, HDF5Driver(); group = "/empty")
             a2 = arraysof(g2)["empty"]
             m2 = chunkmapof(a2)
             @test all(I -> chunkstate(m2, I) == MISSING_CHUNK, CartesianIndices(chunkgridaxes(m2)))
         end
 
         @testset "3-D asymmetric shape and chunking" begin
-            g = scan(fn, HDF5Driver(); group="/cube")
+            g = scan(fn, HDF5Driver(); group = "/cube")
             a = arraysof(g)["cube"]
             @test size(a) == (7, 11, 13)
             @test chunkshapeof(a) == (3, 4, 5)
@@ -321,10 +321,10 @@ end
         end
 
         @testset "reject: szip, nbit, scaleoffset" begin
-            @test_throws "szip" scan(fn, HDF5Driver(); group="/szip")
-            @test_throws "nbit" scan(fn, HDF5Driver(); group="/nbit")
+            @test_throws "szip" scan(fn, HDF5Driver(); group = "/szip")
+            @test_throws "nbit" scan(fn, HDF5Driver(); group = "/nbit")
             err = try
-                scan(fn, HDF5Driver(); group="/scaleoffset")
+                scan(fn, HDF5Driver(); group = "/scaleoffset")
                 nothing
             catch e
                 e
@@ -349,9 +349,9 @@ end
             create_dataset(f, "empty", datatype(Int32), dataspace((4,)))
         end
 
-        g = scan(fn, HDF5Driver(); group="/mapping")
+        g = scan(fn, HDF5Driver(); group = "/mapping")
         va = arraysof(g)["mapping"]
-        @test eltype(va) == HDF5.FixedString{1,0}
+        @test eltype(va) == HDF5.FixedString{1, 0}
         @test size(va) == ()
         @test fillvalueof(va) === nothing
         @test attrsof(va)["grid_mapping_name"] == "polar_stereographic"
@@ -364,7 +364,7 @@ end
 
         # A numeric dataset that was never written has a fill value, so a
         # wholly-missing map is the faithful record and reads as that value.
-        ge = scan(fn, HDF5Driver(); group="/empty")
+        ge = scan(fn, HDF5Driver(); group = "/empty")
         vae = arraysof(ge)["empty"]
         @test fillvalueof(vae) == 0
         @test chunkstate(chunkmapof(vae), CartesianIndex(1)) == MISSING_CHUNK
@@ -380,7 +380,7 @@ end
             @test sort(collect(keys(arraysof(g)))) == ["grounded", "mapping", "x", "y"]
 
             mapping = arraysof(g)["mapping"]
-            @test eltype(mapping) == HDF5.FixedString{1,0}
+            @test eltype(mapping) == HDF5.FixedString{1, 0}
             @test size(mapping) == ()
             attrs = attrsof(mapping)
             @test attrs["grid_mapping_name"] == "polar_stereographic"
@@ -408,16 +408,16 @@ end
         fn = joinpath(dir, "siblings.h5")
 
         h5open(fn, "w") do f
-            x = create_dataset(f, "x", datatype(Int32), dataspace((4,)); chunk=(2,))
+            x = create_dataset(f, "x", datatype(Int32), dataspace((4,)); chunk = (2,))
             write(x, Int32.(1:4))
-            t = create_dataset(f, "time", datatype(Int32), dataspace((6,)); chunk=(3,))
+            t = create_dataset(f, "time", datatype(Int32), dataspace((6,)); chunk = (3,))
             write(t, Int32.(1:6))
-            lat = create_dataset(f, "lat", datatype(Int32), dataspace((4,)); chunk=(2,))
+            lat = create_dataset(f, "lat", datatype(Int32), dataspace((4,)); chunk = (2,))
             write(lat, Int32.(11:14))
             crsvar = create_dataset(f, "crs", _fixedstr(1), dataspace(()))
             HDF5.attributes(crsvar)["grid_mapping_name"] = "latitude_longitude"
 
-            d = create_dataset(f, "h", datatype(Int32), dataspace((4, 6)); chunk=(2, 3))
+            d = create_dataset(f, "h", datatype(Int32), dataspace((4, 6)); chunk = (2, 3))
             write(d, reshape(Int32.(1:24), 4, 6))
             HDF5.attributes(d)["coordinates"] = "lat"
             HDF5.attributes(d)["grid_mapping"] = "crs"
@@ -427,14 +427,14 @@ end
             HDF5.API.h5ds_attach_scale(d, x, 1)
 
             # A variable referencing nothing stays alone.
-            plain = create_dataset(f, "plain", datatype(Int32), dataspace((3,)); chunk=(3,))
+            plain = create_dataset(f, "plain", datatype(Int32), dataspace((3,)); chunk = (3,))
             write(plain, Int32.(1:3))
         end
 
         # Scanning one variable brings its dimension scales, the coordinate
         # variables its `coordinates` attribute names, and the grid-mapping
         # variable its `grid_mapping` attribute names.
-        g = scan(fn, HDF5Driver(); group="/h")
+        g = scan(fn, HDF5Driver(); group = "/h")
         @test sort(collect(keys(arraysof(g)))) == ["crs", "h", "lat", "time", "x"]
         @test dimnamesof(arraysof(g)["h"]) == ["x", "time"]
         @test attrsof(arraysof(g)["crs"])["grid_mapping_name"] == "latitude_longitude"
@@ -444,19 +444,19 @@ end
         @test !any(startswith('/'), keys(arraysof(g)))
 
         # Opting out gives exactly the variable asked for.
-        @test collect(keys(arraysof(scan(fn, HDF5Driver(); group="/h", siblings=false)))) ==
+        @test collect(keys(arraysof(scan(fn, HDF5Driver(); group = "/h", siblings = false)))) ==
             ["h"]
 
         # A variable that references nothing gains nothing either way.
-        @test collect(keys(arraysof(scan(fn, HDF5Driver(); group="/plain")))) == ["plain"]
+        @test collect(keys(arraysof(scan(fn, HDF5Driver(); group = "/plain")))) == ["plain"]
 
         # A coordinate variable is its own dimension scale, so it does not drag
         # anything in and does not recurse into itself.
-        @test collect(keys(arraysof(scan(fn, HDF5Driver(); group="/x")))) == ["x"]
+        @test collect(keys(arraysof(scan(fn, HDF5Driver(); group = "/x")))) == ["x"]
 
         # Taking the siblings must not change what the variable itself reads.
         @test Zarr.zopen(g)["h"][:, :] ==
-            Zarr.zopen(scan(fn, HDF5Driver(); group="/h", siblings=false))["h"][:, :]
+            Zarr.zopen(scan(fn, HDF5Driver(); group = "/h", siblings = false))["h"][:, :]
         @test Zarr.zopen(g)["lat"][:] == Int32.(11:14)
     end
 
@@ -465,7 +465,7 @@ end
             # Reaching x, y and the grid mapping from `grounded` alone is what
             # lets a single-variable scan be georeferenced; before, that took
             # three separate scans assembled by hand.
-            g = scan(ITSLIVE_PATH, HDF5Driver(); group="/grounded")
+            g = scan(ITSLIVE_PATH, HDF5Driver(); group = "/grounded")
             @test sort(collect(keys(arraysof(g)))) == ["grounded", "mapping", "x", "y"]
             @test dimnamesof(arraysof(g)["grounded"]) == ["x", "y"]
             @test attrsof(arraysof(g)["mapping"])["grid_mapping_name"] ==
@@ -481,9 +481,13 @@ end
             @test z["y"][:] == yv
             @test size(arraysof(g)["grounded"]) == (length(xv), length(yv))
 
-            @test collect(keys(arraysof(
-                scan(ITSLIVE_PATH, HDF5Driver(); group="/grounded", siblings=false)
-            ))) == ["grounded"]
+            @test collect(
+                keys(
+                    arraysof(
+                        scan(ITSLIVE_PATH, HDF5Driver(); group = "/grounded", siblings = false)
+                    )
+                )
+            ) == ["grounded"]
         end
     end
 
@@ -498,13 +502,13 @@ end
         h5open(fn, "w") do f
             for (nm, tid) in ("be" => HDF5.API.H5T_IEEE_F32BE, "le" => HDF5.API.H5T_IEEE_F32LE)
                 dt = HDF5.Datatype(HDF5.API.h5t_copy(tid))
-                d = create_dataset(f, nm, dt, dataspace(vals); chunk=(2,))
+                d = create_dataset(f, nm, dt, dataspace(vals); chunk = (2,))
                 # Written through the native memory type so libhdf5 converts
                 # into the file's declared order, rather than dropping native
                 # bytes under a label that contradicts them.
                 HDF5.write_dataset(d, datatype(Float32), vals)
             end
-            d8 = create_dataset(f, "i8", datatype(Int8), dataspace((2,)); chunk=(2,))
+            d8 = create_dataset(f, "i8", datatype(Int8), dataspace((2,)); chunk = (2,))
             HDF5.write_dataset(d8, datatype(Int8), Int8[1, 2])
         end
 
@@ -516,7 +520,7 @@ end
         end
 
         err = try
-            scan(fn, HDF5Driver(); group="/be")
+            scan(fn, HDF5Driver(); group = "/be")
             nothing
         catch e
             e
@@ -527,8 +531,8 @@ end
 
         # Little-endian is unaffected, and a single-byte element type has no
         # byte order to get wrong.
-        @test Zarr.zopen(scan(fn, HDF5Driver(); group="/le"))["le"][:] == vals
-        @test Zarr.zopen(scan(fn, HDF5Driver(); group="/i8"))["i8"][:] == Int8[1, 2]
+        @test Zarr.zopen(scan(fn, HDF5Driver(); group = "/le"))["le"][:] == vals
+        @test Zarr.zopen(scan(fn, HDF5Driver(); group = "/i8"))["i8"][:] == Int8[1, 2]
     end
 
     @testset "group argument spellings" begin
@@ -536,9 +540,9 @@ end
         fn = joinpath(dir, "groups.h5")
         h5open(fn, "w") do f
             g = create_group(f, "subgroup")
-            d = create_dataset(g, "v", datatype(Int32), dataspace((3,)); chunk=(3,))
+            d = create_dataset(g, "v", datatype(Int32), dataspace((3,)); chunk = (3,))
             HDF5.write_dataset(d, datatype(Int32), Int32[1, 2, 3])
-            d2 = create_dataset(f, "root", datatype(Int32), dataspace((2,)); chunk=(2,))
+            d2 = create_dataset(f, "root", datatype(Int32), dataspace((2,)); chunk = (2,))
             HDF5.write_dataset(d2, datatype(Int32), Int32[9, 8])
         end
 
@@ -546,7 +550,7 @@ end
         # A leading or trailing separator must not change which variable is
         # found, nor leave it keyed differently.
         for grp in ("subgroup", "/subgroup", "subgroup/", "/subgroup/")
-            g = scan(fn, HDF5Driver(); group=grp)
+            g = scan(fn, HDF5Driver(); group = grp)
             @test collect(keys(arraysof(g))) == ["v"]
             @test Zarr.zopen(g)["v"][:] == Int32[1, 2, 3]
         end
@@ -559,12 +563,12 @@ end
             # An unlimited dimension with a chunk longer than the data written,
             # so the grid's only chunk runs past the declared extent.
             d = create_dataset(
-                f, "u", datatype(Int32), dataspace((3,), max_dims=(-1,)); chunk=(4,)
+                f, "u", datatype(Int32), dataspace((3,), max_dims = (-1,)); chunk = (4,)
             )
             HDF5.write_dataset(d, datatype(Int32), Int32[1, 2, 3])
         end
 
-        g = scan(fn, HDF5Driver(); group="/u")
+        g = scan(fn, HDF5Driver(); group = "/u")
         va = arraysof(g)["u"]
         @test size(va) == (3,)
         @test chunkshapeof(va) == (4,)
@@ -586,7 +590,7 @@ end
             # alongside the dataset's own fill value.
             d = create_dataset(
                 f, "arrfill", datatype(Float32), dataspace((4,));
-                chunk=(2,), fill_value=Float32(-9),
+                chunk = (2,), fill_value = Float32(-9),
             )
             HDF5.write_dataset(d, datatype(Float32), Float32[1, 2, 3, 4])
             HDF5.attributes(d)["_FillValue"] = Float32[-9]
@@ -594,29 +598,29 @@ end
 
             # A zero-length dimension, and a chunked dataset with nothing
             # written to it.
-            create_dataset(f, "zerolen", datatype(Int32), dataspace((0,)); chunk=(2,))
-            create_dataset(f, "nochunks", datatype(Int32), dataspace((4,)); chunk=(2,))
+            create_dataset(f, "zerolen", datatype(Int32), dataspace((0,)); chunk = (2,))
+            create_dataset(f, "nochunks", datatype(Int32), dataspace((4,)); chunk = (2,))
 
             HDF5.write_dataset(
                 create_dataset(f, "vlen", datatype(String), dataspace((2,))),
                 datatype(String), ["ab", "cd"],
             )
-            HDF5.write(f, "compound", [(a=Int32(1), b=Float64(2))])
+            HDF5.write(f, "compound", [(a = Int32(1), b = Float64(2))])
         end
 
         @testset "the dataset fill value and an array-valued attribute coexist" begin
-            va = arraysof(scan(fn, HDF5Driver(); group="/arrfill"))["arrfill"]
+            va = arraysof(scan(fn, HDF5Driver(); group = "/arrfill"))["arrfill"]
             # The fill value comes from the dataset's creation properties and is
             # scalar; the attribute of the same name passes through as written.
             @test fillvalueof(va) === Float32(-9)
             @test attrsof(va)["_FillValue"] == Float32[-9]
             @test attrsof(va)["scalar_attr"] === Float32(2.5)
-            @test Zarr.zopen(scan(fn, HDF5Driver(); group="/arrfill"))["arrfill"][:] ==
+            @test Zarr.zopen(scan(fn, HDF5Driver(); group = "/arrfill"))["arrfill"][:] ==
                 Float32[1, 2, 3, 4]
         end
 
         @testset "a zero-length dimension yields an empty array, not an error" begin
-            g = scan(fn, HDF5Driver(); group="/zerolen")
+            g = scan(fn, HDF5Driver(); group = "/zerolen")
             va = arraysof(g)["zerolen"]
             @test size(va) == (0,)
             @test chunkgridsize(chunkmapof(va)) == (0,)
@@ -627,7 +631,7 @@ end
         end
 
         @testset "a chunked dataset with nothing written reads its fill value" begin
-            g = scan(fn, HDF5Driver(); group="/nochunks")
+            g = scan(fn, HDF5Driver(); group = "/nochunks")
             va = arraysof(g)["nochunks"]
             @test chunkgridsize(chunkmapof(va)) == (2,)
             for I in CartesianIndices(chunkgridaxes(chunkmapof(va)))
@@ -642,7 +646,7 @@ end
             # as opaque would hand back numbers that decode to nothing.
             for nm in ("vlen", "compound")
                 err = try
-                    scan(fn, HDF5Driver(); group="/$nm")
+                    scan(fn, HDF5Driver(); group = "/$nm")
                     nothing
                 catch e
                     e

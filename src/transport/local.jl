@@ -4,24 +4,28 @@
 # happens in `_assemble` (shared with the generic fetchranges).
 
 function _localpath(uri::AbstractString)
-    return startswith(uri, "file://") ? chop(uri; head=7, tail=0) : uri
+    return startswith(uri, "file://") ? chop(uri; head = 7, tail = 0) : uri
 end
 
 function _checked_range(path::AbstractString, sz::Integer, r::ByteRange)
     stop = r.offset + r.nbytes
-    stop <= sz || throw(ArgumentError(
-        "range [$(r.offset), $stop) exceeds size $sz bytes of file $path"
-    ))
+    stop <= sz || throw(
+        ArgumentError(
+            "range [$(r.offset), $stop) exceeds size $sz bytes of file $path"
+        )
+    )
     return nothing
 end
 
 function _read_checked(io::IO, path::AbstractString, r::ByteRange)
     seek(io, r.offset)
     data = read(io, Int(r.nbytes))
-    length(data) == r.nbytes || throw(ErrorException(
-        "short read from $path: requested $(r.nbytes) bytes at offset " *
-        "$(r.offset), got $(length(data)) bytes",
-    ))
+    length(data) == r.nbytes || throw(
+        ErrorException(
+            "short read from $path: requested $(r.nbytes) bytes at offset " *
+                "$(r.offset), got $(length(data)) bytes",
+        )
+    )
     return data
 end
 
@@ -66,7 +70,7 @@ run sequentially on this one handle rather than through `concurrency(t)`,
 since a single `IOStream` cannot be seeked and read from concurrently.
 """
 function fetchranges(t::LocalTransport, uri::AbstractString, ranges::AbstractVector{ByteRange})
-    merged, mapping = coalesce_ranges(ranges; maxgap=maxgap(t), maxblock=maxblock(t))
+    merged, mapping = coalesce_ranges(ranges; maxgap = maxgap(t), maxblock = maxblock(t))
     path = _localpath(uri)
     isfile(path) || throw(ArgumentError("no such file: $path"))
     sz = filesize(path)

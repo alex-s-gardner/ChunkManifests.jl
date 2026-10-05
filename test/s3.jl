@@ -20,13 +20,13 @@
     # `~/.aws`, or instance metadata — so these tests pass on a machine with
     # no AWS credentials at all.
     fakeconfig() = AWSS3.AWS.AWSConfig(;
-        creds=AWSS3.AWS.AWSCredentials("AKIAFAKEFAKEFAKEFAKE", "fakesecret"),
-        region="us-west-2",
+        creds = AWSS3.AWS.AWSCredentials("AKIAFAKEFAKEFAKEFAKE", "fakesecret"),
+        region = "us-west-2",
     )
 
     @testset "construction" begin
         config = fakeconfig()
-        t = ChunkManifests.S3Transport("my-bucket"; aws=config)
+        t = ChunkManifests.S3Transport("my-bucket"; aws = config)
         @test t isa ChunkManifests.S3Transport
         @test t.bucket == "my-bucket"
         @test t.aws === config
@@ -44,11 +44,11 @@
 
     @testset "requester-pays header" begin
         config = fakeconfig()
-        t = ChunkManifests.S3Transport("my-bucket"; aws=config, requesterpays=true)
+        t = ChunkManifests.S3Transport("my-bucket"; aws = config, requesterpays = true)
         @test ext._awsconfig(t.aws) === config
         @test ext._headers(t.aws) == Dict("x-amz-request-payer" => "requester")
 
-        plain = ChunkManifests.S3Transport("my-bucket"; aws=config)
+        plain = ChunkManifests.S3Transport("my-bucket"; aws = config)
         @test isempty(ext._headers(plain.aws))
     end
 
@@ -65,7 +65,7 @@
     end
 
     @testset "uri resolution" begin
-        t = ChunkManifests.S3Transport("default-bucket"; aws=fakeconfig())
+        t = ChunkManifests.S3Transport("default-bucket"; aws = fakeconfig())
 
         @test ext._s3_bucket_key(t, "some/key.h5") == ("default-bucket", "some/key.h5")
         @test ext._s3_bucket_key(t, "s3://other-bucket/some/key.h5") ==
@@ -81,14 +81,14 @@
     @testset "zero-length range" begin
         # Must short-circuit before issuing any request: a 0-byte
         # byte_range would otherwise be the nonsensical "bytes=6-5".
-        t = ChunkManifests.S3Transport("my-bucket"; aws=fakeconfig())
+        t = ChunkManifests.S3Transport("my-bucket"; aws = fakeconfig())
         @test ChunkManifests.fetchrange(t, "some/key", ChunkManifests.ByteRange(5, 0)) == UInt8[]
         @test ChunkManifests.fetchrange(t, "s3://other/key", ChunkManifests.ByteRange(0, 0)) ==
             UInt8[]
     end
 
     @testset "malformed uri fails before any network call" begin
-        t = ChunkManifests.S3Transport("my-bucket"; aws=fakeconfig())
+        t = ChunkManifests.S3Transport("my-bucket"; aws = fakeconfig())
         @test_throws "malformed" ChunkManifests.fetchrange(
             t, "s3://no-key-bucket", ChunkManifests.ByteRange(0, 10)
         )

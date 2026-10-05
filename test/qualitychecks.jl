@@ -10,11 +10,11 @@ import JSON
         ChunkManifests;
         # Aqua walks the test manifest and throws on SymDict, an AWSS3
         # dependency carrying only a REQUIRE file. Recorded in UPSTREAM.md.
-        persistent_tasks=false,
+        persistent_tasks = false,
         # Aqua leaves this off by default. On here, an undocumented exported
         # name fails the suite. It has teeth only on Julia 1.11 and later,
         # where Docs.undocumented_names exists.
-        undocumented_names=true,
+        undocumented_names = true,
     )
 end
 
@@ -23,7 +23,7 @@ end
         ChunkManifests;
         # Only accurate from Julia 1.11, where "public" means Base.ispublic
         # rather than falling back to isexported.
-        all_explicit_imports_are_public=VERSION >= v"1.11",
+        all_explicit_imports_are_public = VERSION >= v"1.11",
         # Three reasons this fails, none fixable without reimplementing
         # another package's internals or over-exposing our own. Zarr exports
         # no API for writing a custom store or filter — building
@@ -40,7 +40,7 @@ end
         # across a module boundary Julia itself imposes, so this is no
         # different from one file in src/ calling a `_`-prefixed function
         # in another.
-        all_qualified_accesses_are_public=false,
+        all_qualified_accesses_are_public = false,
         # HTTP.get is Base.get — HTTP.jl extends it rather than defining its
         # own name — and JSON.lower resolves to StructUtils.lower on every
         # Julia version checked. The check only fails on Julia 1.10, not on
@@ -50,8 +50,8 @@ end
         # here, so skip (not ignore) exempts only these exact
         # (accessing-module, owner) pairs rather than `get`/`lower`
         # package-wide.
-        all_qualified_accesses_via_owners=(;
-            skip=(Base => Core, HTTP => Base, JSON => parentmodule(JSON.lower)),
+        all_qualified_accesses_via_owners = (;
+            skip = (Base => Core, HTTP => Base, JSON => parentmodule(JSON.lower)),
         ),
     )
 end

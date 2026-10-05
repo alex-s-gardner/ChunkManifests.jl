@@ -5,9 +5,9 @@
 # uri, to assert validate queries each distinct file exactly once.
 struct _vl_CountingTransport <: AbstractTransport
     inner::LocalTransport
-    counts::Dict{String,Int}
+    counts::Dict{String, Int}
 end
-_vl_CountingTransport() = _vl_CountingTransport(LocalTransport(), Dict{String,Int}())
+_vl_CountingTransport() = _vl_CountingTransport(LocalTransport(), Dict{String, Int}())
 
 function ChunkManifests.objectsize(t::_vl_CountingTransport, uri)
     t.counts[uri] = get(t.counts, uri, 0) + 1
@@ -28,7 +28,7 @@ struct _vl_NoSizeTransport <: AbstractTransport end
 
 # A minimal AbstractArray with no setindex! method, to exercise setchunk!'s
 # failure path for a read-only or lazily-backed column.
-struct _vl_ImmutableCol <: AbstractArray{UInt32,2}
+struct _vl_ImmutableCol <: AbstractArray{UInt32, 2}
     data::Matrix{UInt32}
 end
 Base.size(a::_vl_ImmutableCol) = size(a.data)
@@ -44,7 +44,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             end
 
             t = PathTable()
-            idxs = UInt32[push_uri!(t, p; size=n) for (p, n) in zip(paths, sizes)]
+            idxs = UInt32[push_uri!(t, p; size = n) for (p, n) in zip(paths, sizes)]
             index = reshape(idxs, 3, 1)
             offset = zeros(UInt64, 3, 1)
             nbytes = UInt64.(reshape(sizes, 3, 1))
@@ -69,7 +69,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             end
 
             t = PathTable()
-            idxs = UInt32[push_uri!(t, p; size=n) for (p, n) in zip(paths, sizes)]
+            idxs = UInt32[push_uri!(t, p; size = n) for (p, n) in zip(paths, sizes)]
             index = reshape(idxs, 3, 1)
             offset = zeros(UInt64, 3, 1)
             nbytes = UInt64.(reshape(sizes, 3, 1))
@@ -99,7 +99,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             end
 
             t = PathTable()
-            idxs = UInt32[push_uri!(t, p; size=n) for (p, n) in zip(paths, sizes)]
+            idxs = UInt32[push_uri!(t, p; size = n) for (p, n) in zip(paths, sizes)]
             index = reshape(idxs, 2, 1)
             offset = zeros(UInt64, 2, 1)
             nbytes = UInt64.(reshape(sizes, 2, 1))
@@ -146,7 +146,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             end
 
             t = PathTable()
-            idxs = UInt32[push_uri!(t, p; size=100) for p in paths]
+            idxs = UInt32[push_uri!(t, p; size = 100) for p in paths]
 
             n = 500
             index = Vector{UInt32}(undef, n)
@@ -170,7 +170,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             p = joinpath(dir, "f.bin")
             write(p, rand(UInt8, 10))
             t = PathTable()
-            idx = push_uri!(t, p; size=10)
+            idx = push_uri!(t, p; size = 10)
             # Claims bytes [5, 15), past the recorded 10-byte size.
             m = ExplicitChunkMap(
                 t, reshape(UInt32[idx], 1, 1), reshape(UInt64[5], 1, 1), reshape(UInt64[10], 1, 1)
@@ -181,13 +181,13 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
             @test report.consistency[1].kind == :offset_overflow
             @test occursin("exceeds", report.consistency[1].reason)
 
-            @test_throws "inconsistent" validate(m, _vl_ExplodingTransport(); strict=true)
+            @test_throws "inconsistent" validate(m, _vl_ExplodingTransport(); strict = true)
         end
     end
 
     @testset "validate: consistency - out-of-range path table index" begin
         t = PathTable()
-        push_uri!(t, "only.bin"; size=10)
+        push_uri!(t, "only.bin"; size = 10)
         m = ExplicitChunkMap(
             t, reshape(UInt32[99], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[1], 1, 1)
         )
@@ -197,7 +197,7 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
         @test report.consistency[1].kind == :bad_index
         @test occursin("out of range", report.consistency[1].reason)
 
-        @test_throws "inconsistent" validate(m, _vl_ExplodingTransport(); strict=true)
+        @test_throws "inconsistent" validate(m, _vl_ExplodingTransport(); strict = true)
     end
 
     @testset "validate: consistency - inline chunk with no bytes" begin
@@ -212,12 +212,12 @@ Base.getindex(a::_vl_ImmutableCol, I...) = getindex(a.data, I...)
         @test length(report.consistency) == 1
         @test report.consistency[1].kind == :empty_inline
 
-        @test_throws "inconsistent" validate(m, _vl_ExplodingTransport(); strict=true)
+        @test_throws "inconsistent" validate(m, _vl_ExplodingTransport(); strict = true)
     end
 
     @testset "validate: transport without objectsize degrades clearly" begin
         t = PathTable()
-        push_uri!(t, "whatever.bin"; size=10)
+        push_uri!(t, "whatever.bin"; size = 10)
         m = ExplicitChunkMap(
             t, reshape(UInt32[1], 1, 1), reshape(UInt64[0], 1, 1), reshape(UInt64[4], 1, 1)
         )

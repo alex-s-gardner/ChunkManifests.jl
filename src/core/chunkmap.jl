@@ -9,17 +9,19 @@ Build a [`ExplicitChunkMap`](@ref) over parallel columns `index`, `offset` and
 `CartesianIndex` into each). `inline` holds the bytes for chunks whose
 `index` entry is `INLINE_INDEX`, keyed by `CartesianIndex`.
 """
-function ExplicitChunkMap(table::PathTable, index, offset, nbytes; inline=Dict())
+function ExplicitChunkMap(table::PathTable, index, offset, nbytes; inline = Dict())
     ax = axes(index)
     if axes(offset) != ax || axes(nbytes) != ax
-        throw(DimensionMismatch(
-            "ExplicitChunkMap: index, offset, and nbytes must share axes; got " *
-            "axes(index)=$ax, axes(offset)=$(axes(offset)), axes(nbytes)=$(axes(nbytes))",
-        ))
+        throw(
+            DimensionMismatch(
+                "ExplicitChunkMap: index, offset, and nbytes must share axes; got " *
+                    "axes(index)=$ax, axes(offset)=$(axes(offset)), axes(nbytes)=$(axes(nbytes))",
+            )
+        )
     end
     N = length(ax)
-    inlinedict = Dict{CartesianIndex{N},Vector{UInt8}}(inline)
-    return ExplicitChunkMap{N,typeof(index),typeof(offset),typeof(nbytes)}(
+    inlinedict = Dict{CartesianIndex{N}, Vector{UInt8}}(inline)
+    return ExplicitChunkMap{N, typeof(index), typeof(offset), typeof(nbytes)}(
         table, index, offset, nbytes, inlinedict
     )
 end
@@ -35,8 +37,8 @@ Build an [`AffineChunkMap`](@ref) over a chunk grid of size `gridsize`
 [`ChunkManifest`](@ref), so `fileindex` says which one is this map's file.
 """
 function AffineChunkMap(
-    table::PathTable, gridsize, base, strides, chunkbytes; fileindex::Integer=1
-)
+        table::PathTable, gridsize, base, strides, chunkbytes; fileindex::Integer = 1
+    )
     N = length(Tuple(gridsize))
     return AffineChunkMap{N}(table, fileindex, gridsize, base, strides, chunkbytes)
 end
@@ -88,13 +90,13 @@ that is constant in the number of chunks.
 """
 function _retable(m::ExplicitChunkMap, table::PathTable, remap::Vector{UInt32})
     index = map(idx -> _remapindex(idx, remap), m.index)
-    return ExplicitChunkMap(table, index, m.offset, m.nbytes; inline=m.inline)
+    return ExplicitChunkMap(table, index, m.offset, m.nbytes; inline = m.inline)
 end
 
 function _retable(m::AffineChunkMap, table::PathTable, remap::Vector{UInt32})
     return AffineChunkMap(
         table, m.gridsize, m.base, m.strides, m.chunkbytes;
-        fileindex=remap[m.fileindex],
+        fileindex = remap[m.fileindex],
     )
 end
 
@@ -127,7 +129,7 @@ Call this before [`chunklocation`](@ref) or [`inlinebytes`](@ref), each of
 which applies to one state only and throws on the others.
 """
 chunkstate(m::ExplicitChunkMap{N}, I::CartesianIndex{N}) where {N} = _chunkstate(m.index[I])
-chunkstate(m::ExplicitChunkMap{N}, I::Vararg{Integer,N}) where {N} = chunkstate(m, CartesianIndex(I))
+chunkstate(m::ExplicitChunkMap{N}, I::Vararg{Integer, N}) where {N} = chunkstate(m, CartesianIndex(I))
 
 """
     chunklocation(m::AbstractChunkMap, I::CartesianIndex) -> (uri, offset, nbytes)
@@ -143,14 +145,16 @@ it a copy rather than a decode.
 """
 function chunklocation(m::ExplicitChunkMap{N}, I::CartesianIndex{N}) where {N}
     state = chunkstate(m, I)
-    state == VIRTUAL_CHUNK || throw(ArgumentError(
-        "chunklocation: chunk $(Tuple(I)) is $state, not VIRTUAL_CHUNK; " *
-        "check chunkstate before calling chunklocation",
-    ))
+    state == VIRTUAL_CHUNK || throw(
+        ArgumentError(
+            "chunklocation: chunk $(Tuple(I)) is $state, not VIRTUAL_CHUNK; " *
+                "check chunkstate before calling chunklocation",
+        )
+    )
     idx = m.index[I]
     return (uriof(m.table, idx), UInt64(m.offset[I]), UInt64(m.nbytes[I]))
 end
-function chunklocation(m::ExplicitChunkMap{N}, I::Vararg{Integer,N}) where {N}
+function chunklocation(m::ExplicitChunkMap{N}, I::Vararg{Integer, N}) where {N}
     return chunklocation(m, CartesianIndex(I))
 end
 
@@ -167,13 +171,15 @@ file.
 """
 function inlinebytes(m::ExplicitChunkMap{N}, I::CartesianIndex{N}) where {N}
     state = chunkstate(m, I)
-    state == INLINE_CHUNK || throw(ArgumentError(
-        "inlinebytes: chunk $(Tuple(I)) is $state, not INLINE_CHUNK; " *
-        "check chunkstate before calling inlinebytes",
-    ))
+    state == INLINE_CHUNK || throw(
+        ArgumentError(
+            "inlinebytes: chunk $(Tuple(I)) is $state, not INLINE_CHUNK; " *
+                "check chunkstate before calling inlinebytes",
+        )
+    )
     return m.inline[I]
 end
-function inlinebytes(m::ExplicitChunkMap{N}, I::Vararg{Integer,N}) where {N}
+function inlinebytes(m::ExplicitChunkMap{N}, I::Vararg{Integer, N}) where {N}
     return inlinebytes(m, CartesianIndex(I))
 end
 
@@ -185,7 +191,7 @@ function Base.show(io::IO, m::ExplicitChunkMap{N}) where {N}
         counts[state] += 1
         state == VIRTUAL_CHUNK && push!(referenced, m.index[I])
     end
-    print(
+    return print(
         io,
         "ExplicitChunkMap{$N}(grid=", chunkgridsize(m), ", files=", length(referenced),
         ", virtual=", counts[VIRTUAL_CHUNK],
@@ -206,30 +212,32 @@ function chunkstate(m::AffineChunkMap{N}, I::CartesianIndex{N}) where {N}
     _checkgridindex(m, I)
     return VIRTUAL_CHUNK
 end
-chunkstate(m::AffineChunkMap{N}, I::Vararg{Integer,N}) where {N} = chunkstate(m, CartesianIndex(I))
+chunkstate(m::AffineChunkMap{N}, I::Vararg{Integer, N}) where {N} = chunkstate(m, CartesianIndex(I))
 
 function chunklocation(m::AffineChunkMap{N}, I::CartesianIndex{N}) where {N}
     _checkgridindex(m, I)
     offset = m.base + sum(m.strides .* UInt64.(Tuple(I) .- 1))
     return (uriof(m.table, m.fileindex), UInt64(offset), UInt64(m.chunkbytes))
 end
-function chunklocation(m::AffineChunkMap{N}, I::Vararg{Integer,N}) where {N}
+function chunklocation(m::AffineChunkMap{N}, I::Vararg{Integer, N}) where {N}
     return chunklocation(m, CartesianIndex(I))
 end
 
 function inlinebytes(m::AffineChunkMap{N}, I::CartesianIndex{N}) where {N}
     _checkgridindex(m, I)
-    throw(ArgumentError(
-        "inlinebytes: chunk $(Tuple(I)) is VIRTUAL_CHUNK, not INLINE_CHUNK; " *
-        "AffineChunkMap has no inline chunks",
-    ))
+    throw(
+        ArgumentError(
+            "inlinebytes: chunk $(Tuple(I)) is VIRTUAL_CHUNK, not INLINE_CHUNK; " *
+                "AffineChunkMap has no inline chunks",
+        )
+    )
 end
-function inlinebytes(m::AffineChunkMap{N}, I::Vararg{Integer,N}) where {N}
+function inlinebytes(m::AffineChunkMap{N}, I::Vararg{Integer, N}) where {N}
     return inlinebytes(m, CartesianIndex(I))
 end
 
 function Base.show(io::IO, m::AffineChunkMap{N}) where {N}
-    print(
+    return print(
         io, "AffineChunkMap{$N}(grid=", chunkgridsize(m),
         ", file=", repr(uriof(m.table, m.fileindex)), ")",
     )
@@ -248,8 +256,8 @@ way to edit one: it trades constant size for the ability to call
 function ExplicitChunkMap(m::AffineChunkMap{N}) where {N}
     gridaxes = chunkgridaxes(m)
     index = fill(m.fileindex, map(length, gridaxes))
-    offset = Array{UInt64,N}(undef, size(index))
-    nbytes = Array{UInt64,N}(undef, size(index))
+    offset = Array{UInt64, N}(undef, size(index))
+    nbytes = Array{UInt64, N}(undef, size(index))
     for I in CartesianIndices(gridaxes)
         _, off, len = chunklocation(m, I)
         J = CartesianIndex(map((i, ax) -> i - first(ax) + 1, Tuple(I), gridaxes))

@@ -74,25 +74,29 @@ Throws `ArgumentError` naming the problem for a truncated directory, a
 `Value_Offset`/`Count`, or an unrecognized `TIFFTagLocation`.
 """
 function decode_geokeys(
-    directory::AbstractVector{<:Integer};
-    doubleparams::AbstractVector{<:Real}=Float64[],
-    asciiparams::AbstractString="",
-)
+        directory::AbstractVector{<:Integer};
+        doubleparams::AbstractVector{<:Real} = Float64[],
+        asciiparams::AbstractString = "",
+    )
     Base.require_one_based_indexing(directory)
-    length(directory) >= 4 || throw(ArgumentError(
-        "GeoKeyDirectoryTag must have at least 4 header values, got $(length(directory))"
-    ))
+    length(directory) >= 4 || throw(
+        ArgumentError(
+            "GeoKeyDirectoryTag must have at least 4 header values, got $(length(directory))"
+        )
+    )
 
     nkeys = Int(directory[4])
     expectedlength = 4 + 4 * nkeys
-    length(directory) == expectedlength || throw(ArgumentError(
-        "GeoKeyDirectoryTag header declares NumberOfKeys=$nkeys (expects " *
-        "$expectedlength total values) but the directory has $(length(directory)) values"
-    ))
+    length(directory) == expectedlength || throw(
+        ArgumentError(
+            "GeoKeyDirectoryTag header declares NumberOfKeys=$nkeys (expects " *
+                "$expectedlength total values) but the directory has $(length(directory)) values"
+        )
+    )
 
     Base.require_one_based_indexing(doubleparams)
 
-    keys = Dict{Int,Any}()
+    keys = Dict{Int, Any}()
     for n in 1:nkeys
         base = 4 + 4 * (n - 1)
         keyid = Int(directory[base + 1])
@@ -101,39 +105,51 @@ function decode_geokeys(
         valueoffset = Int(directory[base + 4])
 
         value = if location == GEOKEY_LOCATION_INLINE
-            count == 1 || throw(ArgumentError(
-                "GeoKey $keyid is inline (TIFFTagLocation=0) but has Count=$count; " *
-                "an inline value must have Count=1"
-            ))
+            count == 1 || throw(
+                ArgumentError(
+                    "GeoKey $keyid is inline (TIFFTagLocation=0) but has Count=$count; " *
+                        "an inline value must have Count=1"
+                )
+            )
             UInt16(valueoffset)
         elseif location == TAG_GeoDoubleParams
-            isempty(doubleparams) && throw(ArgumentError(
-                "GeoKey $keyid refers to GeoDoubleParamsTag (34736) but no " *
-                "doubleparams array was supplied"
-            ))
+            isempty(doubleparams) && throw(
+                ArgumentError(
+                    "GeoKey $keyid refers to GeoDoubleParamsTag (34736) but no " *
+                        "doubleparams array was supplied"
+                )
+            )
             lo, hi = valueoffset + 1, valueoffset + count
-            (lo >= firstindex(doubleparams) && hi <= lastindex(doubleparams)) || throw(ArgumentError(
-                "GeoKey $keyid indexes doubleparams[$lo:$hi], outside its axes " *
-                "$(axes(doubleparams, 1))"
-            ))
+            (lo >= firstindex(doubleparams) && hi <= lastindex(doubleparams)) || throw(
+                ArgumentError(
+                    "GeoKey $keyid indexes doubleparams[$lo:$hi], outside its axes " *
+                        "$(axes(doubleparams, 1))"
+                )
+            )
             count == 1 ? Float64(doubleparams[lo]) : Float64.(doubleparams[lo:hi])
         elseif location == TAG_GeoASCIIParams
-            isempty(asciiparams) && throw(ArgumentError(
-                "GeoKey $keyid refers to GeoASCIIParamsTag (34737) but no " *
-                "asciiparams string was supplied"
-            ))
+            isempty(asciiparams) && throw(
+                ArgumentError(
+                    "GeoKey $keyid refers to GeoASCIIParamsTag (34737) but no " *
+                        "asciiparams string was supplied"
+                )
+            )
             lo, hi = valueoffset + 1, valueoffset + count
-            (lo >= 1 && hi <= ncodeunits(asciiparams)) || throw(ArgumentError(
-                "GeoKey $keyid indexes asciiparams[$lo:$hi], outside its length " *
-                "$(ncodeunits(asciiparams))"
-            ))
+            (lo >= 1 && hi <= ncodeunits(asciiparams)) || throw(
+                ArgumentError(
+                    "GeoKey $keyid indexes asciiparams[$lo:$hi], outside its length " *
+                        "$(ncodeunits(asciiparams))"
+                )
+            )
             raw = asciiparams[lo:hi]
             endswith(raw, "|") ? raw[1:(end - 1)] : raw
         else
-            throw(ArgumentError(
-                "GeoKey $keyid has unrecognized TIFFTagLocation $location (expected 0, " *
-                "$TAG_GeoDoubleParams, or $TAG_GeoASCIIParams)"
-            ))
+            throw(
+                ArgumentError(
+                    "GeoKey $keyid has unrecognized TIFFTagLocation $location (expected 0, " *
+                        "$TAG_GeoDoubleParams, or $TAG_GeoASCIIParams)"
+                )
+            )
         end
 
         keys[keyid] = value
@@ -184,7 +200,7 @@ matrix `[x, y, z, 1]ᵗ = M * [i, j, k, 1]ᵗ` where `i, j, k` are GeoTIFF's
 [`pixel_coordinates`](@ref).
 """
 struct GeoTransform
-    matrix::NTuple{16,Float64}
+    matrix::NTuple{16, Float64}
 end
 
 """
@@ -202,18 +218,22 @@ Throws `ArgumentError` if `scale` does not have 3 values or `tiepoint` does
 not have exactly 6.
 """
 function geotransform_from_scale_tiepoint(
-    scale::AbstractVector{<:Real}, tiepoint::AbstractVector{<:Real}
-)
-    length(scale) == 3 || throw(ArgumentError(
-        "ModelPixelScaleTag must have 3 values (scale_x, scale_y, scale_z), " *
-        "got $(length(scale))"
-    ))
-    length(tiepoint) == 6 || throw(ArgumentError(
-        "ModelTiepointTag must have exactly 6 values (one tiepoint: i, j, k, x, " *
-        "y, z) to build an affine transform; got $(length(tiepoint)) values. " *
-        "Multiple ground-control-point tiepoints describe a non-affine " *
-        "registration this package does not fit."
-    ))
+        scale::AbstractVector{<:Real}, tiepoint::AbstractVector{<:Real}
+    )
+    length(scale) == 3 || throw(
+        ArgumentError(
+            "ModelPixelScaleTag must have 3 values (scale_x, scale_y, scale_z), " *
+                "got $(length(scale))"
+        )
+    )
+    length(tiepoint) == 6 || throw(
+        ArgumentError(
+            "ModelTiepointTag must have exactly 6 values (one tiepoint: i, j, k, x, " *
+                "y, z) to build an affine transform; got $(length(tiepoint)) values. " *
+                "Multiple ground-control-point tiepoints describe a non-affine " *
+                "registration this package does not fit."
+        )
+    )
     Base.require_one_based_indexing(scale, tiepoint)
 
     sx, sy, sz = Float64(scale[1]), Float64(scale[2]), Float64(scale[3])
@@ -241,10 +261,12 @@ values forming a 4×4 matrix in row-major order.
 Throws `ArgumentError` if `matrix` does not have exactly 16 values.
 """
 function geotransform_from_matrix(matrix::AbstractVector{<:Real})
-    length(matrix) == 16 || throw(ArgumentError(
-        "ModelTransformationTag must have exactly 16 values (a 4×4 matrix), " *
-        "got $(length(matrix))"
-    ))
+    length(matrix) == 16 || throw(
+        ArgumentError(
+            "ModelTransformationTag must have exactly 16 values (a 4×4 matrix), " *
+                "got $(length(matrix))"
+        )
+    )
     Base.require_one_based_indexing(matrix)
     return GeoTransform(ntuple(k -> Float64(matrix[k]), 16))
 end
@@ -260,17 +282,19 @@ both are supplied.
 Throws `ArgumentError` if neither `transformation` nor the `pixelscale` +
 `tiepoints` pair is supplied.
 """
-function geotransform(; pixelscale=nothing, tiepoints=nothing, transformation=nothing)
+function geotransform(; pixelscale = nothing, tiepoints = nothing, transformation = nothing)
     if transformation !== nothing
         return geotransform_from_matrix(transformation)
     elseif pixelscale !== nothing && tiepoints !== nothing
         return geotransform_from_scale_tiepoint(pixelscale, tiepoints)
     else
-        throw(ArgumentError(
-            "geotransform: need either `transformation` (ModelTransformationTag) " *
-            "or both `pixelscale` and `tiepoints` (ModelPixelScaleTag + " *
-            "ModelTiepointTag)"
-        ))
+        throw(
+            ArgumentError(
+                "geotransform: need either `transformation` (ModelTransformationTag) " *
+                    "or both `pixelscale` and `tiepoints` (ModelPixelScaleTag + " *
+                    "ModelTiepointTag)"
+            )
+        )
     end
 end
 
@@ -282,7 +306,7 @@ rarely needed), where `i, j` are 1-based as in a Julia array index. `i, j` are
 shifted to GeoTIFF's 0-based raster space before applying `gt`'s matrix; `k`
 is used as given.
 """
-function pixel_to_world(gt::GeoTransform, i::Real, j::Real, k::Real=0.0)
+function pixel_to_world(gt::GeoTransform, i::Real, j::Real, k::Real = 0.0)
     m = gt.matrix
     ri, rj, rk = i - 1, j - 1, k
     x = m[1] * ri + m[2] * rj + m[3] * rk + m[4]
@@ -307,17 +331,19 @@ pixel inward; [`RASTER_PIXEL_IS_POINT`](@ref) means it already locates the
 center.
 """
 function pixel_coordinates(
-    gt::GeoTransform, width::Integer, height::Integer; rastertype::Integer=RASTER_PIXEL_IS_AREA
-)
+        gt::GeoTransform, width::Integer, height::Integer; rastertype::Integer = RASTER_PIXEL_IS_AREA
+    )
     shift = if rastertype == RASTER_PIXEL_IS_AREA
         0.5
     elseif rastertype == RASTER_PIXEL_IS_POINT
         0.0
     else
-        throw(ArgumentError(
-            "pixel_coordinates: rastertype must be RASTER_PIXEL_IS_AREA (1) or " *
-            "RASTER_PIXEL_IS_POINT (2), got $rastertype"
-        ))
+        throw(
+            ArgumentError(
+                "pixel_coordinates: rastertype must be RASTER_PIXEL_IS_AREA (1) or " *
+                    "RASTER_PIXEL_IS_POINT (2), got $rastertype"
+            )
+        )
     end
 
     x = [pixel_to_world(gt, i + shift, 1 + shift)[1] for i in 1:width]
@@ -336,14 +362,16 @@ accepts, and the case-insensitive spellings `"nan"`, `"+nan"`, `"-nan"` when
 Throws `ArgumentError` naming `s` if it cannot be parsed as a number: a
 missed nodata value means pixels that should be masked are read as data.
 """
-function parse_gdal_nodata(::Type{T}, s::AbstractString) where {T<:Real}
+function parse_gdal_nodata(::Type{T}, s::AbstractString) where {T <: Real}
     str = strip(s)
     if T <: AbstractFloat && lowercase(str) in ("nan", "+nan", "-nan")
         return T(NaN)
     end
     value = tryparse(Float64, str)
-    value === nothing && throw(ArgumentError(
-        "GDAL_NODATA tag value $(repr(s)) is not a number ChunkManifests can parse"
-    ))
+    value === nothing && throw(
+        ArgumentError(
+            "GDAL_NODATA tag value $(repr(s)) is not a number ChunkManifests can parse"
+        )
+    )
     return T(value)
 end

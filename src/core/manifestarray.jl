@@ -15,16 +15,16 @@ array with fill value `0.0` — so deriving `T` from it would emit a dtype that
 decodes the stored bytes at the wrong width and silently return wrong values.
 """
 function ManifestArray{T}(
-    manifest::AbstractChunkMap{N},
-    shape,
-    chunkshape;
-    fillvalue=nothing,
-    compressor=nothing,
-    filters=Dict{String,Any}[],
-    attrs=Dict{String,Any}(),
-    dimnames=["dim_$i" for i in 1:N],
-) where {T,N}
-    return ManifestArray{T,N,typeof(manifest)}(
+        manifest::AbstractChunkMap{N},
+        shape,
+        chunkshape;
+        fillvalue = nothing,
+        compressor = nothing,
+        filters = Dict{String, Any}[],
+        attrs = Dict{String, Any}(),
+        dimnames = ["dim_$i" for i in 1:N],
+    ) where {T, N}
+    return ManifestArray{T, N, typeof(manifest)}(
         manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
     )
 end
@@ -100,12 +100,12 @@ Zarr reader recovers which coordinate variable belongs to which axis.
 """
 dimnamesof(a::ManifestArray) = a.dimnames
 
-Base.ndims(::ManifestArray{T,N}) where {T,N} = N
+Base.ndims(::ManifestArray{T, N}) where {T, N} = N
 Base.size(a::ManifestArray) = a.shape
 Base.eltype(::ManifestArray{T}) where {T} = T
 
-function Base.show(io::IO, a::ManifestArray{T,N}) where {T,N}
-    print(
+function Base.show(io::IO, a::ManifestArray{T, N}) where {T, N}
+    return print(
         io,
         "ManifestArray{$T,$N}(shape=", a.shape, ", chunkshape=", a.chunkshape, ")"
     )
@@ -120,20 +120,20 @@ _sharestable(a::ManifestArray, table::PathTable) = tableof(chunkmapof(a)) === ta
 function _rebuildchunkmap(a::ManifestArray{T}, m::AbstractChunkMap) where {T}
     return ManifestArray{T}(
         m, size(a), chunkshapeof(a);
-        fillvalue=fillvalueof(a),
-        compressor=compressorof(a),
-        filters=filtersof(a),
-        attrs=attrsof(a),
-        dimnames=dimnamesof(a),
+        fillvalue = fillvalueof(a),
+        compressor = compressorof(a),
+        filters = filtersof(a),
+        attrs = attrsof(a),
+        dimnames = dimnamesof(a),
     )
 end
 
 # Brings every array under `table`, rewriting the chunk maps that reference a
 # different one. Arrays already on `table` are returned untouched, so the
 # common case — one scan, one table — costs an identity check per array.
-function _sharetable!(table::PathTable, arrays::AbstractDict{String,ManifestArray})
+function _sharetable!(table::PathTable, arrays::AbstractDict{String, ManifestArray})
     all(a -> _sharestable(a, table), values(arrays)) && return arrays
-    out = Dict{String,ManifestArray}()
+    out = Dict{String, ManifestArray}()
     for key in sort!(collect(keys(arrays)))
         a = arrays[key]
         m = chunkmapof(a)
@@ -150,7 +150,7 @@ end
 # When they already agree, that table is reused as-is; when they disagree a
 # fresh one is built rather than merging into whichever array came first, since
 # mutating an input's table would reach into every other manifest sharing it.
-function _normalizetable(arrays::AbstractDict{String,ManifestArray}, table)
+function _normalizetable(arrays::AbstractDict{String, ManifestArray}, table)
     table === nothing || return table, _sharetable!(table, arrays)
     isempty(arrays) && return PathTable(), arrays
     candidate = tableof(chunkmapof(arrays[first(sort!(collect(keys(arrays))))]))
@@ -179,17 +179,17 @@ configuration; passing a single [`AbstractTransport`](@ref) instead reads every
 URI through it.
 """
 function ChunkManifest(;
-    arrays=Dict{String,ManifestArray}(),
-    attrs=Dict{String,Any}(),
-    provenance=Dict{String,Any}(),
-    table=nothing,
-    transport::AbstractTransport=TransportContainers(),
-    readahead::ReadaheadCache=ReadaheadCache(),
-)
-    t, shared = _normalizetable(Dict{String,ManifestArray}(arrays), table)
+        arrays = Dict{String, ManifestArray}(),
+        attrs = Dict{String, Any}(),
+        provenance = Dict{String, Any}(),
+        table = nothing,
+        transport::AbstractTransport = TransportContainers(),
+        readahead::ReadaheadCache = ReadaheadCache(),
+    )
+    t, shared = _normalizetable(Dict{String, ManifestArray}(arrays), table)
     return ChunkManifest(
-        Dict{String,ManifestArray}(shared), t,
-        Dict{String,Any}(attrs), Dict{String,Any}(provenance),
+        Dict{String, ManifestArray}(shared), t,
+        Dict{String, Any}(attrs), Dict{String, Any}(provenance),
         transport, readahead,
     )
 end
@@ -204,18 +204,18 @@ a different backend — supplying credentials, restricting what may be fetched,
 or disabling readahead — without rescanning or rebuilding its arrays.
 """
 function ChunkManifest(
-    m::ChunkManifest;
-    arrays=arraysof(m),
-    table=tableof(m),
-    attrs=attrsof(m),
-    provenance=provenanceof(m),
-    transport::AbstractTransport=transportof(m),
-    readahead::ReadaheadCache=m.readahead,
-)
-    t, shared = _normalizetable(Dict{String,ManifestArray}(arrays), table)
+        m::ChunkManifest;
+        arrays = arraysof(m),
+        table = tableof(m),
+        attrs = attrsof(m),
+        provenance = provenanceof(m),
+        transport::AbstractTransport = transportof(m),
+        readahead::ReadaheadCache = m.readahead,
+    )
+    t, shared = _normalizetable(Dict{String, ManifestArray}(arrays), table)
     return ChunkManifest(
-        Dict{String,ManifestArray}(shared), t,
-        Dict{String,Any}(attrs), Dict{String,Any}(provenance),
+        Dict{String, ManifestArray}(shared), t,
+        Dict{String, Any}(attrs), Dict{String, Any}(provenance),
         transport, readahead,
     )
 end
@@ -257,7 +257,7 @@ be fetched.
 transportof(g::ChunkManifest) = g.transport
 
 function Base.show(io::IO, g::ChunkManifest)
-    print(
+    return print(
         io, "ChunkManifest(", length(g.arrays), " arrays, ",
         length(g.table), " files)",
     )

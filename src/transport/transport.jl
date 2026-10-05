@@ -51,10 +51,12 @@ transport must add a method; this fallback throws so a transport that omits
 one fails at the call site rather than returning something silently wrong.
 """
 function fetchrange(t::AbstractTransport, uri, r::ByteRange)
-    throw(ArgumentError(
-        "fetchrange is not implemented for transport $(typeof(t)) " *
-        "(uri=$(repr(uri)), range=$r)",
-    ))
+    throw(
+        ArgumentError(
+            "fetchrange is not implemented for transport $(typeof(t)) " *
+                "(uri=$(repr(uri)), range=$r)",
+        )
+    )
 end
 
 """
@@ -78,18 +80,18 @@ are all handled. An empty `ranges` returns an empty `merged` and an
 empty, index-matched `mapping`.
 """
 function coalesce_ranges(
-    ranges::AbstractVector{ByteRange}; maxgap::Integer, maxblock::Integer
-)
+        ranges::AbstractVector{ByteRange}; maxgap::Integer, maxblock::Integer
+    )
     maxgap >= 0 || throw(ArgumentError("maxgap must be nonnegative, got $maxgap"))
     maxblock > 0 || throw(ArgumentError("maxblock must be positive, got $maxblock"))
     maxgap = UInt64(maxgap)
     maxblock = UInt64(maxblock)
 
-    mapping = similar(ranges, Tuple{Int,UInt64})
+    mapping = similar(ranges, Tuple{Int, UInt64})
     merged = ByteRange[]
     isempty(ranges) && return merged, mapping
 
-    order = sort(collect(eachindex(ranges)); by=i -> (ranges[i].offset, ranges[i].nbytes))
+    order = sort(collect(eachindex(ranges)); by = i -> (ranges[i].offset, ranges[i].nbytes))
 
     blockstart = blockend = zero(UInt64)
     members = Int[]
@@ -100,7 +102,7 @@ function coalesce_ranges(
         for i in members
             mapping[i] = (bi, ranges[i].offset - blockstart)
         end
-        empty!(members)
+        return empty!(members)
     end
 
     for (n, i) in enumerate(order)
@@ -129,8 +131,8 @@ end
 # override: turns fetched merged blocks back into one owned Vector{UInt8}
 # per original range, in the caller's order.
 function _assemble(
-    ranges::AbstractVector{ByteRange}, mapping, blocks::AbstractVector{Vector{UInt8}}
-)
+        ranges::AbstractVector{ByteRange}, mapping, blocks::AbstractVector{Vector{UInt8}}
+    )
     out = similar(ranges, Vector{UInt8})
     for i in eachindex(ranges)
         bi, off = mapping[i]
@@ -151,12 +153,14 @@ then each merged block is fetched with [`fetchrange`](@ref), with at most
 independently owned `Vector{UInt8}` per input range, in input order.
 """
 function fetchranges(t::AbstractTransport, uri, ranges::AbstractVector{ByteRange})
-    merged, mapping = coalesce_ranges(ranges; maxgap=maxgap(t), maxblock=maxblock(t))
+    merged, mapping = coalesce_ranges(ranges; maxgap = maxgap(t), maxblock = maxblock(t))
 
     c = concurrency(t)
-    c >= 1 || throw(ArgumentError(
-        "concurrency(t) must be >= 1, got $c for transport $(typeof(t))"
-    ))
+    c >= 1 || throw(
+        ArgumentError(
+            "concurrency(t) must be >= 1, got $c for transport $(typeof(t))"
+        )
+    )
 
     blocks = Vector{Vector{UInt8}}(undef, length(merged))
     sem = Base.Semaphore(c)

@@ -26,7 +26,7 @@ end
 # built from them describes exactly what is on disk. Returned as columns
 # rather than an assembled ExplicitChunkMap so tests can vary one cell (mark it
 # missing or inline) without reaching into ExplicitChunkMap's internal fields.
-function _manifest_columns_from_directorystore(dir::AbstractString, gridsize::NTuple{N,Int}) where {N}
+function _manifest_columns_from_directorystore(dir::AbstractString, gridsize::NTuple{N, Int}) where {N}
     table = PathTable()
     index = Array{UInt32}(undef, gridsize)
     offset = zeros(UInt64, gridsize)
@@ -41,7 +41,7 @@ end
 
 # A minimal ManifestArray over a one-file dummy manifest, for tests that only
 # exercise group/key-hierarchy logic and never read chunk bytes.
-function _dummyva(shape::NTuple{N,Int}, chunkshape::NTuple{N,Int}) where {N}
+function _dummyva(shape::NTuple{N, Int}, chunkshape::NTuple{N, Int}) where {N}
     table = PathTable()
     push_uri!(table, "dummy.bin")
     manifest = AffineChunkMap(
@@ -60,13 +60,13 @@ end
         gridsize = cld.(shape, chunkshape)
         dimnames = ["x", "y", "z"]
         data = reshape(collect(Float64, 1:prod(shape)), shape)
-        compressor = Dict{String,Any}("id" => "zlib", "level" => 3)
+        compressor = Dict{String, Any}("id" => "zlib", "level" => 3)
         fillvalue = -9999.0
 
         mktempdir() do dir
             za = Zarr.zcreate(
                 Float64, Zarr.DirectoryStore(dir), shape...;
-                chunks=chunkshape, compressor=Zarr.ZlibCompressor(3), fill_value=fillvalue,
+                chunks = chunkshape, compressor = Zarr.ZlibCompressor(3), fill_value = fillvalue,
             )
             za[:, :, :] = data
 
@@ -75,7 +75,7 @@ end
             va = ManifestArray{Float64}(
                 manifest, shape, chunkshape; fillvalue, compressor, dimnames
             )
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va))
             mstore = group
 
             zv_direct = Zarr.zopen(Zarr.DirectoryStore(dir))
@@ -113,7 +113,7 @@ end
                 va_missing = ManifestArray{Float64}(
                     manifest_missing, shape, chunkshape; fillvalue, compressor, dimnames
                 )
-                mstore_missing = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va_missing))
+                mstore_missing = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va_missing))
                 zv_missing = Zarr.zopen(mstore_missing)
 
                 @test all(==(fillvalue), zv_missing[1:3, 1:4, 1:5])
@@ -130,12 +130,12 @@ end
                 index_inline[I] = ChunkManifests.INLINE_INDEX
                 manifest_inline = ExplicitChunkMap(
                     table, index_inline, offset, nbytes;
-                    inline=Dict(I => inlinebytes_),
+                    inline = Dict(I => inlinebytes_),
                 )
                 va_inline = ManifestArray{Float64}(
                     manifest_inline, shape, chunkshape; fillvalue, compressor, dimnames
                 )
-                mstore_inline = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va_inline))
+                mstore_inline = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va_inline))
                 zv_inline = Zarr.zopen(mstore_inline)
 
                 @test zv_inline[4:6, 1:4, 1:5] == data[4:6, 1:4, 1:5]
@@ -149,7 +149,7 @@ end
                 va_bad = ManifestArray{Float64}(
                     manifest_bad, shape, chunkshape; fillvalue, compressor, dimnames
                 )
-                mstore_bad = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va_bad))
+                mstore_bad = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va_bad))
                 key = Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, CartesianIndex(1, 1, 1))
                 @test_throws "exceeds size" mstore_bad[key]
             end
@@ -171,10 +171,10 @@ end
             offset = UInt64[(k - 1) * chunkbytes for k in 1:nchunks]
             nbytes = fill(UInt64(chunkbytes), gridsize)
             manifest = ExplicitChunkMap(table, index, offset, nbytes)
-            va = ManifestArray{Float64}(manifest, (nchunks,), (1,); dimnames=["x"])
+            va = ManifestArray{Float64}(manifest, (nchunks,), (1,); dimnames = ["x"])
 
             counting = CountingTransport()
-            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va), transport=counting)
+            mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va), transport = counting)
             za = Zarr.zopen(mstore)
 
             @test za[:] == vals
@@ -203,10 +203,10 @@ end
             offset = UInt64[(mod(k - 1, 6)) * chunkbytes for k in 1:12]
             nbytes = fill(UInt64(chunkbytes), gridsize)
             manifest = ExplicitChunkMap(table, index, offset, nbytes)
-            va = ManifestArray{Float64}(manifest, (12,), (1,); dimnames=["x"])
+            va = ManifestArray{Float64}(manifest, (12,), (1,); dimnames = ["x"])
 
             counting = CountingTransport()
-            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va), transport=counting)
+            mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va), transport = counting)
             za = Zarr.zopen(mstore)
 
             @test za[:] == collect(Float64, 1:12)
@@ -215,13 +215,13 @@ end
     end
 
     @testset "setindex! and storefromstring are read-only" begin
-        mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => _dummyva((4,), (2,))))
+        mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => _dummyva((4,), (2,))))
         @test_throws "read-only" (mstore["a/.zarray"] = UInt8[1, 2, 3])
         @test_throws "cannot be constructed from" Zarr.storefromstring(ChunkManifest, "s3://bucket/key", false)
     end
 
     @testset "store_read_strategy reports transport concurrency" begin
-        mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => _dummyva((4,), (2,))))
+        mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => _dummyva((4,), (2,))))
         strategy = Zarr.store_read_strategy(mstore)
         @test strategy isa Zarr.ConcurrentRead
         @test strategy.ntasks == ChunkManifests.concurrency(LocalTransport())
@@ -229,12 +229,12 @@ end
 
     @testset "group hierarchy: subdirs/subkeys for nested array paths" begin
         group = ChunkManifest(;
-            arrays=Dict{String,ManifestArray}(
+            arrays = Dict{String, ManifestArray}(
                 "grp/sub/a" => _dummyva((4,), (2,)),
                 "grp/b" => _dummyva((4,), (2,)),
                 "top" => _dummyva((4,), (2,)),
             ),
-            attrs=Dict{String,Any}("title" => "demo"),
+            attrs = Dict{String, Any}("title" => "demo"),
         )
         mstore = group
 
