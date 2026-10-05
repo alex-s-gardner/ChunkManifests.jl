@@ -42,7 +42,7 @@ const _DIMENSION_SCALE_ATTRS = (
 )
 
 function _datasetattrs(dset)
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for k in keys(HDF5.attrs(dset))
         k in _DIMENSION_SCALE_ATTRS && continue
         out[k] = HDF5.read_attribute(dset, k)
@@ -175,10 +175,12 @@ function _scansiblings!(arrays, table, fileindex, f, rootpath::AbstractString, f
             # begins with a separator names an unnamed group under the root,
             # which a store walk follows without end, so it is a bug here
             # rather than something to pass on.
-            startswith(sibkey, '/') && throw(ArgumentError(
-                "$filepath: sibling $(repr(p)) of scan root $(repr(rootpath)) resolved to " *
-                "the array key $(repr(sibkey)), which is not relative to that root",
-            ))
+            startswith(sibkey, '/') && throw(
+                ArgumentError(
+                    "$filepath: sibling $(repr(p)) of scan root $(repr(rootpath)) resolved to " *
+                        "the array key $(repr(sibkey)), which is not relative to that root",
+                )
+            )
             (isempty(sibkey) || sibkey in seen) && continue
             push!(seen, sibkey)
             obj = f[p]
@@ -207,7 +209,7 @@ end
 # The scan-time eltype of an HDF5 fixed-length string dataset. Its Zarr v2
 # spelling is `|S<n>`; see `zarr_dtype_string` in src/store/metadata.jl for why
 # that form rather than whatever `Zarr.typestr` would return.
-zarr_dtype_string(::Type{HDF5.FixedString{N,PAD}}) where {N,PAD} = "|S$N"
+zarr_dtype_string(::Type{HDF5.FixedString{N, PAD}}) where {N, PAD} = "|S$N"
 
 _isfixedstring(::Type) = false
 _isfixedstring(::Type{<:HDF5.FixedString}) = true
@@ -229,12 +231,14 @@ function _checkbyteorder(dset, ::Type{T}, context::AbstractString) where {T}
     finally
         close(dt)
     end
-    order == HDF5.API.H5T_ORDER_BE && throw(ArgumentError(
-        "$context: dataset is stored big-endian, which cannot be served faithfully. " *
-        "Zarr.jl accepts a \">\" dtype but does not byte-swap on read, so the bytes " *
-        "would decode to wrong values rather than fail. Rewrite the source as " *
-        "little-endian, or scan a little-endian copy",
-    ))
+    order == HDF5.API.H5T_ORDER_BE && throw(
+        ArgumentError(
+            "$context: dataset is stored big-endian, which cannot be served faithfully. " *
+                "Zarr.jl accepts a \">\" dtype but does not byte-swap on read, so the bytes " *
+                "would decode to wrong values rather than fail. Rewrite the source as " *
+                "little-endian, or scan a little-endian copy",
+        )
+    )
     return nothing
 end
 
@@ -256,7 +260,7 @@ function _filterpipeline(dset)
             let ext = pipeline[HDF5.Filters.ExternalFilter, i]
                 (Int(ext.filter_id), Int.(ext.data))
             end
-            for i in eachindex(pipeline)
+                for i in eachindex(pipeline)
         ]
     finally
         close(plist)
@@ -277,7 +281,7 @@ end
 # 0.96 ms through the iterator. Scanning is this package's expensive step and a
 # real granule has tens of thousands of chunks, so the iterator is called
 # directly where it exists, with the same fallback behind it.
-const _HAS_CHUNK_ITER = hasmethod(HDF5.API.h5d_chunk_iter, Tuple{Any,Any})
+const _HAS_CHUNK_ITER = hasmethod(HDF5.API.h5d_chunk_iter, Tuple{Any, Any})
 
 # Calls `f(element_offset, filter_mask, addr, size)` once per allocated chunk,
 # with `element_offset` in Julia dimension order so it lines up with
@@ -289,7 +293,7 @@ function _eachchunkinfo(f, dset)
     if _HAS_CHUNK_ITER
         N = ndims(HDF5.dataspace(dset))
         HDF5.API.h5d_chunk_iter(dset) do offset, filter_mask, addr, size
-            eloffset = reverse(unsafe_load(Ptr{NTuple{N,HDF5.API.hsize_t}}(offset)))
+            eloffset = reverse(unsafe_load(Ptr{NTuple{N, HDF5.API.hsize_t}}(offset)))
             f(eloffset, filter_mask, addr, size)
             return HDF5.API.H5_ITER_CONT
         end
@@ -313,11 +317,13 @@ function _scanchunked(table, fileindex, dset, ::Type{T}, itemsize, context::Abst
 
     if HDF5.get_num_chunks(dset) > 0
         _eachchunkinfo(dset) do eloffset, filter_mask, addr, size
-            filter_mask == 0 || throw(ArgumentError(
-                "$context: chunk at element offset $(eloffset) has filter_mask " *
-                "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
-                "a single Zarr v2 codec pipeline cannot express"
-            ))
+            filter_mask == 0 || throw(
+                ArgumentError(
+                    "$context: chunk at element offset $(eloffset) has filter_mask " *
+                        "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
+                        "a single Zarr v2 codec pipeline cannot express"
+                )
+            )
             I = CartesianIndex(ntuple(d -> eloffset[d] ÷ chunkshape[d] + 1, N))
             index[I] = fileindex
             offset[I] = UInt64(addr)
@@ -355,14 +361,14 @@ function _scanunallocated(table, shape, ::Type{T}) where {T}
         nb = prod(shape) * sizeof(T)
         ExplicitChunkMap(
             table, fill(INLINE_INDEX, gridsize), offset, fill(UInt64(nb), gridsize);
-            inline=Dict(CartesianIndex(gridsize) => zeros(UInt8, nb)),
+            inline = Dict(CartesianIndex(gridsize) => zeros(UInt8, nb)),
         )
     else
         ExplicitChunkMap(
             table, fill(MISSING_INDEX, gridsize), offset, zeros(UInt64, gridsize)
         )
     end
-    return manifest, shape, nothing, Dict{String,Any}[]
+    return manifest, shape, nothing, Dict{String, Any}[]
 end
 
 function _scancontiguous(table, dset, shape, ::Type{T}, context::AbstractString) where {T}
@@ -374,7 +380,7 @@ function _scancontiguous(table, dset, shape, ::Type{T}, context::AbstractString)
     strides = ntuple(_ -> UInt64(0), N)
 
     manifest = AffineChunkMap(table, gridsize, UInt64(base), strides, UInt32(chunkbytes))
-    return manifest, shape, nothing, Dict{String,Any}[]
+    return manifest, shape, nothing, Dict{String, Any}[]
 end
 
 function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractString, filepath)
@@ -384,10 +390,12 @@ function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractStri
     _checkbyteorder(dset, T, context)
 
     kind = _layoutkind(dset)
-    kind == :other && throw(ArgumentError(
-        "$context: unsupported HDF5 storage layout (only chunked and contiguous " *
-        "layouts are supported)"
-    ))
+    kind == :other && throw(
+        ArgumentError(
+            "$context: unsupported HDF5 storage layout (only chunked and contiguous " *
+                "layouts are supported)"
+        )
+    )
 
     shape = size(dset)
     N = length(shape)
@@ -463,10 +471,10 @@ whose last-applied filter is shuffle or fletcher32 (see
 `path` and the offending dataset.
 """
 function scan(
-    path::AbstractString, driver::HDF5Driver;
-    group::AbstractString="/", access::SourceAccess=AutoAccess(),
-    siblings::Bool=true,
-)
+        path::AbstractString, driver::HDF5Driver;
+        group::AbstractString = "/", access::SourceAccess = AutoAccess(),
+        siblings::Bool = true,
+    )
     return _scan_hdf5(driver, path, resolve_access(access, driver, path); group, siblings)
 end
 
@@ -475,9 +483,9 @@ end
 # for a reader that never saw the cache. The cached file holds the whole
 # object, so its size is the object's size and needs no extra request.
 function _scan_hdf5(
-    driver::HDF5Driver, uri::AbstractString, access::SourceAccess;
-    group::AbstractString, siblings::Bool,
-)
+        driver::HDF5Driver, uri::AbstractString, access::SourceAccess;
+        group::AbstractString, siblings::Bool,
+    )
     return withsourcepath(access, uri) do localpath
         recorded = _isremote(uri) ? String(uri) : abspath(localpath)
         _scan_hdf5_open(
@@ -501,45 +509,49 @@ function _remoteaccess(::HDF5Driver, uri::AbstractString)
 end
 
 function _scan_hdf5(
-    driver::HDF5Driver, uri::AbstractString, access::ROS3Access;
-    group::AbstractString, siblings::Bool,
-)
-    HDF5.has_ros3() || throw(ArgumentError(
-        "ROS3Access cannot scan $(repr(uri)): this libhdf5 has no read-only S3 " *
-        "virtual file driver (HDF5.has_ros3() is false, and the binaries shipped " *
-        "by HDF5_jll are built without it). Point HDF5.jl at a libhdf5 built with " *
-        "that driver, or scan with DownloadAccess(), which fetches the object " *
-        "once and works anywhere",
-    ))
-    (startswith(uri, "https://") || startswith(uri, "http://")) || throw(ArgumentError(
-        "ROS3Access needs an http:// or https:// endpoint, got $(repr(uri)). " *
-        "libhdf5's read-only S3 driver addresses objects by endpoint URL, and the " *
-        "region an s3:// URI resolves to is not recoverable from the URI alone — " *
-        "give the endpoint form, or scan with DownloadAccess()",
-    ))
+        driver::HDF5Driver, uri::AbstractString, access::ROS3Access;
+        group::AbstractString, siblings::Bool,
+    )
+    HDF5.has_ros3() || throw(
+        ArgumentError(
+            "ROS3Access cannot scan $(repr(uri)): this libhdf5 has no read-only S3 " *
+                "virtual file driver (HDF5.has_ros3() is false, and the binaries shipped " *
+                "by HDF5_jll are built without it). Point HDF5.jl at a libhdf5 built with " *
+                "that driver, or scan with DownloadAccess(), which fetches the object " *
+                "once and works anywhere",
+        )
+    )
+    (startswith(uri, "https://") || startswith(uri, "http://")) || throw(
+        ArgumentError(
+            "ROS3Access needs an http:// or https:// endpoint, got $(repr(uri)). " *
+                "libhdf5's read-only S3 driver addresses objects by endpoint URL, and the " *
+                "region an s3:// URI resolves to is not recoverable from the URI alone — " *
+                "give the endpoint form, or scan with DownloadAccess()",
+        )
+    )
     h5driver = access.aws === nothing ? HDF5.Drivers.ROS3() : access.aws
     return _scan_hdf5_open(driver, uri, String(uri), nothing, h5driver; group, siblings)
 end
 
 function _scan_hdf5_open(
-    driver::HDF5Driver,
-    openloc::AbstractString,
-    recorded::AbstractString,
-    recordedsize,
-    h5driver;
-    group::AbstractString,
-    siblings::Bool=true,
-)
+        driver::HDF5Driver,
+        openloc::AbstractString,
+        recorded::AbstractString,
+        recordedsize,
+        h5driver;
+        group::AbstractString,
+        siblings::Bool = true,
+    )
     table = PathTable()
-    arrays = Dict{String,ManifestArray}()
-    groupattrs = Dict{String,Any}()
+    arrays = Dict{String, ManifestArray}()
+    groupattrs = Dict{String, Any}()
 
     lock(HDF5_IO) do
         f = h5driver === nothing ?
             HDF5.h5open(openloc, "r") :
-            HDF5.h5open(openloc, "r"; driver=h5driver)
+            HDF5.h5open(openloc, "r"; driver = h5driver)
         try
-            fileindex = push_uri!(table, recorded; size=recordedsize)
+            fileindex = push_uri!(table, recorded; size = recordedsize)
             root = group == "/" ? f : f[group]
             try
                 rootpath = if root isa HDF5.Dataset
@@ -567,15 +579,15 @@ function _scan_hdf5_open(
         end
     end
 
-    provenance = Dict{String,Any}("driver" => "HDF5Driver", "scanned_at" => time())
-    return ChunkManifest(; arrays, attrs=groupattrs, provenance)
+    provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
+    return ChunkManifest(; arrays, attrs = groupattrs, provenance)
 end
 
-register_codec!(HDF5Driver, 1, COMPRESSOR, (cd, itemsize) -> Dict{String,Any}("id" => "zlib", "level" => Int(cd[1])))
+register_codec!(HDF5Driver, 1, COMPRESSOR, (cd, itemsize) -> Dict{String, Any}("id" => "zlib", "level" => Int(cd[1])))
 register_codec!(
-    HDF5Driver, 2, FILTER, (cd, itemsize) -> Dict{String,Any}("id" => "shuffle", "elementsize" => Int(cd[1]))
+    HDF5Driver, 2, FILTER, (cd, itemsize) -> Dict{String, Any}("id" => "shuffle", "elementsize" => Int(cd[1]))
 )
-register_codec!(HDF5Driver, 3, FILTER, (cd, itemsize) -> Dict{String,Any}("id" => "fletcher32"))
+register_codec!(HDF5Driver, 3, FILTER, (cd, itemsize) -> Dict{String, Any}("id" => "fletcher32"))
 
 const _BLOSC_COMPRESSOR_NAMES = ("blosclz", "lz4", "lz4hc", "snappy", "zlib", "zstd")
 
@@ -583,7 +595,7 @@ register_codec!(
     HDF5Driver, 32001, COMPRESSOR,
     function (cd, itemsize)
         clevel, shuffle, compressor = Int(cd[5]), Int(cd[6]), Int(cd[7])
-        return Dict{String,Any}(
+        return Dict{String, Any}(
             "id" => "blosc",
             "cname" => _BLOSC_COMPRESSOR_NAMES[compressor + 1],
             "clevel" => clevel,
@@ -593,7 +605,7 @@ register_codec!(
     end,
 )
 register_codec!(
-    HDF5Driver, 32015, COMPRESSOR, (cd, itemsize) -> Dict{String,Any}("id" => "zstd", "level" => Int(cd[1]))
+    HDF5Driver, 32015, COMPRESSOR, (cd, itemsize) -> Dict{String, Any}("id" => "zstd", "level" => Int(cd[1]))
 )
 
 register_rejection!(HDF5Driver, 4, "szip has no byte-compatible Zarr v2 codec")

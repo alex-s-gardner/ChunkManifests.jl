@@ -14,11 +14,11 @@
     @testset "element type is independent of the fill value" begin
         m = dummymanifest(shape, chunkshape)
 
-        va = ManifestArray{Float32}(m, shape, chunkshape; fillvalue=0.0)
+        va = ManifestArray{Float32}(m, shape, chunkshape; fillvalue = 0.0)
         @test eltype(va) === Float32
         @test fillvalueof(va) === 0.0f0
 
-        vi = ManifestArray{Int32}(m, shape, chunkshape; fillvalue=-9999)
+        vi = ManifestArray{Int32}(m, shape, chunkshape; fillvalue = -9999)
         @test eltype(vi) === Int32
         @test fillvalueof(vi) === Int32(-9999)
 
@@ -30,7 +30,7 @@
     @testset "unrepresentable fill value throws" begin
         m = dummymanifest(shape, chunkshape)
         @test_throws "not representable" ManifestArray{Int32}(
-            m, shape, chunkshape; fillvalue=0.5
+            m, shape, chunkshape; fillvalue = 0.5
         )
     end
 
@@ -38,7 +38,7 @@
         m = dummymanifest(shape, chunkshape)
         @test_throws "dimensions" ManifestArray{Float64}(m, (7, 11), (3, 4))
         @test_throws "dimnames" ManifestArray{Float64}(
-            m, shape, chunkshape; dimnames=["x", "y"]
+            m, shape, chunkshape; dimnames = ["x", "y"]
         )
     end
 
@@ -49,7 +49,7 @@
 
     @testset "_ARRAY_DIMENSIONS may not be supplied by hand" begin
         m = dummymanifest(shape, chunkshape)
-        attrs = Dict{String,Any}("_ARRAY_DIMENSIONS" => ["z", "y", "x"])
+        attrs = Dict{String, Any}("_ARRAY_DIMENSIONS" => ["z", "y", "x"])
         @test_throws "_ARRAY_DIMENSIONS" ManifestArray{Float64}(
             m, shape, chunkshape; attrs
         )
@@ -59,23 +59,23 @@
         m = dummymanifest(shape, chunkshape)
         N = length(shape)
         names = ["d$i" for i in 1:N]
-        empties() = (nothing, Dict{String,Any}[], Dict{String,Any}())
+        empties() = (nothing, Dict{String, Any}[], Dict{String, Any}())
 
         fv, filters, attrs = empties()
-        @test_throws DimensionMismatch ManifestArray{Float64,N,typeof(m)}(
+        @test_throws DimensionMismatch ManifestArray{Float64, N, typeof(m)}(
             m, ntuple(_ -> 99, N), chunkshape, fv, nothing, filters, attrs, names
         )
-        @test_throws "not representable" ManifestArray{Int32,N,typeof(m)}(
+        @test_throws "not representable" ManifestArray{Int32, N, typeof(m)}(
             m, shape, chunkshape, 0.5, nothing, filters, attrs, names
         )
-        @test_throws "_ARRAY_DIMENSIONS" ManifestArray{Float64,N,typeof(m)}(
+        @test_throws "_ARRAY_DIMENSIONS" ManifestArray{Float64, N, typeof(m)}(
             m, shape, chunkshape, fv, nothing, filters,
-            Dict{String,Any}("_ARRAY_DIMENSIONS" => names), names
+            Dict{String, Any}("_ARRAY_DIMENSIONS" => names), names
         )
 
         # The coercing form still coerces: an Int fill value reaches a
         # Float64 field as a Float64.
-        a = ManifestArray{Float64}(m, shape, chunkshape; fillvalue=0)
+        a = ManifestArray{Float64}(m, shape, chunkshape; fillvalue = 0)
         @test fillvalueof(a) === 0.0
     end
 
@@ -101,9 +101,9 @@
         @test isempty(arraysof(g))
 
         g2 = ChunkManifest(;
-            arrays=Dict{String,ManifestArray}("grp/a" => va),
-            attrs=Dict{String,Any}("title" => "t"),
-            provenance=Dict{String,Any}("driver" => "test"),
+            arrays = Dict{String, ManifestArray}("grp/a" => va),
+            attrs = Dict{String, Any}("title" => "t"),
+            provenance = Dict{String, Any}("driver" => "test"),
         )
         @test arraysof(g2)["grp/a"] === va
         @test attrsof(g2)["title"] == "t"

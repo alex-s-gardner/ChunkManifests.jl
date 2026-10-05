@@ -9,12 +9,12 @@ import AWS
 # field without widening the struct declared in the main package.
 struct _S3Config
     aws::AWS.AbstractAWSConfig
-    headers::Dict{String,String}
+    headers::Dict{String, String}
 end
 
 _awsconfig(aws) = aws
 _awsconfig(aws::_S3Config) = aws.aws
-_headers(aws) = Dict{String,String}()
+_headers(aws) = Dict{String, String}()
 _headers(aws::_S3Config) = aws.headers
 
 """
@@ -26,8 +26,8 @@ Construct an [`S3Transport`](@ref) for `bucket`. `aws` defaults to
 buckets commonly require.
 """
 function ChunkManifests.S3Transport(
-    bucket::AbstractString; aws=nothing, requesterpays::Bool=false
-)
+        bucket::AbstractString; aws = nothing, requesterpays::Bool = false
+    )
     config = aws === nothing ? AWS.current_aws_config() : aws
     wrapped = requesterpays ? _S3Config(config, Dict("x-amz-request-payer" => "requester")) : config
     return ChunkManifests.S3Transport(String(bucket), wrapped)
@@ -39,11 +39,13 @@ end
 # component) throws rather than guessing.
 function _s3_bucket_key(t::ChunkManifests.S3Transport, uri::AbstractString)
     if startswith(uri, "s3://")
-        rest = chop(uri; head=5, tail=0)
-        parts = split(rest, '/'; limit=2)
-        length(parts) == 2 && !isempty(parts[1]) || throw(ArgumentError(
-            "malformed s3:// uri, expected s3://bucket/key, got $(repr(uri))"
-        ))
+        rest = chop(uri; head = 5, tail = 0)
+        parts = split(rest, '/'; limit = 2)
+        length(parts) == 2 && !isempty(parts[1]) || throw(
+            ArgumentError(
+                "malformed s3:// uri, expected s3://bucket/key, got $(repr(uri))"
+            )
+        )
         return String(parts[1]), String(parts[2])
     else
         return t.bucket, uri
@@ -64,8 +66,8 @@ the object is missing, access is denied, or the response is shorter than
 `r.nbytes`; never substitutes empty or truncated bytes for a failed read.
 """
 function ChunkManifests.fetchrange(
-    t::ChunkManifests.S3Transport, uri::AbstractString, r::ChunkManifests.ByteRange
-)
+        t::ChunkManifests.S3Transport, uri::AbstractString, r::ChunkManifests.ByteRange
+    )
     r.nbytes == 0 && return UInt8[]
 
     bucket, key = _s3_bucket_key(t, uri)
@@ -74,17 +76,17 @@ function ChunkManifests.fetchrange(
     byte_range = _awss3_byterange(r)
 
     body = try
-        AWSS3.s3_get(config, bucket, key; raw=true, byte_range=byte_range, headers=headers)
+        AWSS3.s3_get(config, bucket, key; raw = true, byte_range = byte_range, headers = headers)
     catch e
         error(
             "failed to read bytes [$(r.offset), $(r.offset + r.nbytes)) " *
-            "from s3://$bucket/$key: $e",
+                "from s3://$bucket/$key: $e",
         )
     end
 
     length(body) == r.nbytes || error(
         "short read from s3://$bucket/$key: requested $(r.nbytes) bytes at " *
-        "offset $(r.offset), got $(length(body)) bytes",
+            "offset $(r.offset), got $(length(body)) bytes",
     )
 
     return body

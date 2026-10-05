@@ -20,17 +20,17 @@ function _acc_withserver(f::Function, bytes::Vector{UInt8}, name::AbstractString
         )
     end
     server = HTTP.serve!(handler, "127.0.0.1", 0)
-    try
+    return try
         f("http://127.0.0.1:$(HTTP.port(server))/$name")
     finally
         close(server)
     end
 end
 
-function _acc_sourcefile(dir, name="src.h5")
+function _acc_sourcefile(dir, name = "src.h5")
     path = joinpath(dir, name)
     HDF5.h5open(path, "w") do f
-        d = HDF5.create_dataset(f, "data", Float64, (12,); chunk=(4,))
+        d = HDF5.create_dataset(f, "data", Float64, (12,); chunk = (4,))
         write(d, collect(Float64, 1:12))
     end
     return path
@@ -67,7 +67,7 @@ end
 
     @testset "scans a remote source and records the remote URI" begin
         _acc_withserver(read(src), "src.h5") do url
-            cm = ChunkManifests.scan(url, HDF5Driver(); access=DownloadAccess())
+            cm = ChunkManifests.scan(url, HDF5Driver(); access = DownloadAccess())
             @test sort(collect(keys(arraysof(cm)))) == ["data"]
 
             # The manifest has to be valid for a reader that never saw the
@@ -88,14 +88,14 @@ end
     @testset "a named cache directory is reused and retained" begin
         cache = joinpath(dir, "cache")
         _acc_withserver(read(src), "src.h5") do url
-            acc = DownloadAccess(; cachedir=cache, keep=true)
-            cm1 = ChunkManifests.scan(url, HDF5Driver(); access=acc)
+            acc = DownloadAccess(; cachedir = cache, keep = true)
+            cm1 = ChunkManifests.scan(url, HDF5Driver(); access = acc)
             files = readdir(cache)
             @test length(files) == 1
             stamp = mtime(joinpath(cache, only(files)))
 
             # A second scan finds the copy already there rather than fetching.
-            cm2 = ChunkManifests.scan(url, HDF5Driver(); access=acc)
+            cm2 = ChunkManifests.scan(url, HDF5Driver(); access = acc)
             @test readdir(cache) == files
             @test mtime(joinpath(cache, only(files))) == stamp
             @test chunklocation(chunkmapof(arraysof(cm2)["data"]), CartesianIndex(1))[1] ==
@@ -109,14 +109,14 @@ end
         payload = rand(UInt8, 1000)
         _acc_withserver(payload, "blob.bin") do url
             dest = joinpath(dir, "blob.bin")
-            ChunkManifests._download(TransportContainers(), url, dest; blocksize=128)
+            ChunkManifests._download(TransportContainers(), url, dest; blocksize = 128)
             @test read(dest) == payload
             # An interrupted fetch must not leave a partial file behind that a
             # later scan would take for a complete copy.
             @test !isfile(dest * ".part")
         end
         @test_throws "blocksize must be positive" ChunkManifests._download(
-            TransportContainers(), "http://127.0.0.1:1/x", joinpath(dir, "y"); blocksize=0
+            TransportContainers(), "http://127.0.0.1:1/x", joinpath(dir, "y"); blocksize = 0
         )
     end
 
@@ -128,7 +128,7 @@ end
             # read a real file through it and confirm the driver is wired up
             # rather than merely present.
             _acc_withserver(read(src), "src.h5") do url
-                cm = ChunkManifests.scan(url, HDF5Driver(); access=ROS3Access())
+                cm = ChunkManifests.scan(url, HDF5Driver(); access = ROS3Access())
                 @test sort(collect(keys(arraysof(cm)))) == ["data"]
                 @test Array(Zarr.zopen(cm)["data"][:]) == expected
 
@@ -152,13 +152,13 @@ end
                 AutoAccess(), HDF5Driver(), "s3://b/k.h5"
             ) isa DownloadAccess
             @test_throws "endpoint form" ChunkManifests.scan(
-                "s3://b/k.h5", HDF5Driver(); access=ROS3Access()
+                "s3://b/k.h5", HDF5Driver(); access = ROS3Access()
             )
         else
             # The binaries shipped by HDF5_jll are built without the driver, so
             # the message has to name the alternative rather than just fail.
             msg = try
-                ChunkManifests.scan("https://h/k.h5", HDF5Driver(); access=ROS3Access())
+                ChunkManifests.scan("https://h/k.h5", HDF5Driver(); access = ROS3Access())
                 ""
             catch e
                 sprint(showerror, e)

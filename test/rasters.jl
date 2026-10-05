@@ -17,12 +17,12 @@ function _ra_fixture(path::AbstractString)
     hv = reshape(Int16.(1:24), 4, 6)
     hv[1, 1] = _RA_FILL
     h5open(path, "w") do f
-        x = create_dataset(f, "x", datatype(Int32), dataspace((4,)); chunk=(2,))
+        x = create_dataset(f, "x", datatype(Int32), dataspace((4,)); chunk = (2,))
         write(x, Int32.(1:4))
-        t = create_dataset(f, "time", datatype(Int32), dataspace((6,)); chunk=(3,))
+        t = create_dataset(f, "time", datatype(Int32), dataspace((6,)); chunk = (3,))
         write(t, Int32.(1:6))
         d = create_dataset(
-            f, "h", datatype(Int16), dataspace(hv); chunk=(2, 3), fill_value=_RA_FILL
+            f, "h", datatype(Int16), dataspace(hv); chunk = (2, 3), fill_value = _RA_FILL
         )
         write(d, hv)
         HDF5.attributes(d)["scale_factor"] = 0.5
@@ -38,7 +38,7 @@ function _ra_fixture(path::AbstractString)
     return hv
 end
 
-_ra_decode(hv) = Union{Missing,Float64}[
+_ra_decode(hv) = Union{Missing, Float64}[
     v == _RA_FILL ? missing : v * 0.5 + 100.0 for v in hv
 ]
 
@@ -68,16 +68,16 @@ _ra_decode(hv) = Union{Missing,Float64}[
         mvpair = Rasters._read_missingval_pair(var, md, Rasters.nokw)
         @test isequal(mvpair, _RA_FILL => missing)
 
-        mod = Rasters._mod(eltype(var), md, mvpair; scaled=true, coerce=convert)
+        mod = Rasters._mod(eltype(var), md, mvpair; scaled = true, coerce = convert)
         @test mod isa Rasters.AbstractModifications
         @test Rasters._outer_missingval(mod) === missing
         @test Rasters._maybe_modify(var, mod) isa _RA_DA.AbstractDiskArray
     end
 
     @testset "Raster(cm, name)" begin
-        counting = FetchCountingTransport(; coalesce=false)
+        counting = FetchCountingTransport(; coalesce = false)
         cm = ChunkManifest(
-            path; transport=counting, readahead=ReadaheadCache(; maxbytes=0)
+            path; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)
         )
         counting.count[] = 0
         r = Rasters.Raster(cm, "h")
@@ -89,7 +89,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @test r isa Rasters.Raster
         @test Rasters.name(r) == :h
         @test size(r) == size(hv)
-        @test eltype(r) == Union{Missing,Float64}
+        @test eltype(r) == Union{Missing, Float64}
         @test Rasters.missingval(r) === missing
         @test map(Rasters.name, Rasters.dims(r)) == (:X, :Ti)
         @test Rasters.metadata(r)["units"] == "m"
@@ -125,26 +125,26 @@ _ra_decode(hv) = Union{Missing,Float64}[
         cm = ChunkManifest(path)
 
         plain = Rasters.Raster(cm, "h")
-        @test eltype(plain) == Union{Missing,Float64}
+        @test eltype(plain) == Union{Missing, Float64}
         @test plain[1, 2] == hv[1, 2] * 0.5 + 100.0
         @test ismissing(plain[1, 1])
 
-        unscaled = Rasters.Raster(cm, "h"; scaled=false)
-        @test eltype(unscaled) == Union{Missing,Int16}
+        unscaled = Rasters.Raster(cm, "h"; scaled = false)
+        @test eltype(unscaled) == Union{Missing, Int16}
         @test unscaled[1, 2] == hv[1, 2]
         @test ismissing(unscaled[1, 1])
 
-        replaced = Rasters.Raster(cm, "h"; missingval=-1.0)
+        replaced = Rasters.Raster(cm, "h"; missingval = -1.0)
         @test eltype(replaced) == Float64
         @test Rasters.missingval(replaced) == -1.0
         @test replaced[1, 1] == -1.0
         @test replaced[1, 2] == hv[1, 2] * 0.5 + 100.0
 
-        kept = Rasters.Raster(cm, "h"; missingval=Rasters.missingval)
+        kept = Rasters.Raster(cm, "h"; missingval = Rasters.missingval)
         @test eltype(kept) == Float64
         @test kept[1, 1] == Float64(_RA_FILL)
 
-        rawr = Rasters.Raster(cm, "h"; raw=true, verbose=false)
+        rawr = Rasters.Raster(cm, "h"; raw = true, verbose = false)
         @test eltype(rawr) == Int16
         @test rawr[1, 1] == _RA_FILL
         @test rawr[1, 2] == hv[1, 2]
@@ -156,8 +156,8 @@ _ra_decode(hv) = Union{Missing,Float64}[
     end
 
     @testset "RasterStack(cm)" begin
-        counting = FetchCountingTransport(; coalesce=false)
-        cm = ChunkManifest(path; transport=counting)
+        counting = FetchCountingTransport(; coalesce = false)
+        cm = ChunkManifest(path; transport = counting)
         counting.count[] = 0
         st = Rasters.RasterStack(cm)
         # Each layer resolves its own dimensions, but the coordinate chunks are
@@ -171,13 +171,13 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @test size(st[:x]) == (4,)
         @test size(st[:time]) == (6,)
         @test map(Rasters.name, Rasters.dims(st)) == (:X, :Ti)
-        @test eltype(st[:h]) == Union{Missing,Float64}
+        @test eltype(st[:h]) == Union{Missing, Float64}
 
         # Counted on a manifest with readahead off, because readahead fetches a
         # run of byte-adjacent chunks on a miss by design, which is what makes
         # the construction count above 4 rather than 8.
         exact = ChunkManifest(
-            path; transport=FetchCountingTransport(; coalesce=false), readahead=ReadaheadCache(; maxbytes=0)
+            path; transport = FetchCountingTransport(; coalesce = false), readahead = ReadaheadCache(; maxbytes = 0)
         )
         exactcount = transportof(exact).count
         exactstack = Rasters.RasterStack(exact)
@@ -185,13 +185,13 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @test isequal(exactstack[:h][1:2, 1:3], decoded[1:2, 1:3])
         @test exactcount[] == 1
 
-        renamed = Rasters.RasterStack(cm; name=[:height, :t, :across])
+        renamed = Rasters.RasterStack(cm; name = [:height, :t, :across])
         @test keys(renamed) == (:height, :t, :across)
-        @test_throws "name has 2 entries but 3 arrays" Rasters.RasterStack(cm; name=[:a, :b])
+        @test_throws "name has 2 entries but 3 arrays" Rasters.RasterStack(cm; name = [:a, :b])
     end
 
     @testset "groups" begin
-        nested = ChunkManifest([path, path]; name=["g1", "g2"])
+        nested = ChunkManifest([path, path]; name = ["g1", "g2"])
         @test sort(collect(keys(arraysof(nested)))) ==
             ["g1/h", "g1/time", "g1/x", "g2/h", "g2/time", "g2/x"]
 
@@ -205,7 +205,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @test occursin("no array lies at the manifest root", err.msg)
         @test occursin("[\"g1\", \"g2\"]", err.msg)
 
-        st = Rasters.RasterStack(nested; group="g1")
+        st = Rasters.RasterStack(nested; group = "g1")
         @test keys(st) == (:h, :time, :x)
         @test isequal(st[:h][:, :], decoded)
 
@@ -217,7 +217,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
 
     @testset "Raster(cm) needs exactly one array" begin
         cm = ChunkManifest(path)
-        one = ChunkManifest(; arrays=Dict{String,ManifestArray}("h" => arraysof(cm)["h"]))
+        one = ChunkManifest(; arrays = Dict{String, ManifestArray}("h" => arraysof(cm)["h"]))
         @test Rasters.name(Rasters.Raster(one)) == :h
 
         @test_throws "the manifest holds 3 arrays" Rasters.Raster(cm)
@@ -226,10 +226,10 @@ _ra_decode(hv) = Union{Missing,Float64}[
 
     if isfile(_RA_ITSLIVE_PATH)
         @testset "real NetCDF4 file: a window touches only the chunks it covers" begin
-            counting = FetchCountingTransport(; coalesce=false)
+            counting = FetchCountingTransport(; coalesce = false)
             cm = ChunkManifest(
-                scan(_RA_ITSLIVE_PATH, HDF5Driver(); group="/grounded");
-                transport=counting, readahead=ReadaheadCache(; maxbytes=0),
+                scan(_RA_ITSLIVE_PATH, HDF5Driver(); group = "/grounded");
+                transport = counting, readahead = ReadaheadCache(; maxbytes = 0),
             )
             va = arraysof(cm)["grounded"]
             total = prod(chunkgridsize(chunkmapof(va)))
@@ -274,9 +274,9 @@ _ra_decode(hv) = Union{Missing,Float64}[
             # The coordinate variables are scanned beside the data variable
             # rather than with it: a whole-root scan of this file still aborts
             # on its fixed-length-string `mapping` variable.
-            arrays = Dict{String,ManifestArray}()
+            arrays = Dict{String, ManifestArray}()
             for k in ("grounded", "x", "y")
-                merge!(arrays, arraysof(scan(_RA_ITSLIVE_PATH, HDF5Driver(); group="/$k")))
+                merge!(arrays, arraysof(scan(_RA_ITSLIVE_PATH, HDF5Driver(); group = "/$k")))
             end
             cm = ChunkManifest(; arrays)
             r = Rasters.Raster(cm, "grounded")
@@ -307,7 +307,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
             # keyword reaches Rasters: what is missing is the file's CRS, not
             # the plumbing for it.
             @test Rasters.crs(r) === nothing
-            projected = Rasters.Raster(cm, "grounded"; crs=Rasters.EPSG(3031))
+            projected = Rasters.Raster(cm, "grounded"; crs = Rasters.EPSG(3031))
             @test Rasters.crs(projected) == Rasters.EPSG(3031)
             @test collect(Rasters.lookup(Rasters.dims(projected, Rasters.X))) == xv
         end

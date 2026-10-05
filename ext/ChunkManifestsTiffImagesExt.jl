@@ -58,12 +58,16 @@ _gt_asvector(x) = [x]
 # by TIFF convention; one value per band must then actually agree.
 function _gt_checkuniform(values::AbstractVector, nsp::Integer, name::AbstractString, context::AbstractString)
     vals = length(values) == 1 ? fill(first(values), nsp) : values
-    length(vals) == nsp || throw(ArgumentError(
-        "$context: $name has $(length(vals)) values but SAMPLESPERPIXEL=$nsp"
-    ))
-    allequal(vals) || throw(ArgumentError(
-        "$context: $name must be the same for every band, got $(Int.(vals))"
-    ))
+    length(vals) == nsp || throw(
+        ArgumentError(
+            "$context: $name has $(length(vals)) values but SAMPLESPERPIXEL=$nsp"
+        )
+    )
+    allequal(vals) || throw(
+        ArgumentError(
+            "$context: $name must be the same for every band, got $(Int.(vals))"
+        )
+    )
     return Int(first(vals))
 end
 
@@ -89,21 +93,25 @@ function _gt_readpages(path::AbstractString)
         # through untouched and Zarr.jl ignores the byte-order marker in a
         # dtype string, so such a file would decode to wrong numbers rather
         # than fail — the same reason HDF5Driver refuses a big-endian dataset.
-        tf.need_bswap && throw(ArgumentError(
-            "$path: TIFF is stored in the opposite byte order to this host, which " *
-            "cannot be served faithfully. Zarr.jl accepts a \">\" dtype but does not " *
-            "byte-swap on read, so the bytes would decode to wrong values rather " *
-            "than fail. Rewrite the source in host byte order, or scan a converted copy",
-        ))
+        tf.need_bswap && throw(
+            ArgumentError(
+                "$path: TIFF is stored in the opposite byte order to this host, which " *
+                    "cannot be served faithfully. Zarr.jl accepts a \">\" dtype but does not " *
+                    "byte-swap on read, so the bytes would decode to wrong values rather " *
+                    "than fail. Rewrite the source in host byte order, or scan a converted copy",
+            )
+        )
         visited = Set{Int}()
-        result = Tuple{String,TiffImages.IFD,Union{Nothing,String}}[]
+        result = Tuple{String, TiffImages.IFD, Union{Nothing, String}}[]
 
         offset = tf.first_offset
         mainidx = 0
         while offset > 0
-            offset in visited && throw(ArgumentError(
-                "$path: IFD chain revisits offset $offset; refusing to loop"
-            ))
+            offset in visited && throw(
+                ArgumentError(
+                    "$path: IFD chain revisits offset $offset; refusing to loop"
+                )
+            )
             push!(visited, offset)
             seek(tf, offset)
             ifd, nextoffset = read(tf, TiffImages.IFD)
@@ -131,26 +139,32 @@ end
 # catch a direct self-reference.
 function _gt_readsubifds(tf, parentifd, parentkey::AbstractString, path::AbstractString, visited::Set{Int})
     offsets = _gt_asvector(parentifd[TiffImages.SUBIFD].data)
-    pages = Tuple{String,TiffImages.IFD,Union{Nothing,String}}[]
+    pages = Tuple{String, TiffImages.IFD, Union{Nothing, String}}[]
     for (i, raw) in enumerate(offsets)
         offset = Int(raw)
         key = "$parentkey.sub$i"
-        offset in visited && throw(ArgumentError(
-            "$path: SubIFD \"$key\" at offset $offset revisits an already-read IFD; refusing to loop"
-        ))
+        offset in visited && throw(
+            ArgumentError(
+                "$path: SubIFD \"$key\" at offset $offset revisits an already-read IFD; refusing to loop"
+            )
+        )
         push!(visited, offset)
         seek(tf, offset)
         ifd, nextoffset = read(tf, TiffImages.IFD)
         TiffImages.load!(tf, ifd)
 
-        nextoffset == 0 || throw(ArgumentError(
-            "$path: SubIFD \"$key\" chains to a further IFD via its own next-IFD pointer; " *
-            "nesting deeper than one level is not supported"
-        ))
-        TiffImages.SUBIFD in ifd && throw(ArgumentError(
-            "$path: SubIFD \"$key\" itself declares a SubIFDs tag; nesting deeper than one " *
-            "level is not supported"
-        ))
+        nextoffset == 0 || throw(
+            ArgumentError(
+                "$path: SubIFD \"$key\" chains to a further IFD via its own next-IFD pointer; " *
+                    "nesting deeper than one level is not supported"
+            )
+        )
+        TiffImages.SUBIFD in ifd && throw(
+            ArgumentError(
+                "$path: SubIFD \"$key\" itself declares a SubIFDs tag; nesting deeper than one " *
+                    "level is not supported"
+            )
+        )
 
         push!(pages, (key, ifd, parentkey))
     end
@@ -167,10 +181,10 @@ end
 # error this driver raises; `tiffpredictor_config` itself knows nothing about
 # which file or page it was asked about.
 function _gt_codecs(
-    compression_id::Integer, predictor_id::Integer, ::Type{T}, itemsize::Integer, ncols::Integer,
-    samplesperpixel::Integer, context::AbstractString,
-) where {T}
-    pipeline = compression_id == 1 ? Tuple{Int,Vector{Int}}[] : [(Int(compression_id), Int[])]
+        compression_id::Integer, predictor_id::Integer, ::Type{T}, itemsize::Integer, ncols::Integer,
+        samplesperpixel::Integer, context::AbstractString,
+    ) where {T}
+    pipeline = compression_id == 1 ? Tuple{Int, Vector{Int}}[] : [(Int(compression_id), Int[])]
     compressor, _ = ChunkManifests.build_codecs(ChunkManifests.GeoTIFFDriver, pipeline, Int(itemsize); context)
 
     predictor = predictor_id == 0 ? 1 : predictor_id
@@ -180,7 +194,7 @@ function _gt_codecs(
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$context: $(e.msg)"))
     end
-    filters = predictorconfig === nothing ? Dict{String,Any}[] : Dict{String,Any}[predictorconfig]
+    filters = predictorconfig === nothing ? Dict{String, Any}[] : Dict{String, Any}[predictorconfig]
     return compressor, filters
 end
 
@@ -204,7 +218,7 @@ end
 # Returns `(attrs, owngeo)`, where `owngeo` is this page's own (uninherited)
 # `(; pixelscale, tiepoint, crs, rastertype)` — what a later page would cache
 # if this page turns out to be a full-resolution primary.
-function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
+function _gt_geoattrs(ifd, shape, context::AbstractString; inherit = nothing)
     pixelscale = TiffImages.MODELPIXELSCALE in ifd ? _gt_asvector(ifd[TiffImages.MODELPIXELSCALE].data) : nothing
     tiepoint = TiffImages.MODELTIEPOINT in ifd ? _gt_asvector(ifd[TiffImages.MODELTIEPOINT].data) : nothing
     transformation = _GT_MODELTRANSFORMATION in ifd ? _gt_asvector(ifd[_GT_MODELTRANSFORMATION].data) : nothing
@@ -213,12 +227,12 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
     geoasciiparams = TiffImages.GEOASCIIPARAMS in ifd ? ifd[TiffImages.GEOASCIIPARAMS].data : ""
     gdalmetadata = TiffImages.GDALMETADATA in ifd ? ifd[TiffImages.GDALMETADATA].data : nothing
 
-    attrs = Dict{String,Any}()
+    attrs = Dict{String, Any}()
 
     geokeys = if geokeydirectory !== nothing
-        ChunkManifests.decode_geokeys(geokeydirectory; doubleparams=geodoubleparams, asciiparams=geoasciiparams)
+        ChunkManifests.decode_geokeys(geokeydirectory; doubleparams = geodoubleparams, asciiparams = geoasciiparams)
     else
-        Dict{Int,Any}()
+        Dict{Int, Any}()
     end
     owncrs = isempty(geokeys) ? nothing : ChunkManifests.identify_crs(geokeys)
     ownrastertype = get(geokeys, ChunkManifests.GEOKEY_GTRasterTypeGeoKey, ChunkManifests.RASTER_PIXEL_IS_AREA)
@@ -230,7 +244,7 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
     gt, rastertype = if transformation !== nothing
         ChunkManifests.geotransform(; transformation), ownrastertype
     elseif pixelscale !== nothing && tiepoint !== nothing
-        ChunkManifests.geotransform(; pixelscale, tiepoints=tiepoint), ownrastertype
+        ChunkManifests.geotransform(; pixelscale, tiepoints = tiepoint), ownrastertype
     elseif inherit !== nothing && inherit.pixelscale !== nothing && inherit.tiepoint !== nothing
         # An overview covers the same ground as its full-resolution parent
         # with fewer, larger pixels. GDAL sizes an overview as
@@ -245,7 +259,7 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
             inherit.height * inherit.pixelscale[2] / height,
             inherit.pixelscale[3],
         ]
-        ChunkManifests.geotransform(; pixelscale=inheritedscale, tiepoints=inherit.tiepoint), inherit.rastertype
+        ChunkManifests.geotransform(; pixelscale = inheritedscale, tiepoints = inherit.tiepoint), inherit.rastertype
     else
         nothing, ownrastertype
     end
@@ -258,14 +272,14 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit=nothing)
 
     gdalmetadata !== nothing && (attrs["GDALMetadata"] = gdalmetadata)
 
-    owngeo = (; pixelscale, tiepoint, crs=owncrs, rastertype=ownrastertype)
+    owngeo = (; pixelscale, tiepoint, crs = owncrs, rastertype = ownrastertype)
     return attrs, owngeo
 end
 
 function _gt_scantiled(
-    table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize,
-    samplesperpixel, bandgrid::Bool, context,
-) where {T}
+        table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize,
+        samplesperpixel, bandgrid::Bool, context,
+    ) where {T}
     tilewidth = TiffImages.tilecols(ifd)
     tilelength = TiffImages.tilerows(ifd)
     gridx = cld(width, tilewidth)
@@ -273,9 +287,11 @@ function _gt_scantiled(
 
     offsets = _gt_asvector(ifd[TiffImages.TILEOFFSETS].data)
     bytecounts = _gt_asvector(ifd[TiffImages.TILEBYTECOUNTS].data)
-    length(offsets) == gridx * gridy || throw(ArgumentError(
-        "$context: $(length(offsets)) tile offsets but a $gridx×$gridy tile grid implies $(gridx * gridy)"
-    ))
+    length(offsets) == gridx * gridy || throw(
+        ArgumentError(
+            "$context: $(length(offsets)) tile offsets but a $gridx×$gridy tile grid implies $(gridx * gridy)"
+        )
+    )
 
     compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, tilewidth, samplesperpixel, context)
 
@@ -325,22 +341,25 @@ function _gt_choose_rows(height::Integer, rowbytes::Integer, chunkbytes_target::
     for r in target:-1:1
         height % r == 0 && return r
     end
+    return
 end
 
 function _gt_scanstriped(
-    driver, table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize,
-    samplesperpixel, bandgrid::Bool, context,
-) where {T}
+        driver, table, fileindex, ifd, width, height, compression_id, predictor_id, ::Type{T}, itemsize,
+        samplesperpixel, bandgrid::Bool, context,
+    ) where {T}
     rowsperstrip = Int(TiffImages.getdata(ifd, TiffImages.ROWSPERSTRIP, height))
     rowsperstrip >= 1 || throw(ArgumentError("$context: ROWSPERSTRIP must be positive, got $rowsperstrip"))
     nstrips = cld(height, rowsperstrip)
 
     offsets = _gt_asvector(ifd[TiffImages.STRIPOFFSETS].data)
     bytecounts = _gt_asvector(ifd[TiffImages.STRIPBYTECOUNTS].data)
-    length(offsets) == nstrips || throw(ArgumentError(
-        "$context: $(length(offsets)) strip offsets but ROWSPERSTRIP=$rowsperstrip over " *
-        "IMAGELENGTH=$height implies $nstrips strips"
-    ))
+    length(offsets) == nstrips || throw(
+        ArgumentError(
+            "$context: $(length(offsets)) strip offsets but ROWSPERSTRIP=$rowsperstrip over " *
+                "IMAGELENGTH=$height implies $nstrips strips"
+        )
+    )
 
     compressor, filters = _gt_codecs(compression_id, predictor_id, T, itemsize, width, samplesperpixel, context)
     # A chunky row interleaves every band, so it is samplesperpixel times
@@ -357,11 +376,13 @@ function _gt_scanstriped(
         return manifest, (width, chunkrows), compressor, filters
     end
 
-    height % rowsperstrip == 0 || throw(ArgumentError(
-        "$context: IMAGELENGTH=$height is not a multiple of ROWSPERSTRIP=$rowsperstrip; the " *
-        "final strip holds only $(height - rowsperstrip * (nstrips - 1)) rows, which cannot be " *
-        "a full Zarr chunk without reading past the end of a short strip or truncating valid data"
-    ))
+    height % rowsperstrip == 0 || throw(
+        ArgumentError(
+            "$context: IMAGELENGTH=$height is not a multiple of ROWSPERSTRIP=$rowsperstrip; the " *
+                "final strip holds only $(height - rowsperstrip * (nstrips - 1)) rows, which cannot be " *
+                "a full Zarr chunk without reading past the end of a short strip or truncating valid data"
+        )
+    )
 
     gridshape = bandgrid ? (1, 1, nstrips) : (1, nstrips)
     index = zeros(UInt32, gridshape)
@@ -396,8 +417,8 @@ end
 # from per-row contiguity and is not checked here; planar data always gets a
 # ExplicitChunkMap, which is correct regardless.
 function _gt_scanplanar(
-    table, fileindex, ifd, width, height, nsp, compression_id, predictor_id, ::Type{T}, itemsize, tiled, context,
-) where {T}
+        table, fileindex, ifd, width, height, nsp, compression_id, predictor_id, ::Type{T}, itemsize, tiled, context,
+    ) where {T}
     if tiled
         tilewidth = TiffImages.tilecols(ifd)
         tilelength = TiffImages.tilerows(ifd)
@@ -414,19 +435,23 @@ function _gt_scanplanar(
         perplane = gridy
         offsets = _gt_asvector(ifd[TiffImages.STRIPOFFSETS].data)
         bytecounts = _gt_asvector(ifd[TiffImages.STRIPBYTECOUNTS].data)
-        height % rowsperstrip == 0 || throw(ArgumentError(
-            "$context: IMAGELENGTH=$height is not a multiple of ROWSPERSTRIP=$rowsperstrip; the " *
-            "final strip holds only $(height - rowsperstrip * (perplane - 1)) rows, which cannot " *
-            "be a full Zarr chunk without reading past the end of a short strip or truncating valid data"
-        ))
+        height % rowsperstrip == 0 || throw(
+            ArgumentError(
+                "$context: IMAGELENGTH=$height is not a multiple of ROWSPERSTRIP=$rowsperstrip; the " *
+                    "final strip holds only $(height - rowsperstrip * (perplane - 1)) rows, which cannot " *
+                    "be a full Zarr chunk without reading past the end of a short strip or truncating valid data"
+            )
+        )
         chunkxy = (width, rowsperstrip)
         ncols_predictor = width
     end
 
-    length(offsets) == perplane * nsp || throw(ArgumentError(
-        "$context: $(length(offsets)) $(tiled ? "tile" : "strip") offsets but a " *
-        "$perplane-per-band × $nsp-band planar layout implies $(perplane * nsp)"
-    ))
+    length(offsets) == perplane * nsp || throw(
+        ArgumentError(
+            "$context: $(length(offsets)) $(tiled ? "tile" : "strip") offsets but a " *
+                "$perplane-per-band × $nsp-band planar layout implies $(perplane * nsp)"
+        )
+    )
 
     # Each chunk holds exactly one band's tile or strip, so the predictor's
     # per-row stride within a chunk is 1, not samplesperpixel.
@@ -449,9 +474,9 @@ function _gt_scanplanar(
 end
 
 function _gt_scanifd(
-    driver::ChunkManifests.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
-    sft::Integer, parentkey::Union{Nothing,AbstractString}, primarygeo::Dict{String,Any}, ismain::Bool,
-)
+        driver::ChunkManifests.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
+        sft::Integer, parentkey::Union{Nothing, AbstractString}, primarygeo::Dict{String, Any}, ismain::Bool,
+    )
     context = "$path: page \"$key\""
 
     width = Int(ifd[TiffImages.IMAGEWIDTH].data)
@@ -463,10 +488,12 @@ function _gt_scanifd(
     sfvalues = TiffImages.SAMPLEFORMAT in ifd ? _gt_asvector(ifd[TiffImages.SAMPLEFORMAT].data) : UInt16[1]
     sampleformat = _gt_checkuniform(sfvalues, nsp, "SAMPLEFORMAT", context)
     T = TiffImages.rawtype(TiffImages.SampleFormats(sampleformat), bits)
-    bits == sizeof(T) * 8 || throw(ArgumentError(
-        "$context: BITSPERSAMPLE=$bits is not byte-aligned; packed sub-byte sample " *
-        "widths cannot be referenced without unpacking, which this package never does"
-    ))
+    bits == sizeof(T) * 8 || throw(
+        ArgumentError(
+            "$context: BITSPERSAMPLE=$bits is not byte-aligned; packed sub-byte sample " *
+                "widths cannot be referenced without unpacking, which this package never does"
+        )
+    )
 
     compression_id = Int(TiffImages.getdata(ifd, TiffImages.COMPRESSION, 1))
     predictor_id = TiffImages.predictor(ifd)
@@ -502,12 +529,12 @@ function _gt_scanifd(
     # overview, bit 1 one page of an otherwise-ordinary multi-page image, bit
     # 2 a transparency mask. Absence (default 0) means a full-resolution
     # primary image.
-    reduced = (sft & 0x1) != 0
-    mask = (sft & 0x4) != 0
+    reduced = (sft & 0x01) != 0
+    mask = (sft & 0x04) != 0
     attrs["NewSubfileType"] = sft
     attrs["reduced_resolution"] = reduced
     attrs["mask"] = mask
-    attrs["multipage"] = (sft & 0x2) != 0
+    attrs["multipage"] = (sft & 0x02) != 0
     parentkey !== nothing && (attrs["parent"] = parentkey)
 
     fillvalue = _gt_fillvalue(T, ifd)
@@ -567,17 +594,17 @@ function ChunkManifests.scan(path::AbstractString, driver::ChunkManifests.GeoTIF
     isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
 
     table = ChunkManifests.PathTable()
-    fileindex = ChunkManifests.push_uri!(table, abspath(path); size=filesize(path))
+    fileindex = ChunkManifests.push_uri!(table, abspath(path); size = filesize(path))
 
     pages = _gt_readpages(path)
 
-    arrays = Dict{String,ChunkManifests.ManifestArray}()
-    primarygeo = Dict{String,Any}()
+    arrays = Dict{String, ChunkManifests.ManifestArray}()
+    primarygeo = Dict{String, Any}()
     lastfull = nothing
     for (key, ifd, forcedparent) in pages
         sft = Int(TiffImages.getdata(ifd, TiffImages.SUBFILETYPE, 0))
-        reduced = (sft & 0x1) != 0
-        mask = (sft & 0x4) != 0
+        reduced = (sft & 0x01) != 0
+        mask = (sft & 0x04) != 0
         ismain = !occursin('.', key)
 
         parentkey = forcedparent !== nothing ? forcedparent : ((reduced || mask) ? lastfull : nothing)
@@ -587,7 +614,7 @@ function ChunkManifests.scan(path::AbstractString, driver::ChunkManifests.GeoTIF
         ismain && !reduced && !mask && (lastfull = key)
     end
 
-    provenance = Dict{String,Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
+    provenance = Dict{String, Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
     return ChunkManifests.ChunkManifest(; arrays, provenance)
 end
 
@@ -598,15 +625,15 @@ end
 function __init__()
     ChunkManifests.register_codec!(
         ChunkManifests.GeoTIFFDriver, 8, ChunkManifests.COMPRESSOR,
-        (cd, itemsize) -> Dict{String,Any}("id" => "zlib", "level" => -1),
+        (cd, itemsize) -> Dict{String, Any}("id" => "zlib", "level" => -1),
     )
     ChunkManifests.register_codec!(
         ChunkManifests.GeoTIFFDriver, 32946, ChunkManifests.COMPRESSOR,
-        (cd, itemsize) -> Dict{String,Any}("id" => "zlib", "level" => -1),
+        (cd, itemsize) -> Dict{String, Any}("id" => "zlib", "level" => -1),
     )
     ChunkManifests.register_codec!(
         ChunkManifests.GeoTIFFDriver, 50000, ChunkManifests.COMPRESSOR,
-        (cd, itemsize) -> Dict{String,Any}("id" => "zstd", "level" => 0),
+        (cd, itemsize) -> Dict{String, Any}("id" => "zstd", "level" => 0),
     )
 
     ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 5, "LZW has no byte-compatible Zarr v2 codec")

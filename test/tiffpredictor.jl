@@ -64,8 +64,8 @@ import Random
         Random.seed!(20261002)
         for T in (UInt8, Int16, UInt16, Int32)
             for (width, samplesperpixel, nrows) in (
-                (1, 1, 5), (1, 4, 3), (5, 3, 2), (7, 1, 4), (4, 2, 6),
-            )
+                    (1, 1, 5), (1, 4, 3), (5, 3, 2), (7, 1, 4), (4, 2, 6),
+                )
                 f = ChunkManifests.TIFFPredictor(T, width, samplesperpixel)
                 n = width * samplesperpixel * nrows
                 x = rand(T, n)
@@ -135,7 +135,7 @@ import Random
         f = ChunkManifests.TIFFPredictor(Int16, width, samplesperpixel)
         z = Zarr.zcreate(
             Int16, store, width;
-            chunks=(width,), compressor=Zarr.NoCompressor(), filters=(f,), zarr_format=2,
+            chunks = (width,), compressor = Zarr.NoCompressor(), filters = (f,), zarr_format = 2,
         )
 
         original = Int16[1000, 1050, 900]
@@ -155,12 +155,12 @@ import Random
 
         ChunkManifests.register_codec!(
             _PositionalDriver, 999, ChunkManifests.COMPRESSOR,
-            (pipeline, itemsize) -> Dict{String,Any}("id" => "zlib"),
+            (pipeline, itemsize) -> Dict{String, Any}("id" => "zlib"),
         )
         ChunkManifests.register_codec!(
             _DoBlockDriver, 999, ChunkManifests.COMPRESSOR
         ) do pipeline, itemsize
-            Dict{String,Any}("id" => "zlib")
+            Dict{String, Any}("id" => "zlib")
         end
 
         a = ChunkManifests.lookup_codec(_PositionalDriver, 999)

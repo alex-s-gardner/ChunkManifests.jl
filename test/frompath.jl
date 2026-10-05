@@ -8,10 +8,10 @@ import Zarr
 # and actually reading it is covered in serialize_parquet.jl, where Parquet2 is
 # available.
 
-function _fp_sourcefile(dir, name="src.h5")
+function _fp_sourcefile(dir, name = "src.h5")
     path = joinpath(dir, name)
     HDF5.h5open(path, "w") do f
-        d = HDF5.create_dataset(f, "data", Float64, (12,); chunk=(4,))
+        d = HDF5.create_dataset(f, "data", Float64, (12,); chunk = (4,))
         write(d, collect(Float64, 1:12))
     end
     return path
@@ -47,7 +47,7 @@ end
     end
 
     @testset "transport and readahead are carried onto the result" begin
-        cm = ChunkManifest(src; transport=LocalTransport(), readahead=ReadaheadCache(; maxbytes=0))
+        cm = ChunkManifest(src; transport = LocalTransport(), readahead = ReadaheadCache(; maxbytes = 0))
         @test transportof(cm) isa LocalTransport
         @test cm.readahead.maxbytes == 0
         # Still reads: a manifest with readahead disabled fetches per chunk.

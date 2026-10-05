@@ -1,7 +1,7 @@
 @testset "PathTable" begin
     @testset "push_uri! dedup" begin
         t = PathTable()
-        i1 = push_uri!(t, "s3://bucket/a.h5"; etag="e1", size=100, mtime=1.0)
+        i1 = push_uri!(t, "s3://bucket/a.h5"; etag = "e1", size = 100, mtime = 1.0)
         @test i1 == 1
         @test length(t) == 1
 
@@ -25,24 +25,24 @@
 
     @testset "push_uri! conflicting metadata throws" begin
         t = PathTable()
-        push_uri!(t, "a.h5"; etag="e1")
-        @test_throws "etag" push_uri!(t, "a.h5"; etag="e2")
+        push_uri!(t, "a.h5"; etag = "e1")
+        @test_throws "etag" push_uri!(t, "a.h5"; etag = "e2")
 
-        push_uri!(t, "b.h5"; size=10)
-        @test_throws "size" push_uri!(t, "b.h5"; size=20)
+        push_uri!(t, "b.h5"; size = 10)
+        @test_throws "size" push_uri!(t, "b.h5"; size = 20)
 
-        push_uri!(t, "c.h5"; mtime=1.0)
-        @test_throws "mtime" push_uri!(t, "c.h5"; mtime=2.0)
+        push_uri!(t, "c.h5"; mtime = 1.0)
+        @test_throws "mtime" push_uri!(t, "c.h5"; mtime = 2.0)
 
         # Filling in previously-unset metadata is not a conflict.
         i = push_uri!(t, "d.h5")
-        @test push_uri!(t, "d.h5"; etag="whatever") == i
+        @test push_uri!(t, "d.h5"; etag = "whatever") == i
         @test length(t) == 4
     end
 
     @testset "seturi! keeps lookup consistent" begin
         t = PathTable()
-        i = push_uri!(t, "old/path.h5"; etag="e1")
+        i = push_uri!(t, "old/path.h5"; etag = "e1")
         seturi!(t, i, "new/path.h5")
 
         @test uriof(t, i) == "new/path.h5"

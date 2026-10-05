@@ -15,16 +15,16 @@ mutable struct _Route
     forcestatus::Int
 end
 function _Route(
-    bytes::Vector{UInt8}; fails::Integer=0, ignorerange::Bool=false, forcestatus::Integer=0
-)
+        bytes::Vector{UInt8}; fails::Integer = 0, ignorerange::Bool = false, forcestatus::Integer = 0
+    )
     return _Route(bytes, Threads.Atomic{Int}(fails), ignorerange, Int(forcestatus))
 end
 
 struct _TestServer
-    routes::Dict{String,_Route}
-    hits::Dict{String,Threads.Atomic{Int}}
+    routes::Dict{String, _Route}
+    hits::Dict{String, Threads.Atomic{Int}}
 end
-_TestServer() = _TestServer(Dict{String,_Route}(), Dict{String,Threads.Atomic{Int}}())
+_TestServer() = _TestServer(Dict{String, _Route}(), Dict{String, Threads.Atomic{Int}}())
 
 function _addroute!(ts::_TestServer, path::AbstractString, bytes::Vector{UInt8}; kwargs...)
     ts.routes[path] = _Route(bytes; kwargs...)
@@ -67,7 +67,7 @@ end
 function _withserver(f::Function)
     ts = _TestServer()
     server = HTTP.serve!(req -> _handle(ts, req), "127.0.0.1", 0)
-    try
+    return try
         f(ts, "http://127.0.0.1:$(HTTP.port(server))")
     finally
         close(server)
@@ -119,7 +119,7 @@ end
                 path = joinpath(dir, "data.bin")
                 write(path, content)
 
-                Random.seed!(0xC0FFEE)
+                Random.seed!(0x00C0FFEE)
                 for _ in 1:200
                     off = rand(0:(nbytes - 1))
                     len = rand(0:min(nbytes - off, 40))
@@ -150,16 +150,16 @@ end
 
     @testset "404 fails with a clear message and is never retried" begin
         _withserver() do ts, base
-            _addroute!(ts, "/missing", UInt8[]; forcestatus=404)
+            _addroute!(ts, "/missing", UInt8[]; forcestatus = 404)
             uri = base * "/missing"
-            @test_throws "404" fetchrange(HTTPTransport(; retries=3), uri, ByteRange(0, 1))
+            @test_throws "404" fetchrange(HTTPTransport(; retries = 3), uri, ByteRange(0, 1))
             @test _hits(ts, "/missing") == 1
         end
     end
 
     @testset "500 is retried up to the bounded count, then fails with a clear message" begin
         _withserver() do ts, base
-            _addroute!(ts, "/alwaysfail", UInt8[]; forcestatus=500)
+            _addroute!(ts, "/alwaysfail", UInt8[]; forcestatus = 500)
             uri = base * "/alwaysfail"
             retries = 2
             @test_throws "500" fetchrange(HTTPTransport(; retries), uri, ByteRange(0, 1))
@@ -169,9 +169,9 @@ end
 
     @testset "a transient 500 is retried and recovers" begin
         _withserver() do ts, base
-            _addroute!(ts, "/flaky", content; fails=2)
+            _addroute!(ts, "/flaky", content; fails = 2)
             uri = base * "/flaky"
-            got = fetchrange(HTTPTransport(; retries=3), uri, ByteRange(0, 10))
+            got = fetchrange(HTTPTransport(; retries = 3), uri, ByteRange(0, 10))
             @test got == content[1:10]
             @test _hits(ts, "/flaky") == 3
         end
@@ -179,7 +179,7 @@ end
 
     @testset "a server that ignores Range and returns 200 with the whole body" begin
         _withserver() do ts, base
-            _addroute!(ts, "/wholebody", content; ignorerange=true)
+            _addroute!(ts, "/wholebody", content; ignorerange = true)
             uri = base * "/wholebody"
             t = HTTPTransport()
 
@@ -207,7 +207,7 @@ end
             end
 
             @testset "property: random range sets, any order" begin
-                Random.seed!(0xBADF00D)
+                Random.seed!(0x0BADF00D)
                 for _ in 1:30
                     n = rand(0:10)
                     ranges = Vector{ByteRange}(undef, n)
@@ -258,13 +258,13 @@ end
         gridsize = cld.(shape, chunkshape)
         dimnames = ["x", "y", "z"]
         data = reshape(collect(Float64, 1:prod(shape)), shape)
-        compressor = Dict{String,Any}("id" => "zlib", "level" => 3)
+        compressor = Dict{String, Any}("id" => "zlib", "level" => 3)
         fillvalue = -9999.0
 
         mktempdir() do dir
             za = Zarr.zcreate(
                 Float64, Zarr.DirectoryStore(dir), shape...;
-                chunks=chunkshape, compressor=Zarr.ZlibCompressor(3), fill_value=fillvalue,
+                chunks = chunkshape, compressor = Zarr.ZlibCompressor(3), fill_value = fillvalue,
             )
             za[:, :, :] = data
 
@@ -285,8 +285,8 @@ end
                 va = ManifestArray{Float64}(
                     manifest, shape, chunkshape; fillvalue, compressor, dimnames
                 )
-                group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
-                mstore = ChunkManifest(group; transport=HTTPTransport())
+                group = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va))
+                mstore = ChunkManifest(group; transport = HTTPTransport())
 
                 zv_direct = Zarr.zopen(Zarr.DirectoryStore(dir))
                 zv_http = Zarr.zopen(mstore)
@@ -306,7 +306,7 @@ end
 
     @testset "objectsize fails when the server ignores Range" begin
         _withserver() do ts, base
-            _addroute!(ts, "/whole.bin", content; ignorerange=true)
+            _addroute!(ts, "/whole.bin", content; ignorerange = true)
             @test_throws "cannot report a total size" objectsize(
                 HTTPTransport(), base * "/whole.bin"
             )

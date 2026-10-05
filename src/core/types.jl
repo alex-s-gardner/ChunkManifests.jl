@@ -59,9 +59,9 @@ detect that it has been moved or rewritten since the scan.
 """
 struct FileEntry
     uri::String
-    etag::Union{Nothing,String}
-    size::Union{Nothing,UInt64}
-    mtime::Union{Nothing,Float64}
+    etag::Union{Nothing, String}
+    size::Union{Nothing, UInt64}
+    mtime::Union{Nothing, Float64}
 end
 
 """
@@ -73,7 +73,7 @@ regardless of how many chunks reference it.
 """
 struct PathTable
     entries::Vector{FileEntry}
-    lookup::Dict{String,UInt32}
+    lookup::Dict{String, UInt32}
 end
 
 """
@@ -103,21 +103,21 @@ match `offset`; a narrower column would save kilobytes on a realistic grid and
 cost a reader wondering why one of three parallel columns differs.
 """
 struct ExplicitChunkMap{
-    N,
-    TI<:AbstractArray{UInt32,N},
-    TO<:AbstractArray{UInt64,N},
-    TL<:AbstractArray{UInt64,N},
-} <: AbstractChunkMap{N}
+        N,
+        TI <: AbstractArray{UInt32, N},
+        TO <: AbstractArray{UInt64, N},
+        TL <: AbstractArray{UInt64, N},
+    } <: AbstractChunkMap{N}
     table::PathTable
     index::TI
     offset::TO
     nbytes::TL
-    inline::Dict{CartesianIndex{N},Vector{UInt8}}
+    inline::Dict{CartesianIndex{N}, Vector{UInt8}}
 
-    function ExplicitChunkMap{N,TI,TO,TL}(
-        table, index, offset, nbytes, inline
-    ) where {N,TI,TO,TL}
-        return new{N,TI,TO,TL}(table, index, offset, nbytes, inline)
+    function ExplicitChunkMap{N, TI, TO, TL}(
+            table, index, offset, nbytes, inline
+        ) where {N, TI, TO, TL}
+        return new{N, TI, TO, TL}(table, index, offset, nbytes, inline)
     end
 end
 
@@ -136,30 +136,36 @@ entry.
 struct AffineChunkMap{N} <: AbstractChunkMap{N}
     table::PathTable
     fileindex::UInt32
-    gridsize::NTuple{N,Int}
+    gridsize::NTuple{N, Int}
     base::UInt64
-    strides::NTuple{N,UInt64}
+    strides::NTuple{N, UInt64}
     chunkbytes::UInt32
 
     function AffineChunkMap{N}(
-        table, fileindex, gridsize, base, strides, chunkbytes
-    ) where {N}
+            table, fileindex, gridsize, base, strides, chunkbytes
+        ) where {N}
         gridsizetuple = map(Int, Tuple(gridsize))
         stridestuple = map(UInt64, Tuple(strides))
-        length(gridsizetuple) == N || throw(DimensionMismatch(
-            "AffineChunkMap{$N}: gridsize has $(length(gridsizetuple)) dimensions"
-        ))
-        length(stridestuple) == N || throw(DimensionMismatch(
-            "AffineChunkMap: gridsize has $N dimensions but strides has " *
-            "$(length(stridestuple))"
-        ))
-        1 <= fileindex <= length(table) || throw(ArgumentError(
-            "AffineChunkMap: fileindex $fileindex is out of range for a path table " *
-            "holding $(length(table)) entries",
-        ))
+        length(gridsizetuple) == N || throw(
+            DimensionMismatch(
+                "AffineChunkMap{$N}: gridsize has $(length(gridsizetuple)) dimensions"
+            )
+        )
+        length(stridestuple) == N || throw(
+            DimensionMismatch(
+                "AffineChunkMap: gridsize has $N dimensions but strides has " *
+                    "$(length(stridestuple))"
+            )
+        )
+        1 <= fileindex <= length(table) || throw(
+            ArgumentError(
+                "AffineChunkMap: fileindex $fileindex is out of range for a path table " *
+                    "holding $(length(table)) entries",
+            )
+        )
         return new{N}(
-            table, UInt32(fileindex), NTuple{N,Int}(gridsizetuple), UInt64(base),
-            NTuple{N,UInt64}(stridestuple), UInt32(chunkbytes),
+            table, UInt32(fileindex), NTuple{N, Int}(gridsizetuple), UInt64(base),
+            NTuple{N, UInt64}(stridestuple), UInt32(chunkbytes),
         )
     end
 end
@@ -177,44 +183,54 @@ serialized. `compressor` and `filters` are Zarr v2 codec configurations, with
 `dimnames` during serialization rather than stored here, so the two cannot
 disagree.
 """
-struct ManifestArray{T,N,M<:AbstractChunkMap{N}}
+struct ManifestArray{T, N, M <: AbstractChunkMap{N}}
     manifest::M
-    shape::NTuple{N,Int}
-    chunkshape::NTuple{N,Int}
-    fillvalue::Union{Nothing,T}
-    compressor::Union{Nothing,Dict{String,Any}}
-    filters::Vector{Dict{String,Any}}
-    attrs::Dict{String,Any}
+    shape::NTuple{N, Int}
+    chunkshape::NTuple{N, Int}
+    fillvalue::Union{Nothing, T}
+    compressor::Union{Nothing, Dict{String, Any}}
+    filters::Vector{Dict{String, Any}}
+    attrs::Dict{String, Any}
     dimnames::Vector{String}
 
-    function ManifestArray{T,N,M}(
-        manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
-    ) where {T,N,M}
-        length(shape) == N || throw(ArgumentError(
-            "ManifestArray: shape has $(length(shape)) dimensions but manifest has $N"
-        ))
-        length(chunkshape) == N || throw(ArgumentError(
-            "ManifestArray: chunkshape has $(length(chunkshape)) dimensions but " *
-            "manifest has $N"
-        ))
-        length(dimnames) == N || throw(ArgumentError(
-            "ManifestArray: dimnames has length $(length(dimnames)) but array has " *
-            "$N dimensions"
-        ))
-        haskey(attrs, "_ARRAY_DIMENSIONS") && throw(ArgumentError(
-            "ManifestArray: attrs must not contain \"_ARRAY_DIMENSIONS\"; it is " *
-            "derived from dimnames at serialization time",
-        ))
+    function ManifestArray{T, N, M}(
+            manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
+        ) where {T, N, M}
+        length(shape) == N || throw(
+            ArgumentError(
+                "ManifestArray: shape has $(length(shape)) dimensions but manifest has $N"
+            )
+        )
+        length(chunkshape) == N || throw(
+            ArgumentError(
+                "ManifestArray: chunkshape has $(length(chunkshape)) dimensions but " *
+                    "manifest has $N"
+            )
+        )
+        length(dimnames) == N || throw(
+            ArgumentError(
+                "ManifestArray: dimnames has length $(length(dimnames)) but array has " *
+                    "$N dimensions"
+            )
+        )
+        haskey(attrs, "_ARRAY_DIMENSIONS") && throw(
+            ArgumentError(
+                "ManifestArray: attrs must not contain \"_ARRAY_DIMENSIONS\"; it is " *
+                    "derived from dimnames at serialization time",
+            )
+        )
 
-        shapetuple = NTuple{N,Int}(Tuple(shape))
-        chunkshapetuple = NTuple{N,Int}(Tuple(chunkshape))
+        shapetuple = NTuple{N, Int}(Tuple(shape))
+        chunkshapetuple = NTuple{N, Int}(Tuple(chunkshape))
         expected = cld.(shapetuple, chunkshapetuple)
         actual = chunkgridsize(manifest)
-        expected == actual || throw(DimensionMismatch(
-            "ManifestArray: manifest chunk grid size $actual does not match " *
-            "cld.(shape, chunkshape) = $expected (shape=$shapetuple, " *
-            "chunkshape=$chunkshapetuple)",
-        ))
+        expected == actual || throw(
+            DimensionMismatch(
+                "ManifestArray: manifest chunk grid size $actual does not match " *
+                    "cld.(shape, chunkshape) = $expected (shape=$shapetuple, " *
+                    "chunkshape=$chunkshapetuple)",
+            )
+        )
 
         fv = if fillvalue === nothing
             nothing
@@ -222,14 +238,16 @@ struct ManifestArray{T,N,M<:AbstractChunkMap{N}}
             try
                 convert(T, fillvalue)
             catch
-                throw(ArgumentError(
-                    "ManifestArray: fill value $(repr(fillvalue)) is not " *
-                    "representable as the element type $T",
-                ))
+                throw(
+                    ArgumentError(
+                        "ManifestArray: fill value $(repr(fillvalue)) is not " *
+                            "representable as the element type $T",
+                    )
+                )
             end
         end
 
-        return new{T,N,M}(
+        return new{T, N, M}(
             manifest, shapetuple, chunkshapetuple, fv, compressor, filters, attrs,
             collect(String, dimnames),
         )
@@ -298,20 +316,20 @@ a repeat read but not the first one. The two compose, and wrapping a Zarr array
 from this store in `DiskArrays.cache` keeps both effects.
 """
 struct ReadaheadCache
-    entries::Dict{Tuple{String,UInt64},Vector{UInt8}}
-    order::Vector{Tuple{String,UInt64}}
+    entries::Dict{Tuple{String, UInt64}, Vector{UInt8}}
+    order::Vector{Tuple{String, UInt64}}
     maxbytes::Int
     nbytes::Base.RefValue{Int}
     chunks::Int
     lock::ReentrantLock
 end
 
-function ReadaheadCache(; maxbytes::Integer=64 * 1024 * 1024, chunks::Integer=32)
+function ReadaheadCache(; maxbytes::Integer = 64 * 1024 * 1024, chunks::Integer = 32)
     maxbytes >= 0 || throw(ArgumentError("maxbytes must be nonnegative, got $maxbytes"))
     chunks >= 1 || throw(ArgumentError("chunks must be at least 1, got $chunks"))
     return ReadaheadCache(
-        Dict{Tuple{String,UInt64},Vector{UInt8}}(),
-        Tuple{String,UInt64}[],
+        Dict{Tuple{String, UInt64}, Vector{UInt8}}(),
+        Tuple{String, UInt64}[],
         Int(maxbytes),
         Ref(0),
         Int(chunks),
@@ -339,23 +357,25 @@ rather than per chunk. `transport` resolves those URIs: a
 while a single transport reads every URI the same way.
 """
 struct ChunkManifest <: Zarr.AbstractStore
-    arrays::Dict{String,ManifestArray}
+    arrays::Dict{String, ManifestArray}
     table::PathTable
-    attrs::Dict{String,Any}
-    provenance::Dict{String,Any}
+    attrs::Dict{String, Any}
+    provenance::Dict{String, Any}
     transport::AbstractTransport
     readahead::ReadaheadCache
 
     function ChunkManifest(arrays, table, attrs, provenance, transport, readahead)
         for (key, array) in arrays
-            tableof(chunkmapof(array)) === table || throw(ArgumentError(
-                "ChunkManifest: array $(repr(key)) references a different path " *
-                "table than the manifest. Every array shares the manifest's " *
-                "table by reference, so that repointing a file is one edit and " *
-                "validate costs one request per file rather than per chunk. " *
-                "Use ChunkManifest(; arrays, table), which rewrites the chunk " *
-                "maps onto one table.",
-            ))
+            tableof(chunkmapof(array)) === table || throw(
+                ArgumentError(
+                    "ChunkManifest: array $(repr(key)) references a different path " *
+                        "table than the manifest. Every array shares the manifest's " *
+                        "table by reference, so that repointing a file is one edit and " *
+                        "validate costs one request per file rather than per chunk. " *
+                        "Use ChunkManifest(; arrays, table), which rewrites the chunk " *
+                        "maps onto one table.",
+                )
+            )
         end
         return new(arrays, table, attrs, provenance, transport, readahead)
     end
@@ -385,9 +405,11 @@ struct ManifestSeries
 
     function ManifestSeries(members, dimname)
         ms = collect(ChunkManifest, members)
-        isempty(ms) && throw(ArgumentError(
-            "ManifestSeries: no manifests given; a series needs at least one member"
-        ))
+        isempty(ms) && throw(
+            ArgumentError(
+                "ManifestSeries: no manifests given; a series needs at least one member"
+            )
+        )
         nm = String(string(dimname))
         isempty(nm) && throw(ArgumentError("ManifestSeries: the dimension name is empty"))
         return new(ms, nm)
@@ -417,10 +439,10 @@ cells.
 """
 struct ZarrManifest <: ManifestFormat
     chunkcells::Int
-    compressor::Union{Nothing,String}
+    compressor::Union{Nothing, String}
 end
 
-function ZarrManifest(; chunkcells::Integer=65536, compressor="zstd")
+function ZarrManifest(; chunkcells::Integer = 65536, compressor = "zstd")
     chunkcells >= 1 || throw(ArgumentError("chunkcells must be at least 1, got $chunkcells"))
     return ZarrManifest(Int(chunkcells), compressor)
 end
@@ -439,7 +461,7 @@ struct KerchunkJSON <: ManifestFormat
     inlinethreshold::Int
 end
 
-KerchunkJSON(; inlinethreshold::Integer=0) = KerchunkJSON(Int(inlinethreshold))
+KerchunkJSON(; inlinethreshold::Integer = 0) = KerchunkJSON(Int(inlinethreshold))
 
 """
     KerchunkParquet(; recordsize=10000)
@@ -455,7 +477,7 @@ struct KerchunkParquet <: ManifestFormat
     recordsize::Int
 end
 
-function KerchunkParquet(; recordsize::Integer=10000)
+function KerchunkParquet(; recordsize::Integer = 10000)
     recordsize >= 1 || throw(ArgumentError("recordsize must be at least 1, got $recordsize"))
     return KerchunkParquet(Int(recordsize))
 end
@@ -467,7 +489,7 @@ function save end
 
 # The package a format's methods arrive with, for formats whose
 # implementation lives in an extension.
-const FORMAT_BACKEND = Dict{Symbol,String}(:KerchunkParquet => "Parquet2")
+const FORMAT_BACKEND = Dict{Symbol, String}(:KerchunkParquet => "Parquet2")
 
 # Reached only when no concrete method applies, which for an extension-gated
 # format means its triggering package is not loaded. A bare MethodError would
@@ -475,9 +497,11 @@ const FORMAT_BACKEND = Dict{Symbol,String}(:KerchunkParquet => "Parquet2")
 function _noformatmethod(fmt::ManifestFormat, verb::AbstractString)
     name = nameof(typeof(fmt))
     pkg = get(FORMAT_BACKEND, name, nothing)
-    pkg === nothing && throw(ArgumentError(
-        "$verb is not implemented for format $name"
-    ))
+    pkg === nothing && throw(
+        ArgumentError(
+            "$verb is not implemented for format $name"
+        )
+    )
     error("$pkg must be loaded to $verb a $name. Try `using $pkg`.")
 end
 
@@ -553,7 +577,7 @@ naming one and setting `keep` retains the copy for a later rescan.
 """
 struct DownloadAccess <: SourceAccess
     transport::AbstractTransport
-    cachedir::Union{Nothing,String}
+    cachedir::Union{Nothing, String}
     keep::Bool
 end
 
@@ -571,13 +595,13 @@ struct ROS3Access <: SourceAccess
     aws::Any
 end
 
-ROS3Access(; aws=nothing) = ROS3Access(aws)
+ROS3Access(; aws = nothing) = ROS3Access(aws)
 
 function DownloadAccess(;
-    transport::AbstractTransport=TransportContainers(),
-    cachedir=nothing,
-    keep::Bool=false,
-)
+        transport::AbstractTransport = TransportContainers(),
+        cachedir = nothing,
+        keep::Bool = false,
+    )
     return DownloadAccess(transport, cachedir === nothing ? nothing : String(cachedir), keep)
 end
 
@@ -601,7 +625,7 @@ struct GeoTIFFDriver <: AbstractDriver
     chunkbytes::Int
 end
 
-function GeoTIFFDriver(; chunkbytes::Integer=8 * 1024 * 1024)
+function GeoTIFFDriver(; chunkbytes::Integer = 8 * 1024 * 1024)
     chunkbytes >= 1 || throw(ArgumentError("chunkbytes must be at least 1, got $chunkbytes"))
     return GeoTIFFDriver(Int(chunkbytes))
 end

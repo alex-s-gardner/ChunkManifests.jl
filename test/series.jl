@@ -5,14 +5,14 @@ import Zarr
 # coordinate variables, each a real HDF5 dimension scale, which is where the
 # driver reads dimension names from.
 function _sr_write_slice(
-    path::AbstractString, hdata::AbstractMatrix{Int32}, xdata, tdata; hchunk=(2, 3)
-)
+        path::AbstractString, hdata::AbstractMatrix{Int32}, xdata, tdata; hchunk = (2, 3)
+    )
     h5open(path, "w") do f
-        x = create_dataset(f, "x", datatype(Int32), dataspace(xdata); chunk=(2,))
+        x = create_dataset(f, "x", datatype(Int32), dataspace(xdata); chunk = (2,))
         write(x, xdata)
-        t = create_dataset(f, "time", datatype(Int32), dataspace(tdata); chunk=(3,))
+        t = create_dataset(f, "time", datatype(Int32), dataspace(tdata); chunk = (3,))
         write(t, tdata)
-        d = create_dataset(f, "h", datatype(Int32), dataspace(hdata); chunk=hchunk)
+        d = create_dataset(f, "h", datatype(Int32), dataspace(hdata); chunk = hchunk)
         write(d, hdata)
         HDF5.API.h5ds_set_scale(x, "x")
         HDF5.API.h5ds_set_scale(t, "time")
@@ -65,7 +65,7 @@ end
         @test size(arraysof(cm)["x"]) == (4,)
         @test dimnamesof(arraysof(cm)["h"]) == ["x", "time"]
         @test provenanceof(cm) ==
-            Dict{String,Any}("driver" => "combine", "ninputs" => 2, "dim" => "time")
+            Dict{String, Any}("driver" => "combine", "ninputs" => 2, "dim" => "time")
 
         full = hcat(h1, h2)
         z = Zarr.zopen(cm)
@@ -97,10 +97,10 @@ end
         # :shape cannot see the difference — identical shape, chunks, dtype and
         # dimnames — which is exactly why :values exists.
         @test size(arraysof(ChunkManifests.combine(ser))["x"]) == (4,)
-        @test size(arraysof(ChunkManifests.combine(ser; check=:none))["x"]) == (4,)
+        @test size(arraysof(ChunkManifests.combine(ser; check = :none))["x"]) == (4,)
 
         err = try
-            ChunkManifests.combine(ser; check=:values)
+            ChunkManifests.combine(ser; check = :values)
             nothing
         catch e
             e
@@ -115,9 +115,9 @@ end
         # the extent of a variable that has x as a dimension.
         function _grid(uri, xlen)
             return ChunkManifest(;
-                arrays=Dict{String,ManifestArray}(
-                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames=["time"]),
-                    "x" => dummy_manifestarray((xlen,), (2,), uri; dimnames=["x"]),
+                arrays = Dict{String, ManifestArray}(
+                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames = ["time"]),
+                    "x" => dummy_manifestarray((xlen,), (2,), uri; dimnames = ["x"]),
                 ),
             )
         end
@@ -132,12 +132,12 @@ end
         @test occursin("has shape (6,), not (4,)", wide.msg)
 
         lenient = ChunkManifests.combine(
-            ManifestSeries([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time); check=:none
+            ManifestSeries([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time); check = :none
         )
         @test size(arraysof(lenient)["x"]) == (4,)
         @test size(arraysof(lenient)["h"]) == (8,)
 
-        @test_throws "check=:bogus is not one of" ChunkManifests.combine(ser; check=:bogus)
+        @test_throws "check=:bogus is not one of" ChunkManifests.combine(ser; check = :bogus)
     end
 
     @testset "an interior member must end on a chunk boundary" begin
@@ -177,7 +177,7 @@ end
 
         other = joinpath(dir, "other.h5")
         h5open(other, "w") do f
-            d = create_dataset(f, "z", datatype(Int32), dataspace((8,)); chunk=(4,))
+            d = create_dataset(f, "z", datatype(Int32), dataspace((8,)); chunk = (4,))
             write(d, Int32.(1:8))
         end
         keyset = try
@@ -191,8 +191,8 @@ end
 
         # A dimension named twice gives no single axis to concatenate along.
         twice = ChunkManifest(;
-            arrays=Dict{String,ManifestArray}(
-                "sq" => dummy_manifestarray((4, 4), (2, 2), "f.bin"; dimnames=["time", "time"]),
+            arrays = Dict{String, ManifestArray}(
+                "sq" => dummy_manifestarray((4, 4), (2, 2), "f.bin"; dimnames = ["time", "time"]),
             ),
         )
         @test_throws "names dimension \"time\" at positions [1, 2]" ChunkManifests.combine(
@@ -207,18 +207,18 @@ end
     @testset "group attributes" begin
         function member(uri, attrs)
             return ChunkManifest(;
-                arrays=Dict{String,ManifestArray}(
-                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames=["time"]),
+                arrays = Dict{String, ManifestArray}(
+                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames = ["time"]),
                 ),
                 attrs,
             )
         end
-        m1 = member("f1.bin", Dict{String,Any}("mission" => "M", "granule" => "A"))
-        m2 = member("f2.bin", Dict{String,Any}("mission" => "M", "granule" => "B"))
-        m3 = member("f3.bin", Dict{String,Any}("mission" => "M"))
+        m1 = member("f1.bin", Dict{String, Any}("mission" => "M", "granule" => "A"))
+        m2 = member("f2.bin", Dict{String, Any}("mission" => "M", "granule" => "B"))
+        m3 = member("f3.bin", Dict{String, Any}("mission" => "M"))
 
         @test attrsof(ChunkManifests.combine(ManifestSeries([m1, m3], :time))) ==
-            Dict{String,Any}("mission" => "M", "granule" => "A")
+            Dict{String, Any}("mission" => "M", "granule" => "A")
 
         err = try
             ChunkManifests.combine(ManifestSeries([m1, m2], :time))
@@ -231,9 +231,9 @@ end
         @test occursin("Pass attrs=", err.msg)
 
         override = ChunkManifests.combine(
-            ManifestSeries([m1, m2], :time); attrs=Dict("mission" => "M")
+            ManifestSeries([m1, m2], :time); attrs = Dict("mission" => "M")
         )
-        @test attrsof(override) == Dict{String,Any}("mission" => "M")
+        @test attrsof(override) == Dict{String, Any}("mission" => "M")
         @test size(arraysof(override)["h"]) == (8,)
     end
 

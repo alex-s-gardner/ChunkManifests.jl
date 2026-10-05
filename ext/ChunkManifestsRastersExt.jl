@@ -50,7 +50,7 @@ end
 
 # Array keys of `cm` lying directly under `group`, with their leaf names.
 function _leaves(cm::ChunkManifest, group::AbstractString)
-    out = Pair{String,String}[]
+    out = Pair{String, String}[]
     for key in sort!(collect(keys(arraysof(cm))))
         g, leaf = _splitpath(key)
         g == group && push!(out, key => String(leaf))
@@ -72,12 +72,16 @@ _describe(group::AbstractString) =
 
 function _nolayers(cm::ChunkManifest, group::AbstractString)
     groups = _groupnames(cm)
-    throw(ArgumentError(
-        "RasterStack: no array lies $(_describe(group)). The manifest holds " *
-        "$(sort!(collect(keys(arraysof(cm))))). " *
-        (isempty(groups) ? "It has no groups." :
-         "Name one of its groups to reach them: $(groups)"),
-    ))
+    throw(
+        ArgumentError(
+            "RasterStack: no array lies $(_describe(group)). The manifest holds " *
+                "$(sort!(collect(keys(arraysof(cm))))). " *
+                (
+                isempty(groups) ? "It has no groups." :
+                    "Name one of its groups to reach them: $(groups)"
+            ),
+        )
+    )
 end
 
 # Build one lazy Raster over `var`, the raw CommonDataModel variable, following
@@ -87,18 +91,18 @@ end
 # no chunk is read for the data; `_dims` does read the coordinate variables,
 # because a Sampled or Projected lookup is those coordinate values.
 function _raster(
-    var, name; crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
-)
+        var, name; crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
+    )
     scaled1, missingval1 = Rasters._raw_check(raw, scaled, missingval, verbose)
     metadata = Rasters._metadata(var)
     mvpair = Rasters._read_missingval_pair(var, metadata, missingval1)
-    mod = Rasters._mod(eltype(var), metadata, mvpair; scaled=scaled1, coerce)
+    mod = Rasters._mod(eltype(var), metadata, mvpair; scaled = scaled1, coerce)
     return Rasters.Raster(
         Rasters._maybe_modify(var, mod),
         Rasters._dims(var, crs, mappedcrs);
-        name=Symbol(name),
+        name = Symbol(name),
         metadata,
-        missingval=Rasters._outer_missingval(mod),
+        missingval = Rasters._outer_missingval(mod),
         crs, mappedcrs, kw...,
     )
 end
@@ -127,21 +131,23 @@ across every layer, so that is the cheaper route to several arrays of one
 manifest.
 """
 function Rasters.Raster(
-    cm::ChunkManifest, name;
-    crs=Rasters.nokw,
-    mappedcrs=Rasters.nokw,
-    missingval=Rasters.nokw,
-    scaled=Rasters.nokw,
-    coerce=convert,
-    raw::Bool=false,
-    verbose::Bool=true,
-    kw...,
-)
+        cm::ChunkManifest, name;
+        crs = Rasters.nokw,
+        mappedcrs = Rasters.nokw,
+        missingval = Rasters.nokw,
+        scaled = Rasters.nokw,
+        coerce = convert,
+        raw::Bool = false,
+        verbose::Bool = true,
+        kw...,
+    )
     key = String(string(name))
-    haskey(arraysof(cm), key) || throw(ArgumentError(
-        "Raster: the manifest has no array at $(repr(key)); it holds " *
-        "$(sort!(collect(keys(arraysof(cm)))))",
-    ))
+    haskey(arraysof(cm), key) || throw(
+        ArgumentError(
+            "Raster: the manifest has no array at $(repr(key)); it holds " *
+                "$(sort!(collect(keys(arraysof(cm)))))",
+        )
+    )
     group, leaf = _splitpath(key)
     ds = _groupof(ZarrDatasets.ZarrDataset(cm), group)
     return _raster(
@@ -161,10 +167,12 @@ guess at.
 """
 function Rasters.Raster(cm::ChunkManifest; kw...)
     ks = sort!(collect(keys(arraysof(cm))))
-    length(ks) == 1 || throw(ArgumentError(
-        "Raster: the manifest holds $(length(ks)) arrays, so which one to build a " *
-        "Raster from has to be named: $(ks). Use RasterStack to take them all",
-    ))
+    length(ks) == 1 || throw(
+        ArgumentError(
+            "Raster: the manifest holds $(length(ks)) arrays, so which one to build a " *
+                "Raster from has to be named: $(ks). Use RasterStack to take them all",
+        )
+    )
     return Rasters.Raster(cm, only(ks); kw...)
 end
 
@@ -183,18 +191,18 @@ Each layer is built as in [`Rasters.Raster`](@extref)`(cm, name)` and accepts
 the same keywords.
 """
 function Rasters.RasterStack(
-    cm::ChunkManifest;
-    group=nothing,
-    name=nothing,
-    crs=Rasters.nokw,
-    mappedcrs=Rasters.nokw,
-    missingval=Rasters.nokw,
-    scaled=Rasters.nokw,
-    coerce=convert,
-    raw::Bool=false,
-    verbose::Bool=true,
-    kw...,
-)
+        cm::ChunkManifest;
+        group = nothing,
+        name = nothing,
+        crs = Rasters.nokw,
+        mappedcrs = Rasters.nokw,
+        missingval = Rasters.nokw,
+        scaled = Rasters.nokw,
+        coerce = convert,
+        raw::Bool = false,
+        verbose::Bool = true,
+        kw...,
+    )
     g = group === nothing ? "" : String(string(group))
     leaves = _leaves(cm, g)
     isempty(leaves) && _nolayers(cm, g)
@@ -203,10 +211,12 @@ function Rasters.RasterStack(
         Symbol[Symbol(leaf) for (_, leaf) in leaves]
     else
         ns = Symbol[Symbol(string(n)) for n in name]
-        length(ns) == length(leaves) || throw(ArgumentError(
-            "RasterStack: name has $(length(ns)) entries but $(length(leaves)) arrays " *
-            "lie $(_describe(g))",
-        ))
+        length(ns) == length(leaves) || throw(
+            ArgumentError(
+                "RasterStack: name has $(length(ns)) entries but $(length(leaves)) arrays " *
+                    "lie $(_describe(g))",
+            )
+        )
         ns
     end
 
@@ -216,12 +226,12 @@ function Rasters.RasterStack(
             CDM.variable(ds, leaf), leaf;
             crs, mappedcrs, missingval, scaled, coerce, raw, verbose,
         )
-        for (_, leaf) in leaves
+            for (_, leaf) in leaves
     ]
 
     return Rasters.RasterStack(
         NamedTuple{Tuple(names)}(Tuple(layers));
-        metadata=Rasters._metadata(ds), kw...,
+        metadata = Rasters._metadata(ds), kw...,
     )
 end
 

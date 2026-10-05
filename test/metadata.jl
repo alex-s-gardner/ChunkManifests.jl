@@ -9,15 +9,15 @@ import Zarr
 @testset "Metadata" begin
 
     function mkva(
-        ::Type{T},
-        shape::NTuple{N,Int},
-        chunkshape::NTuple{N,Int};
-        fillvalue::Union{Nothing,T}=nothing,
-        compressor::Union{Nothing,Dict{String,Any}}=nothing,
-        filters::Vector{Dict{String,Any}}=Dict{String,Any}[],
-        attrs::Dict{String,Any}=Dict{String,Any}(),
-        dimnames::Vector{String}=["dim$i" for i in 1:N],
-    ) where {T,N}
+            ::Type{T},
+            shape::NTuple{N, Int},
+            chunkshape::NTuple{N, Int};
+            fillvalue::Union{Nothing, T} = nothing,
+            compressor::Union{Nothing, Dict{String, Any}} = nothing,
+            filters::Vector{Dict{String, Any}} = Dict{String, Any}[],
+            attrs::Dict{String, Any} = Dict{String, Any}(),
+            dimnames::Vector{String} = ["dim$i" for i in 1:N],
+        ) where {T, N}
         table = PathTable()
         push_uri!(table, "dummy.bin")
         manifest = AffineChunkMap(
@@ -38,10 +38,10 @@ import Zarr
         Float64,
         shape3,
         chunkshape3;
-        fillvalue=0.0,
-        compressor=Dict{String,Any}("id" => "zlib", "level" => 3),
-        attrs=Dict{String,Any}("units" => "m"),
-        dimnames=dimnames3,
+        fillvalue = 0.0,
+        compressor = Dict{String, Any}("id" => "zlib", "level" => 3),
+        attrs = Dict{String, Any}("units" => "m"),
+        dimnames = dimnames3,
     )
 
     @testset "zarray_json transposition guard" begin
@@ -104,30 +104,30 @@ import Zarr
         doc_empty = JSON.parse(String(ChunkManifests.zarray_json(va_no_filters)))
         @test doc_empty["filters"] === nothing
 
-        filters = Dict{String,Any}[
-            Dict{String,Any}("id" => "shuffle", "elementsize" => 8),
-            Dict{String,Any}("id" => "delta", "dtype" => "<f8"),
+        filters = Dict{String, Any}[
+            Dict{String, Any}("id" => "shuffle", "elementsize" => 8),
+            Dict{String, Any}("id" => "delta", "dtype" => "<f8"),
         ]
-        va_with_filters = mkva(Float64, (2, 2), (2, 2); filters=filters)
+        va_with_filters = mkva(Float64, (2, 2), (2, 2); filters = filters)
         doc_full = JSON.parse(String(ChunkManifests.zarray_json(va_with_filters)))
         @test doc_full["filters"] == filters
     end
 
     @testset "fill_value round trip" begin
-        va_float = mkva(Float64, (2, 2), (2, 2); fillvalue=-9999.5)
+        va_float = mkva(Float64, (2, 2), (2, 2); fillvalue = -9999.5)
         @test JSON.parse(String(ChunkManifests.zarray_json(va_float)))["fill_value"] == -9999.5
 
-        va_int = mkva(Int32, (2, 2), (2, 2); fillvalue=Int32(-999))
+        va_int = mkva(Int32, (2, 2), (2, 2); fillvalue = Int32(-999))
         @test JSON.parse(String(ChunkManifests.zarray_json(va_int)))["fill_value"] == -999
 
-        va_nothing = mkva(Float64, (2, 2), (2, 2); fillvalue=nothing)
+        va_nothing = mkva(Float64, (2, 2), (2, 2); fillvalue = nothing)
         @test JSON.parse(String(ChunkManifests.zarray_json(va_nothing)))["fill_value"] === nothing
     end
 
     @testset "end-to-end Zarr.zopen round trip" begin
         shape = (2, 3)
         chunkshape = (2, 3)
-        va = mkva(Float64, shape, chunkshape; compressor=Dict{String,Any}("id" => "zlib", "level" => 3))
+        va = mkva(Float64, shape, chunkshape; compressor = Dict{String, Any}("id" => "zlib", "level" => 3))
 
         data = reshape(collect(1.0:6.0), shape)
         compressor = Zarr.ZlibCompressor(3)
@@ -146,24 +146,24 @@ import Zarr
         # `|S<n>` is the numpy and Zarr v2 spelling, and what zarr-python
         # writes. Zarr.jl parses `|S<n>` and `<S<n>` identically, so the
         # emitted form is the spec one.
-        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{1,0}) == "|S1"
-        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{5,0}) == "|S5"
-        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{10,1}) == "|S10"
+        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{1, 0}) == "|S1"
+        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{5, 0}) == "|S5"
+        @test ChunkManifests.zarr_dtype_string(HDF5.FixedString{10, 1}) == "|S10"
 
         # The types a saved manifest reads back as have to emit the same
         # string, or a load-then-save cycle would change the dtype.
         # Zarr.typestr is no inverse here: it encodes ASCIIChar as "<V1",
         # opaque bytes, which would lose the string type entirely.
         @test Zarr.typestr("|S1") === Zarr.ASCIIChar
-        @test Zarr.typestr("|S5") === Zarr.MaxLengthString{5,UInt8}
+        @test Zarr.typestr("|S5") === Zarr.MaxLengthString{5, UInt8}
         @test Zarr.typestr(Zarr.ASCIIChar) == "<V1"
         @test ChunkManifests.zarr_dtype_string(Zarr.ASCIIChar) == "|S1"
-        @test ChunkManifests.zarr_dtype_string(Zarr.MaxLengthString{5,UInt8}) == "|S5"
+        @test ChunkManifests.zarr_dtype_string(Zarr.MaxLengthString{5, UInt8}) == "|S5"
 
         # Variable-length strings and compound types stay refused.
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(
-            NamedTuple{(:a,),Tuple{UInt8}}
+            NamedTuple{(:a,), Tuple{UInt8}}
         )
     end
 
@@ -173,9 +173,9 @@ import Zarr
         m = ExplicitChunkMap(
             table, fill(ChunkManifests.INLINE_INDEX, ()), zeros(UInt64, ()),
             fill(UInt64(1), ());
-            inline=Dict(CartesianIndex() => UInt8[0x41]),
+            inline = Dict(CartesianIndex() => UInt8[0x41]),
         )
-        va = ManifestArray{HDF5.FixedString{1,0}}(m, (), (); dimnames=String[])
+        va = ManifestArray{HDF5.FixedString{1, 0}}(m, (), (); dimnames = String[])
         doc = JSON.parse(String(ChunkManifests.zarray_json(va)))
         # JSON writes an untyped empty vector as an object, so these have to be
         # collected concretely for a reader that checks the spec.
@@ -186,7 +186,7 @@ import Zarr
         # The inline byte survives the whole round trip, which is what says
         # `|S1` decoding as ASCIIChar is byte-compatible rather than merely
         # parseable.
-        store = ChunkManifest(; arrays=Dict{String,ManifestArray}("s" => va))
+        store = ChunkManifest(; arrays = Dict{String, ManifestArray}("s" => va))
         z = Zarr.zopen(store)["s"]
         @test eltype(z) === Zarr.ASCIIChar
         @test UInt8(z[]) == 0x41
@@ -199,12 +199,12 @@ import Zarr
         m = ExplicitChunkMap(
             table, fill(ChunkManifests.INLINE_INDEX, (1,)), zeros(UInt64, (1,)),
             fill(UInt64(5), (1,));
-            inline=Dict(CartesianIndex(1) => bytes),
+            inline = Dict(CartesianIndex(1) => bytes),
         )
-        va = ManifestArray{HDF5.FixedString{5,0}}(m, (1,), (1,); dimnames=["s"])
-        store = ChunkManifest(; arrays=Dict{String,ManifestArray}("s" => va))
+        va = ManifestArray{HDF5.FixedString{5, 0}}(m, (1,), (1,); dimnames = ["s"])
+        store = ChunkManifest(; arrays = Dict{String, ManifestArray}("s" => va))
         z = Zarr.zopen(store)["s"]
-        @test eltype(z) === Zarr.MaxLengthString{5,UInt8}
+        @test eltype(z) === Zarr.MaxLengthString{5, UInt8}
         @test String(z[1]) == "abcde"
     end
 

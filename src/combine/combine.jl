@@ -15,10 +15,10 @@ _manifestndims(::AbstractChunkMap{N}) where {N} = N
 function _materialize(m::ExplicitChunkMap{N}, remap::Vector{UInt32}) where {N}
     ax = chunkgridaxes(m)
     dims = map(length, ax)
-    index = Array{UInt32,N}(undef, dims)
-    offset = Array{UInt64,N}(undef, dims)
-    nbytes = Array{UInt64,N}(undef, dims)
-    inline = Dict{CartesianIndex{N},Vector{UInt8}}()
+    index = Array{UInt32, N}(undef, dims)
+    offset = Array{UInt64, N}(undef, dims)
+    nbytes = Array{UInt64, N}(undef, dims)
+    inline = Dict{CartesianIndex{N}, Vector{UInt8}}()
     for (Iout, Isrc) in zip(CartesianIndices(index), CartesianIndices(ax))
         idx = m.index[Isrc]
         index[Iout] = _remapindex(idx, remap)
@@ -36,9 +36,9 @@ end
 function _materialize(m::AffineChunkMap{N}, remap::Vector{UInt32}) where {N}
     ax = chunkgridaxes(m)
     dims = map(length, ax)
-    index = Array{UInt32,N}(undef, dims)
-    offset = Array{UInt64,N}(undef, dims)
-    nbytes = Array{UInt64,N}(undef, dims)
+    index = Array{UInt32, N}(undef, dims)
+    offset = Array{UInt64, N}(undef, dims)
+    nbytes = Array{UInt64, N}(undef, dims)
     tableidx = remap[m.fileindex]
     for (Iout, Isrc) in zip(CartesianIndices(index), CartesianIndices(ax))
         _, off, nb = chunklocation(m, Isrc)
@@ -46,14 +46,14 @@ function _materialize(m::AffineChunkMap{N}, remap::Vector{UInt32}) where {N}
         offset[Iout] = off
         nbytes[Iout] = nb
     end
-    return index, offset, nbytes, Dict{CartesianIndex{N},Vector{UInt8}}()
+    return index, offset, nbytes, Dict{CartesianIndex{N}, Vector{UInt8}}()
 end
 
 # An empty collection carries no element type, so Tuple{} and
 # AbstractVector{Union{}} are subtypes of every concat signature at once. This
 # method is their common subtype: it resolves that ambiguity and reports the
 # empty input the way each typed method reports its own.
-concat(::Union{Tuple{},AbstractVector{Union{}}}; kwargs...) =
+concat(::Union{Tuple{}, AbstractVector{Union{}}}; kwargs...) =
     throw(ArgumentError("concat: no inputs given"))
 
 """
@@ -69,23 +69,27 @@ inline chunk bytes, pass through unchanged. A single input is returned
 unchanged; an empty collection throws.
 """
 function concat(
-    ms::Union{AbstractVector{<:AbstractChunkMap},Tuple{Vararg{AbstractChunkMap}}};
-    dims::Integer,
-    table::PathTable=PathTable(),
-)
+        ms::Union{AbstractVector{<:AbstractChunkMap}, Tuple{Vararg{AbstractChunkMap}}};
+        dims::Integer,
+        table::PathTable = PathTable(),
+    )
     isempty(ms) && throw(ArgumentError("concat: no manifests given"))
     length(ms) == 1 && return first(ms)
 
     N = _manifestndims(first(ms))
     for (i, m) in enumerate(ms)
         i == 1 && continue
-        _manifestndims(m) == N || throw(ArgumentError(
-            "concat: manifest $i has $(_manifestndims(m)) dimensions, expected $N (from manifest 1)"
-        ))
+        _manifestndims(m) == N || throw(
+            ArgumentError(
+                "concat: manifest $i has $(_manifestndims(m)) dimensions, expected $N (from manifest 1)"
+            )
+        )
     end
-    1 <= dims <= N || throw(ArgumentError(
-        "concat: dims=$dims is not a valid dimension for $N-dimensional manifests"
-    ))
+    1 <= dims <= N || throw(
+        ArgumentError(
+            "concat: dims=$dims is not a valid dimension for $N-dimensional manifests"
+        )
+    )
 
     refax = chunkgridaxes(first(ms))
     for (i, m) in enumerate(ms)
@@ -93,18 +97,20 @@ function concat(
         ax = chunkgridaxes(m)
         for d in eachindex(ax)
             d == dims && continue
-            length(ax[d]) == length(refax[d]) || throw(ArgumentError(
-                "concat: manifest $i has chunk grid length $(length(ax[d])) on dimension $d, " *
-                "expected $(length(refax[d])) to match manifest 1",
-            ))
+            length(ax[d]) == length(refax[d]) || throw(
+                ArgumentError(
+                    "concat: manifest $i has chunk grid length $(length(ax[d])) on dimension $d, " *
+                        "expected $(length(refax[d])) to match manifest 1",
+                )
+            )
         end
     end
 
     merged = table
-    indices = Vector{Array{UInt32,N}}(undef, length(ms))
-    offsets = Vector{Array{UInt64,N}}(undef, length(ms))
-    nbyteses = Vector{Array{UInt64,N}}(undef, length(ms))
-    mergedinline = Dict{CartesianIndex{N},Vector{UInt8}}()
+    indices = Vector{Array{UInt32, N}}(undef, length(ms))
+    offsets = Vector{Array{UInt64, N}}(undef, length(ms))
+    nbyteses = Vector{Array{UInt64, N}}(undef, length(ms))
+    mergedinline = Dict{CartesianIndex{N}, Vector{UInt8}}()
 
     runningshift = 0
     for (i, m) in enumerate(ms)
@@ -123,7 +129,7 @@ function concat(
     mergedindex = cat(indices...; dims)
     mergedoffset = cat(offsets...; dims)
     mergednbytes = cat(nbyteses...; dims)
-    return ExplicitChunkMap(merged, mergedindex, mergedoffset, mergednbytes; inline=mergedinline)
+    return ExplicitChunkMap(merged, mergedindex, mergedoffset, mergednbytes; inline = mergedinline)
 end
 
 # Merges attrs's entries into merged, throwing if a key already present
@@ -131,13 +137,15 @@ end
 # dropping conflicting attrs on concat is the reason this errors by default
 # instead of picking one side. `context` is the whole prefix of the message,
 # so each caller names itself and the input it was reading.
-function _mergeattrs!(merged::Dict{String,Any}, attrs::Dict{String,Any}, context::AbstractString)
+function _mergeattrs!(merged::Dict{String, Any}, attrs::Dict{String, Any}, context::AbstractString)
     for (k, v) in attrs
         if haskey(merged, k)
-            merged[k] == v || throw(ArgumentError(
-                "$context attribute \"$k\" = $(repr(v)) conflicts with " *
-                "existing value $(repr(merged[k]))",
-            ))
+            merged[k] == v || throw(
+                ArgumentError(
+                    "$context attribute \"$k\" = $(repr(v)) conflicts with " *
+                        "existing value $(repr(merged[k]))",
+                )
+            )
         else
             merged[k] = v
         end
@@ -151,17 +159,19 @@ end
 # `attrs` keyword would set, so the message tells a caller holding a set of
 # granules with differing attributes exactly how to proceed.
 function _groupattrs(n::Integer, attrsof_::Function, context::Function, attrs, subject)
-    attrs === nothing || return Dict{String,Any}(attrs)
-    merged = Dict{String,Any}()
+    attrs === nothing || return Dict{String, Any}(attrs)
+    merged = Dict{String, Any}()
     for i in 1:n
         try
             _mergeattrs!(merged, attrsof_(i), context(i))
         catch e
             e isa ArgumentError || rethrow()
-            throw(ArgumentError(
-                "$(e.msg). Pass attrs= to set the $subject manifest's group attributes " *
-                "yourself instead of merging the inputs'",
-            ))
+            throw(
+                ArgumentError(
+                    "$(e.msg). Pass attrs= to set the $subject manifest's group attributes " *
+                        "yourself instead of merging the inputs'",
+                )
+            )
         end
     end
     return merged
@@ -183,10 +193,10 @@ unable to line up with the next input. A single input is returned unchanged;
 an empty collection throws.
 """
 function concat(
-    xs::Union{AbstractVector{<:ManifestArray},Tuple{Vararg{ManifestArray}}};
-    dims::Integer,
-    table::PathTable=PathTable(),
-)
+        xs::Union{AbstractVector{<:ManifestArray}, Tuple{Vararg{ManifestArray}}};
+        dims::Integer,
+        table::PathTable = PathTable(),
+    )
     isempty(xs) && throw(ArgumentError("concat: no arrays given"))
     length(xs) == 1 && return first(xs)
 
@@ -194,43 +204,61 @@ function concat(
     N = ndims(ref)
     for (i, a) in enumerate(xs)
         i == 1 && continue
-        ndims(a) == N || throw(ArgumentError(
-            "concat: array $i has $(ndims(a)) dimensions, expected $N (from array 1)"
-        ))
+        ndims(a) == N || throw(
+            ArgumentError(
+                "concat: array $i has $(ndims(a)) dimensions, expected $N (from array 1)"
+            )
+        )
     end
-    1 <= dims <= N || throw(ArgumentError(
-        "concat: dims=$dims is not a valid dimension for $N-dimensional arrays"
-    ))
+    1 <= dims <= N || throw(
+        ArgumentError(
+            "concat: dims=$dims is not a valid dimension for $N-dimensional arrays"
+        )
+    )
 
     for (i, a) in enumerate(xs)
         i == 1 && continue
-        eltype(a) == eltype(ref) || throw(ArgumentError(
-            "concat: array $i has element type $(eltype(a)), expected $(eltype(ref)) (from array 1)"
-        ))
-        chunkshapeof(a) == chunkshapeof(ref) || throw(ArgumentError(
-            "concat: array $i has chunkshape $(chunkshapeof(a)), expected $(chunkshapeof(ref)) (from array 1)"
-        ))
-        compressorof(a) == compressorof(ref) || throw(ArgumentError(
-            "concat: array $i has compressor $(compressorof(a)), expected $(compressorof(ref)) (from array 1)"
-        ))
-        filtersof(a) == filtersof(ref) || throw(ArgumentError(
-            "concat: array $i has filters $(filtersof(a)), expected $(filtersof(ref)) (from array 1)"
-        ))
-        fillvalueof(a) == fillvalueof(ref) || throw(ArgumentError(
-            "concat: array $i has fill value $(repr(fillvalueof(a))), expected $(repr(fillvalueof(ref))) (from array 1)"
-        ))
-        dimnamesof(a) == dimnamesof(ref) || throw(ArgumentError(
-            "concat: array $i has dimnames $(dimnamesof(a)), expected $(dimnamesof(ref)) (from array 1)"
-        ))
+        eltype(a) == eltype(ref) || throw(
+            ArgumentError(
+                "concat: array $i has element type $(eltype(a)), expected $(eltype(ref)) (from array 1)"
+            )
+        )
+        chunkshapeof(a) == chunkshapeof(ref) || throw(
+            ArgumentError(
+                "concat: array $i has chunkshape $(chunkshapeof(a)), expected $(chunkshapeof(ref)) (from array 1)"
+            )
+        )
+        compressorof(a) == compressorof(ref) || throw(
+            ArgumentError(
+                "concat: array $i has compressor $(compressorof(a)), expected $(compressorof(ref)) (from array 1)"
+            )
+        )
+        filtersof(a) == filtersof(ref) || throw(
+            ArgumentError(
+                "concat: array $i has filters $(filtersof(a)), expected $(filtersof(ref)) (from array 1)"
+            )
+        )
+        fillvalueof(a) == fillvalueof(ref) || throw(
+            ArgumentError(
+                "concat: array $i has fill value $(repr(fillvalueof(a))), expected $(repr(fillvalueof(ref))) (from array 1)"
+            )
+        )
+        dimnamesof(a) == dimnamesof(ref) || throw(
+            ArgumentError(
+                "concat: array $i has dimnames $(dimnamesof(a)), expected $(dimnamesof(ref)) (from array 1)"
+            )
+        )
 
         shape = size(a)
         refshape = size(ref)
         for d in eachindex(shape)
             d == dims && continue
-            shape[d] == refshape[d] || throw(ArgumentError(
-                "concat: array $i has shape $shape differing from $refshape on dimension $d, " *
-                "which is not the concatenation dimension $dims",
-            ))
+            shape[d] == refshape[d] || throw(
+                ArgumentError(
+                    "concat: array $i has shape $shape differing from $refshape on dimension $d, " *
+                        "which is not the concatenation dimension $dims",
+                )
+            )
         end
     end
 
@@ -239,14 +267,16 @@ function concat(
         extent = size(a)[dims]
         chunklen = chunkshapeof(a)[dims]
         r = extent % chunklen
-        r == 0 || throw(ArgumentError(
-            "concat: array $i has extent $extent along dimension $dims, not a multiple of its " *
-            "chunk length $chunklen there (remainder $r); only the final input may end partway " *
-            "through a chunk",
-        ))
+        r == 0 || throw(
+            ArgumentError(
+                "concat: array $i has extent $extent along dimension $dims, not a multiple of its " *
+                    "chunk length $chunklen there (remainder $r); only the final input may end partway " *
+                    "through a chunk",
+            )
+        )
     end
 
-    mergedattrs = Dict{String,Any}()
+    mergedattrs = Dict{String, Any}()
     for (i, a) in enumerate(xs)
         _mergeattrs!(mergedattrs, attrsof(a), "concat: array $i's")
     end
@@ -259,11 +289,11 @@ function concat(
         mergedmanifest,
         mergedshape,
         chunkshapeof(ref);
-        fillvalue=fillvalueof(ref),
-        compressor=compressorof(ref),
-        filters=filtersof(ref),
-        attrs=mergedattrs,
-        dimnames=dimnamesof(ref),
+        fillvalue = fillvalueof(ref),
+        compressor = compressorof(ref),
+        filters = filtersof(ref),
+        attrs = mergedattrs,
+        dimnames = dimnamesof(ref),
     )
 end
 
@@ -294,9 +324,9 @@ variable and dimension 1 of its own coordinate. Use
 where the dimension sits, and this when they agree.
 """
 function concat(
-    gs::Union{AbstractVector{<:ChunkManifest},Tuple{Vararg{ChunkManifest}}};
-    dims::Integer,
-)
+        gs::Union{AbstractVector{<:ChunkManifest}, Tuple{Vararg{ChunkManifest}}};
+        dims::Integer,
+    )
     isempty(gs) && throw(ArgumentError("concat: no groups given"))
     length(gs) == 1 && return first(gs)
 
@@ -304,39 +334,41 @@ function concat(
     for (i, g) in enumerate(gs)
         i == 1 && continue
         ks = Set(keys(arraysof(g)))
-        ks == refkeys || throw(ArgumentError(
-            "concat: group $i has array keys $(sort(collect(ks))), expected " *
-            "$(sort(collect(refkeys))) (from group 1); differs by " *
-            "$(sort(collect(symdiff(ks, refkeys))))",
-        ))
+        ks == refkeys || throw(
+            ArgumentError(
+                "concat: group $i has array keys $(sort(collect(ks))), expected " *
+                    "$(sort(collect(refkeys))) (from group 1); differs by " *
+                    "$(sort(collect(symdiff(ks, refkeys))))",
+            )
+        )
     end
 
     # One table for the whole result: every array of a ChunkManifest shares its
     # path table, so a file that several arrays reference is one entry and one
     # edit rather than one per array.
     mergedtable = PathTable()
-    mergedarrays = Dict{String,ManifestArray}()
+    mergedarrays = Dict{String, ManifestArray}()
     for k in sort(collect(refkeys))
         try
-            mergedarrays[k] = concat([arraysof(g)[k] for g in gs]; dims, table=mergedtable)
+            mergedarrays[k] = concat([arraysof(g)[k] for g in gs]; dims, table = mergedtable)
         catch e
             e isa ArgumentError || rethrow()
             throw(ArgumentError("concat: array \"$k\": $(e.msg)"))
         end
     end
 
-    mergedattrs = Dict{String,Any}()
+    mergedattrs = Dict{String, Any}()
     for (i, g) in enumerate(gs)
         _mergeattrs!(mergedattrs, attrsof(g), "concat: group $i's")
     end
 
-    provenance = Dict{String,Any}("driver" => "concat", "ninputs" => length(gs))
+    provenance = Dict{String, Any}("driver" => "concat", "ninputs" => length(gs))
     # The result gets a fresh scheme-resolving transport rather than any one
     # input's: concatenating a local scan with a remote one produces a manifest
     # whose files span both, and carrying over a single input's transport would
     # leave the other's chunks unreadable. A caller needing specific
     # credentials rebuilds with ChunkManifest(result; transport=...).
     return ChunkManifest(;
-        arrays=mergedarrays, table=mergedtable, attrs=mergedattrs, provenance,
+        arrays = mergedarrays, table = mergedtable, attrs = mergedattrs, provenance,
     )
 end

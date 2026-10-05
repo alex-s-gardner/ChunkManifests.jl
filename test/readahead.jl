@@ -29,7 +29,7 @@ end
 
 # One file of `nchunks` byte-adjacent `Float64` chunks, each one element,
 # plus the manifest and ManifestArray describing it.
-function _contig_va(dir::AbstractString, nchunks::Int; fname="contig.bin")
+function _contig_va(dir::AbstractString, nchunks::Int; fname = "contig.bin")
     chunkbytes = sizeof(Float64)
     path = joinpath(dir, fname)
     vals = collect(Float64, 1:nchunks)
@@ -42,7 +42,7 @@ function _contig_va(dir::AbstractString, nchunks::Int; fname="contig.bin")
     offset = UInt64[(k - 1) * chunkbytes for k in 1:nchunks]
     nbytes = fill(UInt64(chunkbytes), gridsize)
     manifest = ExplicitChunkMap(table, index, offset, nbytes)
-    va = ManifestArray{Float64}(manifest, (nchunks,), (1,); dimnames=["x"])
+    va = ManifestArray{Float64}(manifest, (nchunks,), (1,); dimnames = ["x"])
     return va, path, vals
 end
 
@@ -55,8 +55,8 @@ end
 
             counting = ReadaheadCountingTransport()
             mstore = ChunkManifest(;
-                arrays=Dict{String,ManifestArray}("" => va),
-                transport=counting,
+                arrays = Dict{String, ManifestArray}("" => va),
+                transport = counting,
             )
             za = Zarr.zopen(mstore)
 
@@ -87,9 +87,9 @@ end
 
             counting = ReadaheadCountingTransport()
             mstore = ChunkManifest(;
-                arrays=Dict{String,ManifestArray}("" => va),
-                transport=counting,
-                readahead=ReadaheadCache(; maxbytes=0),
+                arrays = Dict{String, ManifestArray}("" => va),
+                transport = counting,
+                readahead = ReadaheadCache(; maxbytes = 0),
             )
             za = Zarr.zopen(mstore)
 
@@ -104,13 +104,13 @@ end
         gridsize = cld.(shape, chunkshape)
         dimnames = ["x", "y", "z"]
         data = reshape(collect(Float64, 1:prod(shape)), shape)
-        compressor = Dict{String,Any}("id" => "zlib", "level" => 3)
+        compressor = Dict{String, Any}("id" => "zlib", "level" => 3)
         fillvalue = -9999.0
 
         mktempdir() do dir
             za_ref = Zarr.zcreate(
                 Float64, Zarr.DirectoryStore(dir), shape...;
-                chunks=chunkshape, compressor=Zarr.ZlibCompressor(3), fill_value=fillvalue,
+                chunks = chunkshape, compressor = Zarr.ZlibCompressor(3), fill_value = fillvalue,
             )
             za_ref[:, :, :] = data
 
@@ -127,10 +127,10 @@ end
             va = ManifestArray{Float64}(
                 manifest, shape, chunkshape; fillvalue, compressor, dimnames
             )
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va))
 
-            za_cached = Zarr.zopen(ChunkManifest(group; readahead=ReadaheadCache()))
-            za_uncached = Zarr.zopen(ChunkManifest(group; readahead=ReadaheadCache(; maxbytes=0)))
+            za_cached = Zarr.zopen(ChunkManifest(group; readahead = ReadaheadCache()))
+            za_uncached = Zarr.zopen(ChunkManifest(group; readahead = ReadaheadCache(; maxbytes = 0)))
 
             @test za_cached[:, :, :] == za_uncached[:, :, :]
             @test sum(za_cached) == sum(za_uncached)
@@ -154,8 +154,8 @@ end
             index = fill(idx, gridsize)
             offset = UInt64[0, sizes[1], sizes[1] + sizes[2]]
             manifest = ExplicitChunkMap(table, index, offset, sizes)
-            va = ManifestArray{UInt8}(manifest, (3,), (1,); dimnames=["x"])
-            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
+            va = ManifestArray{UInt8}(manifest, (3,), (1,); dimnames = ["x"])
+            mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va))
 
             for I in CartesianIndices(gridsize)
                 uri, off, n = chunklocation(manifest, I)
@@ -183,11 +183,11 @@ end
             offset = UInt64[(mod(k - 1, 6)) * chunkbytes for k in 1:12]
             nbytes = fill(UInt64(chunkbytes), gridsize)
             manifest = ExplicitChunkMap(table, index, offset, nbytes)
-            va = ManifestArray{Float64}(manifest, (12,), (1,); dimnames=["x"])
+            va = ManifestArray{Float64}(manifest, (12,), (1,); dimnames = ["x"])
 
             counting = ReadaheadCountingTransport()
             mstore = ChunkManifest(;
-                arrays=Dict{String,ManifestArray}("" => va), transport=counting
+                arrays = Dict{String, ManifestArray}("" => va), transport = counting
             )
             za = Zarr.zopen(mstore)
 
@@ -216,11 +216,11 @@ end
 
             fillvalue = -1.0
             manifest2 = ExplicitChunkMap(
-                table, index, offset, nbytes; inline=Dict(CartesianIndex(4) => inline_bytes)
+                table, index, offset, nbytes; inline = Dict(CartesianIndex(4) => inline_bytes)
             )
-            va2 = ManifestArray{Float64}(manifest2, (nchunks,), (1,); dimnames=["x"], fillvalue=fillvalue)
+            va2 = ManifestArray{Float64}(manifest2, (nchunks,), (1,); dimnames = ["x"], fillvalue = fillvalue)
 
-            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va2))
+            mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va2))
             za = Zarr.zopen(mstore)
 
             expected = copy(vals)
@@ -233,9 +233,9 @@ end
         mktempdir() do dir
             nchunks = 20
             va, _, vals = _contig_va(dir, nchunks)
-            cache = ReadaheadCache(; maxbytes=3 * sizeof(Float64), chunks=32)
+            cache = ReadaheadCache(; maxbytes = 3 * sizeof(Float64), chunks = 32)
             mstore = ChunkManifest(;
-                arrays=Dict{String,ManifestArray}("" => va), readahead=cache
+                arrays = Dict{String, ManifestArray}("" => va), readahead = cache
             )
             za = Zarr.zopen(mstore)
 
@@ -248,10 +248,10 @@ end
         mktempdir() do dir
             nchunks = 16
             va, _, vals = _contig_va(dir, nchunks)
-            mstore = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
+            mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va))
             za = Zarr.zopen(mstore)
 
-            results = asyncmap(1:nchunks; ntasks=8) do k
+            results = asyncmap(1:nchunks; ntasks = 8) do k
                 za[k]
             end
             @test collect(Float64, results) == vals
@@ -299,8 +299,8 @@ end
             function counts(; readahead, wrapcache)
                 counting = ReadaheadCountingTransport()
                 store = ChunkManifest(;
-                    arrays=Dict{String,ManifestArray}("" => va),
-                    transport=counting, readahead,
+                    arrays = Dict{String, ManifestArray}("" => va),
+                    transport = counting, readahead,
                 )
                 za = Zarr.zopen(store)
                 arr = wrapcache ? Zarr.DiskArrays.cache(za) : za
@@ -313,13 +313,13 @@ end
                 counting.count[] = 0
                 @test arr[3:4] == vals[3:4]
                 window = counting.count[]
-                return (; first, repeat, window, chunks=size(Zarr.DiskArrays.eachchunk(arr)))
+                return (; first, repeat, window, chunks = size(Zarr.DiskArrays.eachchunk(arr)))
             end
 
-            off = counts(; readahead=ReadaheadCache(; maxbytes=0), wrapcache=false)
-            ra = counts(; readahead=ReadaheadCache(), wrapcache=false)
-            dac = counts(; readahead=ReadaheadCache(; maxbytes=0), wrapcache=true)
-            both = counts(; readahead=ReadaheadCache(), wrapcache=true)
+            off = counts(; readahead = ReadaheadCache(; maxbytes = 0), wrapcache = false)
+            ra = counts(; readahead = ReadaheadCache(), wrapcache = false)
+            dac = counts(; readahead = ReadaheadCache(; maxbytes = 0), wrapcache = true)
+            both = counts(; readahead = ReadaheadCache(), wrapcache = true)
 
             # Neither cache: one request per chunk, every time.
             @test off.first == nchunks
@@ -343,9 +343,13 @@ end
             # keeps asking for chunk-aligned blocks either way.
             @test off.chunks == ra.chunks == dac.chunks == both.chunks == (nchunks,)
             @test Zarr.DiskArrays.haschunks(
-                Zarr.DiskArrays.cache(Zarr.zopen(ChunkManifest(;
-                    arrays=Dict{String,ManifestArray}("" => va),
-                )))
+                Zarr.DiskArrays.cache(
+                    Zarr.zopen(
+                        ChunkManifest(;
+                            arrays = Dict{String, ManifestArray}("" => va),
+                        )
+                    )
+                )
             ) isa Zarr.DiskArrays.Chunked
         end
     end

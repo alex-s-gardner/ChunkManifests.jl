@@ -29,8 +29,8 @@ struct CodecMapping
     convert::Function
 end
 
-const CODEC_REGISTRY = Dict{Tuple{DataType,Int},CodecMapping}()
-const CODEC_REJECTIONS = Dict{Tuple{DataType,Int},String}()
+const CODEC_REGISTRY = Dict{Tuple{DataType, Int}, CodecMapping}()
+const CODEC_REJECTIONS = Dict{Tuple{DataType, Int}, String}()
 
 """
     register_codec!(D::Type{<:AbstractDriver}, filter_id, role::CodecRole, convert)
@@ -100,22 +100,26 @@ so the message names the file and dataset without the caller re-adding them.
 """
 function build_codecs(D::Type{<:AbstractDriver}, pipeline, itemsize; context::AbstractString)
     compressor = nothing
-    filters = Dict{String,Any}[]
+    filters = Dict{String, Any}[]
     for (id, cdvalues) in pipeline
         mapping = lookup_codec(D, id)
         if mapping === nothing
             reason = rejection_reason(D, id)
             reason === nothing && (reason = "no Zarr v2 codec is registered for this filter")
-            throw(ArgumentError(
-                "$context: cannot represent filter id $id in Zarr v2 ($reason)"
-            ))
+            throw(
+                ArgumentError(
+                    "$context: cannot represent filter id $id in Zarr v2 ($reason)"
+                )
+            )
         end
         config = mapping.convert(cdvalues, itemsize)
         if mapping.role == COMPRESSOR
-            compressor === nothing || throw(ArgumentError(
-                "$context: filter pipeline has more than one compressing filter; " *
-                "Zarr v2 supports only one \"compressor\""
-            ))
+            compressor === nothing || throw(
+                ArgumentError(
+                    "$context: filter pipeline has more than one compressing filter; " *
+                        "Zarr v2 supports only one \"compressor\""
+                )
+            )
             compressor = config
         else
             push!(filters, config)
@@ -124,7 +128,7 @@ function build_codecs(D::Type{<:AbstractDriver}, pipeline, itemsize; context::Ab
     return compressor, filters
 end
 
-const _BYTE_FILTER_SUPPORT = Ref{Union{Nothing,Bool}}(nothing)
+const _BYTE_FILTER_SUPPORT = Ref{Union{Nothing, Bool}}(nothing)
 
 """
     zarr_decodes_byte_filters() -> Bool
@@ -144,8 +148,8 @@ function zarr_decodes_byte_filters()
         data = Int32[1, 2, 3, 4]
         z = Zarr.zcreate(
             Int32, Zarr.DictStore(), length(data);
-            chunks=(length(data),), compressor=Zarr.NoCompressor(),
-            filters=(Zarr.ShuffleFilter(sizeof(Int32)),),
+            chunks = (length(data),), compressor = Zarr.NoCompressor(),
+            filters = (Zarr.ShuffleFilter(sizeof(Int32)),),
         )
         z[:] = data
         z[:] == data
@@ -168,19 +172,21 @@ throws on read, since the limitation belongs to the decoder and not to the
 source file.
 """
 function check_last_filter_multibyte(
-    filters::AbstractVector{<:AbstractDict}, ::Type{T}, context::AbstractString
-) where {T}
+        filters::AbstractVector{<:AbstractDict}, ::Type{T}, context::AbstractString
+    ) where {T}
     isempty(filters) && return nothing
     sizeof(T) == 1 && return nothing
     id = filters[end]["id"]
     if (id == "shuffle" || id == "fletcher32") && !zarr_decodes_byte_filters()
-        throw(ArgumentError(
-            "$context: last filter in the Zarr pipeline is \"$id\" and the element " *
-            "type $T is $(sizeof(T)) bytes wide; the loaded Zarr.jl cannot decode a " *
-            "trailing bytes-to-bytes filter back into a multi-byte element type " *
-            "(see https://github.com/JuliaIO/Zarr.jl/pull/354). This is a decoder " *
-            "limitation, not a problem with the source file."
-        ))
+        throw(
+            ArgumentError(
+                "$context: last filter in the Zarr pipeline is \"$id\" and the element " *
+                    "type $T is $(sizeof(T)) bytes wide; the loaded Zarr.jl cannot decode a " *
+                    "trailing bytes-to-bytes filter back into a multi-byte element type " *
+                    "(see https://github.com/JuliaIO/Zarr.jl/pull/354). This is a decoder " *
+                    "limitation, not a problem with the source file."
+            )
+        )
     end
     return nothing
 end

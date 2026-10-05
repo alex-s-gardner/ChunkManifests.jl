@@ -32,20 +32,22 @@ end
 # ".zattrs", never nested under a path). These keys are not written as files;
 # fsspec's lazy reader only ever looks them up inside `.zmetadata`.
 function _metadatadoc(group::ChunkManifest)
-    metadata = Dict{String,Any}()
+    metadata = Dict{String, Any}()
     for gp in _grouppaths(group)
         zgroupkey = isempty(gp) ? ".zgroup" : "$gp/.zgroup"
         zattrskey = isempty(gp) ? ".zattrs" : "$gp/.zattrs"
         metadata[zgroupkey] = ChunkManifests.JSON.parse(String(ChunkManifests.zgroup_json()))
-        metadata[zattrskey] = isempty(gp) ? copy(attrsof(group)) : Dict{String,Any}()
+        metadata[zattrskey] = isempty(gp) ? copy(attrsof(group)) : Dict{String, Any}()
     end
     for (key, va) in arraysof(group)
-        ndims(va) == 0 && throw(ArgumentError(
-            "save: array \"$key\" is zero-dimensional; a kerchunk chunk key " *
-            "has as many \".\"-separated components as the chunk grid has " *
-            "dimensions, so a scalar array's single chunk has no row coordinate " *
-            "in this format",
-        ))
+        ndims(va) == 0 && throw(
+            ArgumentError(
+                "save: array \"$key\" is zero-dimensional; a kerchunk chunk key " *
+                    "has as many \".\"-separated components as the chunk grid has " *
+                    "dimensions, so a scalar array's single chunk has no row coordinate " *
+                    "in this format",
+            )
+        )
         metadata["$key/.zarray"] = ChunkManifests.JSON.parse(String(ChunkManifests.zarray_json(va)))
         metadata["$key/.zattrs"] = ChunkManifests.JSON.parse(String(ChunkManifests.zattrs_json(va)))
     end
@@ -53,10 +55,10 @@ function _metadatadoc(group::ChunkManifest)
 end
 
 _emptycolumns(n::Integer) = (
-    Vector{Union{String,Missing}}(missing, n),
+    Vector{Union{String, Missing}}(missing, n),
     zeros(Int64, n),
     zeros(Int64, n),
-    Vector{Union{Vector{UInt8},Missing}}(missing, n),
+    Vector{Union{Vector{UInt8}, Missing}}(missing, n),
 )
 
 function _writearrayrefs(dir::AbstractString, key::AbstractString, va::ManifestArray, recordsize::Integer)
@@ -89,11 +91,13 @@ function _writearrayrefs(dir::AbstractString, key::AbstractString, va::ManifestA
         state = chunkstate(m, I)
         if state == VIRTUAL_CHUNK
             uri, offset, nbytes = chunklocation(m, I)
-            nbytes == 0 && throw(ArgumentError(
-                "save: array \"$key\" chunk $(Tuple(I)) has a byte range of " *
-                "length 0, which this format cannot distinguish from its " *
-                "whole-object sentinel (offset=0, size=0)",
-            ))
+            nbytes == 0 && throw(
+                ArgumentError(
+                    "save: array \"$key\" chunk $(Tuple(I)) has a byte range of " *
+                        "length 0, which this format cannot distinguish from its " *
+                        "whole-object sentinel (offset=0, size=0)",
+                )
+            )
             paths[row] = uri
             offsets[row] = Int64(offset)
             sizes[row] = Int64(nbytes)
@@ -111,14 +115,14 @@ function _writearrayrefs(dir::AbstractString, key::AbstractString, va::ManifestA
         # path list addressed by small integers, so pooling it back here
         # costs essentially nothing extra to compute.
         tbl = (;
-            path=PooledArrays.PooledArray(paths),
-            offset=offsets,
-            size=sizes,
-            raw=raws,
+            path = PooledArrays.PooledArray(paths),
+            offset = offsets,
+            size = sizes,
+            raw = raws,
         )
         Parquet2.writefile(
             joinpath(dir, _refsfilename(f - 1)), tbl;
-            compression_codec=:zstd, compute_statistics=false,
+            compression_codec = :zstd, compute_statistics = false,
         )
     end
     return nothing
@@ -139,8 +143,8 @@ recognize this format. Throws for a zero-dimensional array, which this
 format cannot address. Returns `path`.
 """
 function ChunkManifests.save(
-    path::AbstractString, group::ChunkManifest, fmt::ChunkManifests.KerchunkParquet
-)
+        path::AbstractString, group::ChunkManifest, fmt::ChunkManifests.KerchunkParquet
+    )
     mkpath(path)
     metadata = _metadatadoc(group)
     for (key, va) in arraysof(group)
@@ -148,7 +152,7 @@ function ChunkManifests.save(
         _writearrayrefs(dir, key, va, fmt.recordsize)
     end
 
-    zmeta = Dict{String,Any}(
+    zmeta = Dict{String, Any}(
         "metadata" => metadata,
         "record_size" => fmt.recordsize,
         "zarr_consolidated_format" => 1,
@@ -158,13 +162,13 @@ function ChunkManifests.save(
 end
 
 function _loadarray(
-    path::AbstractString, key::AbstractString, zarraydoc, zattrsdoc, recordsize::Integer
-)
+        path::AbstractString, key::AbstractString, zarraydoc, zattrsdoc, recordsize::Integer
+    )
     N = length(zarraydoc["shape"])
     # `zarray_json` writes "shape"/"chunks" dimension-reversed (Zarr's C
     # order against this package's Julia order); undo that here.
-    shape = NTuple{N,Int}(reverse(Int.(zarraydoc["shape"])))
-    chunkshape = NTuple{N,Int}(reverse(Int.(zarraydoc["chunks"])))
+    shape = NTuple{N, Int}(reverse(Int.(zarraydoc["shape"])))
+    chunkshape = NTuple{N, Int}(reverse(Int.(zarraydoc["chunks"])))
     T = ChunkManifests.Zarr.typestr(zarraydoc["dtype"]::AbstractString)
     gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
     gridaxes = map(Base.OneTo, gridsize)
@@ -176,24 +180,28 @@ function _loadarray(
     index = zeros(UInt32, gridsize)
     offset = zeros(UInt64, gridsize)
     nbytes = zeros(UInt64, gridsize)
-    inline = Dict{CartesianIndex{N},Vector{UInt8}}()
+    inline = Dict{CartesianIndex{N}, Vector{UInt8}}()
 
     dir = joinpath(path, split(key, '/')...)
     for f in 0:(nfiles - 1)
         fpath = joinpath(dir, _refsfilename(f))
-        isfile(fpath) || throw(ArgumentError(
-            "load: array \"$key\" is missing \"$fpath\", expected for " *
-            "$totalchunks chunks at record_size=$recordsize",
-        ))
+        isfile(fpath) || throw(
+            ArgumentError(
+                "load: array \"$key\" is missing \"$fpath\", expected for " *
+                    "$totalchunks chunks at record_size=$recordsize",
+            )
+        )
         ds = Parquet2.Dataset(fpath)
         pathcol = Parquet2.load(ds, "path")
         offsetcol = Parquet2.load(ds, "offset")
         sizecol = Parquet2.load(ds, "size")
         rawcol = Parquet2.load(ds, "raw")
-        length(pathcol) == recordsize || throw(ArgumentError(
-            "load: \"$fpath\" has $(length(pathcol)) rows, expected the " *
-            "padded record_size=$recordsize",
-        ))
+        length(pathcol) == recordsize || throw(
+            ArgumentError(
+                "load: \"$fpath\" has $(length(pathcol)) rows, expected the " *
+                    "padded record_size=$recordsize",
+            )
+        )
 
         nrows = f == nfiles - 1 ? totalchunks - f * recordsize : recordsize
         for row in 1:nrows
@@ -209,13 +217,15 @@ function _loadarray(
             elseif p === missing
                 # index[I] is already ChunkManifests.MISSING_INDEX (zero).
             elseif o == 0 && s == 0
-                throw(ArgumentError(
-                    "load: array \"$key\" chunk $(Tuple(I)) is a whole-object " *
-                    "reference (offset=0, size=0 with a non-null path); reading that " *
-                    "kerchunk state is not implemented, since recovering the " *
-                    "chunk's byte length would require statting \"$p\" through a " *
-                    "transport this function does not have",
-                ))
+                throw(
+                    ArgumentError(
+                        "load: array \"$key\" chunk $(Tuple(I)) is a whole-object " *
+                            "reference (offset=0, size=0 with a non-null path); reading that " *
+                            "kerchunk state is not implemented, since recovering the " *
+                            "chunk's byte length would require statting \"$p\" through a " *
+                            "transport this function does not have",
+                    )
+                )
             else
                 index[I] = push_uri!(table, p)
                 offset[I] = UInt64(o)
@@ -226,7 +236,7 @@ function _loadarray(
 
     manifest = ExplicitChunkMap(table, index, offset, nbytes; inline)
 
-    attrs = Dict{String,Any}(zattrsdoc)
+    attrs = Dict{String, Any}(zattrsdoc)
     dimnames = haskey(attrs, "_ARRAY_DIMENSIONS") ?
         reverse(String.(attrs["_ARRAY_DIMENSIONS"])) : ["dim_$i" for i in 1:N]
     delete!(attrs, "_ARRAY_DIMENSIONS")
@@ -236,12 +246,12 @@ function _loadarray(
 
     return ManifestArray{T}(
         manifest, shape, chunkshape;
-        fillvalue=zarraydoc["fill_value"],
-        compressor=compressor === nothing ? nothing : Dict{String,Any}(compressor),
-        filters=filters === nothing ? Dict{String,Any}[] :
-            Dict{String,Any}[Dict{String,Any}(x) for x in filters],
-        attrs=attrs,
-        dimnames=dimnames,
+        fillvalue = zarraydoc["fill_value"],
+        compressor = compressor === nothing ? nothing : Dict{String, Any}(compressor),
+        filters = filters === nothing ? Dict{String, Any}[] :
+            Dict{String, Any}[Dict{String, Any}(x) for x in filters],
+        attrs = attrs,
+        dimnames = dimnames,
     )
 end
 
@@ -264,28 +274,32 @@ comes back empty.
 """
 function ChunkManifests.ChunkManifest(path::AbstractString, fmt::ChunkManifests.KerchunkParquet)
     zmetapath = joinpath(path, ".zmetadata")
-    isfile(zmetapath) || throw(ArgumentError(
-        "load: \"$path\" has no .zmetadata; not a KerchunkParquet directory"
-    ))
+    isfile(zmetapath) || throw(
+        ArgumentError(
+            "load: \"$path\" has no .zmetadata; not a KerchunkParquet directory"
+        )
+    )
     doc = ChunkManifests.JSON.parse(read(zmetapath, String))
     metadata = doc["metadata"]
     recordsize = Int(doc["record_size"])
-    recordsize == fmt.recordsize || throw(ArgumentError(
-        "load: \"$zmetapath\" has record_size=$recordsize, but " *
-        "fmt.recordsize=$(fmt.recordsize); construct " *
-        "KerchunkParquet(; recordsize=$recordsize) to match",
-    ))
+    recordsize == fmt.recordsize || throw(
+        ArgumentError(
+            "load: \"$zmetapath\" has record_size=$recordsize, but " *
+                "fmt.recordsize=$(fmt.recordsize); construct " *
+                "KerchunkParquet(; recordsize=$recordsize) to match",
+        )
+    )
 
-    arrays = Dict{String,ManifestArray}()
+    arrays = Dict{String, ManifestArray}()
     for k in keys(metadata)
         endswith(k, "/.zarray") || continue
-        key = chop(k; tail=length("/.zarray"))
-        zattrsdoc = get(metadata, "$key/.zattrs", Dict{String,Any}())
+        key = chop(k; tail = length("/.zarray"))
+        zattrsdoc = get(metadata, "$key/.zattrs", Dict{String, Any}())
         arrays[key] = _loadarray(path, key, metadata[k], zattrsdoc, recordsize)
     end
 
-    groupattrs = Dict{String,Any}(get(metadata, ".zattrs", Dict{String,Any}()))
-    return ChunkManifest(; arrays, attrs=groupattrs)
+    groupattrs = Dict{String, Any}(get(metadata, ".zattrs", Dict{String, Any}()))
+    return ChunkManifest(; arrays, attrs = groupattrs)
 end
 
 end # module ChunkManifestsParquet2Ext

@@ -34,9 +34,11 @@ end
 # `.zarray`/`.zattrs`/`.zgroup` entries are themselves JSON-encoded strings,
 # not nested objects, per the kerchunk schema.
 function _parsejsonstring(value, path, key)
-    value isa AbstractString || throw(ArgumentError(
-        "$path: \"$key\" must hold a JSON-encoded string, got $(typeof(value))"
-    ))
+    value isa AbstractString || throw(
+        ArgumentError(
+            "$path: \"$key\" must hold a JSON-encoded string, got $(typeof(value))"
+        )
+    )
     return JSON.parse(value)
 end
 
@@ -45,20 +47,24 @@ end
 # exactly that range and rejects everything else (object, fixed-length
 # string, datetime) with the file and key named.
 function _juliadtype(dtype, path, key)
-    dtype isa AbstractString || throw(ArgumentError(
-        "$path: $key: \"dtype\" must be a string, got $(typeof(dtype))"
-    ))
+    dtype isa AbstractString || throw(
+        ArgumentError(
+            "$path: $key: \"dtype\" must be a string, got $(typeof(dtype))"
+        )
+    )
     T = try
         Zarr.typestr(dtype)
     catch e
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$path: $key: invalid Zarr v2 dtype string $(repr(dtype)): $(e.msg)"))
     end
-    isvalid = T === Bool || T <: Union{Signed,Unsigned} || T <: AbstractFloat || T <: Complex{<:AbstractFloat}
-    isvalid || throw(ArgumentError(
-        "$path: $key: dtype $(repr(dtype)) parses to Julia type $T, which has no " *
-        "faithful round trip through this package's Zarr v2 dtype encoding",
-    ))
+    isvalid = T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat || T <: Complex{<:AbstractFloat}
+    isvalid || throw(
+        ArgumentError(
+            "$path: $key: dtype $(repr(dtype)) parses to Julia type $T, which has no " *
+                "faithful round trip through this package's Zarr v2 dtype encoding",
+        )
+    )
     return T
 end
 
@@ -66,7 +72,7 @@ end
 # ManifestArray over an AffineChunkMap sized to match the real chunk grid is
 # enough to reuse it before the real manifest exists; it is discarded once
 # the chunk loop below finishes.
-function _chunkkeyparser(shape::NTuple{N,Int}, chunkshape::NTuple{N,Int}) where {N}
+function _chunkkeyparser(shape::NTuple{N, Int}, chunkshape::NTuple{N, Int}) where {N}
     gridsize = cld.(shape, chunkshape)
     table = PathTable()
     push_uri!(table, "")
@@ -85,24 +91,32 @@ function _resolveref(raw, templates::AbstractDict)
         n = length(raw)
         if n == 3
             url, offset, nbytes = raw
-            url isa AbstractString || throw(ArgumentError(
-                "a 3-element reference's first element must be a URL string, got $(typeof(url))"
-            ))
-            (offset isa Real && nbytes isa Real) || throw(ArgumentError(
-                "a 3-element reference's offset and length must be numbers, got " *
-                "$(typeof(offset)) and $(typeof(nbytes))",
-            ))
+            url isa AbstractString || throw(
+                ArgumentError(
+                    "a 3-element reference's first element must be a URL string, got $(typeof(url))"
+                )
+            )
+            (offset isa Real && nbytes isa Real) || throw(
+                ArgumentError(
+                    "a 3-element reference's offset and length must be numbers, got " *
+                        "$(typeof(offset)) and $(typeof(nbytes))",
+                )
+            )
             return (:range, _substitutetemplates(url, templates), UInt64(offset), UInt64(nbytes), nobytes)
         elseif n == 1
             url = raw[1]
-            url isa AbstractString || throw(ArgumentError(
-                "a 1-element (whole-object) reference's element must be a URL string, got $(typeof(url))"
-            ))
+            url isa AbstractString || throw(
+                ArgumentError(
+                    "a 1-element (whole-object) reference's element must be a URL string, got $(typeof(url))"
+                )
+            )
             return (:whole, _substitutetemplates(url, templates), UInt64(0), UInt64(0), nobytes)
         else
-            throw(ArgumentError(
-                "an array-form reference must have 1 or 3 elements, got $n"
-            ))
+            throw(
+                ArgumentError(
+                    "an array-form reference must have 1 or 3 elements, got $n"
+                )
+            )
         end
     elseif raw isa AbstractString
         bytes = startswith(raw, "base64:") ?
@@ -110,16 +124,18 @@ function _resolveref(raw, templates::AbstractDict)
             Vector{UInt8}(codeunits(raw))
         return (:inline, noturl, UInt64(0), UInt64(0), bytes)
     else
-        throw(ArgumentError(
-            "a reference value must be a [url], [url, offset, length] array, or a " *
-            "string; got $(typeof(raw))",
-        ))
+        throw(
+            ArgumentError(
+                "a reference value must be a [url], [url, offset, length] array, or a " *
+                    "string; got $(typeof(raw))",
+            )
+        )
     end
 end
 
 function _attrsanddimnames(zattrsdoc, N::Integer)
-    zattrsdoc === nothing && return Dict{String,Any}(), ["dim_$i" for i in 1:N]
-    attrs = Dict{String,Any}(zattrsdoc)
+    zattrsdoc === nothing && return Dict{String, Any}(), ["dim_$i" for i in 1:N]
+    attrs = Dict{String, Any}(zattrsdoc)
     dimnames = if haskey(attrs, "_ARRAY_DIMENSIONS")
         # _ARRAY_DIMENSIONS is C-order like shape/chunks; see zattrs_json.
         dims = reverse(collect(String, attrs["_ARRAY_DIMENSIONS"]))
@@ -133,31 +149,35 @@ end
 
 function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, templates)
     N = length(zarraydoc["shape"])
-    length(zarraydoc["chunks"]) == N || throw(ArgumentError(
-        "$path: array \"$arraypath\": \"shape\" has $N dimensions but \"chunks\" has " *
-        "$(length(zarraydoc["chunks"]))",
-    ))
+    length(zarraydoc["chunks"]) == N || throw(
+        ArgumentError(
+            "$path: array \"$arraypath\": \"shape\" has $N dimensions but \"chunks\" has " *
+                "$(length(zarraydoc["chunks"]))",
+        )
+    )
     # Zarr v2 is C-ordered; ManifestArray is Julia (column-major) order. This
     # is the one point where shape/chunks are reversed back, the inverse of
     # zarray_json's own reversal on write.
-    shape = NTuple{N,Int}(reverse(Int.(zarraydoc["shape"])))
-    chunkshape = NTuple{N,Int}(reverse(Int.(zarraydoc["chunks"])))
+    shape = NTuple{N, Int}(reverse(Int.(zarraydoc["shape"])))
+    chunkshape = NTuple{N, Int}(reverse(Int.(zarraydoc["chunks"])))
     T = _juliadtype(zarraydoc["dtype"], path, "$arraypath/.zarray")
 
     gridsize = cld.(shape, chunkshape)
     index = fill(MISSING_INDEX, gridsize)
     offset = zeros(UInt64, gridsize)
     nbytes = zeros(UInt64, gridsize)
-    inline = Dict{CartesianIndex{N},Vector{UInt8}}()
+    inline = Dict{CartesianIndex{N}, Vector{UInt8}}()
 
     keyparser = _chunkkeyparser(shape, chunkshape)
     for (leaf, raw) in chunkleaves
         fullkey = "$arraypath/$leaf"
         I = parse_chunkkey(keyparser, leaf)
-        I === nothing && throw(ArgumentError(
-            "$path: chunk key \"$fullkey\" does not parse for array \"$arraypath\" " *
-            "with chunk grid $gridsize",
-        ))
+        I === nothing && throw(
+            ArgumentError(
+                "$path: chunk key \"$fullkey\" does not parse for array \"$arraypath\" " *
+                    "with chunk grid $gridsize",
+            )
+        )
         kind, url, off, nb, bytes = try
             _resolveref(raw, templates)
         catch e
@@ -183,7 +203,7 @@ function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, 
     fillvalue = get(zarraydoc, "fill_value", nothing)
     compressor = get(zarraydoc, "compressor", nothing)
     filters = get(zarraydoc, "filters", nothing)
-    filters = filters === nothing ? Dict{String,Any}[] : Vector{Dict{String,Any}}(filters)
+    filters = filters === nothing ? Dict{String, Any}[] : Vector{Dict{String, Any}}(filters)
 
     return ManifestArray{T}(manifest, shape, chunkshape; fillvalue, compressor, filters, attrs, dimnames)
 end
@@ -241,9 +261,9 @@ byte-range references; `inlinethreshold = 0` embeds nothing. No `templates`
 section is written, matching real kerchunk drivers.
 """
 function save(
-    path::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
-    transport::AbstractTransport=LocalTransport(),
-)
+        path::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
+        transport::AbstractTransport = LocalTransport(),
+    )
     store, key = _resolvefilestore(path, true)
     save(store, key, group, fmt; transport)
     return nothing
@@ -258,17 +278,17 @@ to a store. Not part of the public interface; exists so a manifest's
 store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
 """
 function save(
-    store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
-    transport::AbstractTransport=LocalTransport(),
-)
+        store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
+        transport::AbstractTransport = LocalTransport(),
+    )
     arrays = arraysof(group)
-    refs = Dict{String,Any}()
+    refs = Dict{String, Any}()
 
     refs[".zgroup"] = String(zgroup_json())
     refs[".zattrs"] = String(Vector{UInt8}(JSON.json(attrsof(group))))
     for g in _implicitgroups(keys(arrays))
         refs["$g/.zgroup"] = String(zgroup_json())
-        refs["$g/.zattrs"] = String(Vector{UInt8}(JSON.json(Dict{String,Any}())))
+        refs["$g/.zattrs"] = String(Vector{UInt8}(JSON.json(Dict{String, Any}())))
     end
 
     for (arraypath, va) in arrays
@@ -277,7 +297,7 @@ function save(
         _writechunks!(refs, arraypath, va, fmt, transport)
     end
 
-    doc = Dict{String,Any}("version" => KERCHUNK_REFERENCE_VERSION, "refs" => refs)
+    doc = Dict{String, Any}("version" => KERCHUNK_REFERENCE_VERSION, "refs" => refs)
     store[key] = Vector{UInt8}(codeunits(JSON.json(doc)))
     return nothing
 end
@@ -319,26 +339,32 @@ function _load_kerchunkjson(store::Zarr.AbstractStore, key::AbstractString, labe
     bytes = store[key]
     bytes === nothing && throw(ArgumentError("load: \"$label\" does not exist"))
     doc = JSON.parse(String(bytes))
-    doc isa AbstractDict || throw(ArgumentError(
-        "$label: top-level kerchunk document must be a JSON object, got $(typeof(doc))"
-    ))
+    doc isa AbstractDict || throw(
+        ArgumentError(
+            "$label: top-level kerchunk document must be a JSON object, got $(typeof(doc))"
+        )
+    )
     haskey(doc, "version") || throw(ArgumentError("$label: missing required \"version\" key"))
-    doc["version"] == KERCHUNK_REFERENCE_VERSION || throw(ArgumentError(
-        "$label: unsupported kerchunk reference-set version $(repr(doc["version"])); " *
-        "only version $KERCHUNK_REFERENCE_VERSION is supported",
-    ))
-    haskey(doc, "gen") && throw(ArgumentError(
-        "$label: \"gen\" (programmatic reference generation) is not supported; " *
-        "expand it to explicit refs before loading",
-    ))
+    doc["version"] == KERCHUNK_REFERENCE_VERSION || throw(
+        ArgumentError(
+            "$label: unsupported kerchunk reference-set version $(repr(doc["version"])); " *
+                "only version $KERCHUNK_REFERENCE_VERSION is supported",
+        )
+    )
+    haskey(doc, "gen") && throw(
+        ArgumentError(
+            "$label: \"gen\" (programmatic reference generation) is not supported; " *
+                "expand it to explicit refs before loading",
+        )
+    )
     haskey(doc, "refs") || throw(ArgumentError("$label: missing required \"refs\" key"))
     refs = doc["refs"]
-    templates = get(doc, "templates", Dict{String,Any}())
+    templates = get(doc, "templates", Dict{String, Any}())
 
-    rootattrs = Dict{String,Any}()
-    zarraydocs = Dict{String,Any}()
-    zattrsdocs = Dict{String,Any}()
-    chunkleaves = Dict{String,Vector{Pair{String,Any}}}()
+    rootattrs = Dict{String, Any}()
+    zarraydocs = Dict{String, Any}()
+    zattrsdocs = Dict{String, Any}()
+    chunkleaves = Dict{String, Vector{Pair{String, Any}}}()
 
     for (refkey, value) in refs
         prefix, leaf = _splitkey(refkey)
@@ -346,25 +372,25 @@ function _load_kerchunkjson(store::Zarr.AbstractStore, key::AbstractString, labe
             zarraydocs[prefix] = _parsejsonstring(value, label, refkey)
         elseif leaf == ".zattrs"
             if prefix == ""
-                rootattrs = Dict{String,Any}(_parsejsonstring(value, label, refkey))
+                rootattrs = Dict{String, Any}(_parsejsonstring(value, label, refkey))
             else
                 zattrsdocs[prefix] = _parsejsonstring(value, label, refkey)
             end
         elseif leaf == ".zgroup"
             continue
         else
-            push!(get!(() -> Pair{String,Any}[], chunkleaves, prefix), leaf => value)
+            push!(get!(() -> Pair{String, Any}[], chunkleaves, prefix), leaf => value)
         end
     end
 
     table = PathTable()
-    arrays = Dict{String,ManifestArray}()
+    arrays = Dict{String, ManifestArray}()
     for (arraypath, zarraydoc) in zarraydocs
-        leaves = get(chunkleaves, arraypath, Pair{String,Any}[])
+        leaves = get(chunkleaves, arraypath, Pair{String, Any}[])
         zattrsdoc = get(zattrsdocs, arraypath, nothing)
         arrays[arraypath] = _buildarray(label, arraypath, zarraydoc, zattrsdoc, leaves, table, templates)
     end
 
-    provenance = Dict{String,Any}("format" => "KerchunkJSON", "path" => String(label))
-    return ChunkManifest(; arrays, attrs=rootattrs, provenance)
+    provenance = Dict{String, Any}("format" => "KerchunkJSON", "path" => String(label))
+    return ChunkManifest(; arrays, attrs = rootattrs, provenance)
 end

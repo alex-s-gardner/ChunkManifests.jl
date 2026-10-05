@@ -30,14 +30,14 @@ function _pq2_3d_fixture()
     index[I_missing] = ChunkManifests.MISSING_INDEX
     index[I_inline] = ChunkManifests.INLINE_INDEX
 
-    manifest = ExplicitChunkMap(table, index, offset, nbytes; inline=Dict(I_inline => inline_bytes))
-    va = ManifestArray{Float64}(manifest, shape, chunkshape; dimnames=["x", "y", "z"])
+    manifest = ExplicitChunkMap(table, index, offset, nbytes; inline = Dict(I_inline => inline_bytes))
+    va = ManifestArray{Float64}(manifest, shape, chunkshape; dimnames = ["x", "y", "z"])
     return va, I_missing, I_inline, inline_bytes
 end
 
 # A real one-chunk-per-element file, as in test/serialize_zarr.jl, for a
 # round trip that reads actual bytes back through ChunkManifest.
-function _pq2_contig_va(dir::AbstractString, n::Integer; fname="contig.bin")
+function _pq2_contig_va(dir::AbstractString, n::Integer; fname = "contig.bin")
     path = joinpath(dir, fname)
     write(path, collect(Float64, 1:n))
     table = PathTable()
@@ -47,15 +47,15 @@ function _pq2_contig_va(dir::AbstractString, n::Integer; fname="contig.bin")
     offset = UInt64[(k - 1) * sizeof(Float64) for k in 1:n]
     nbytes = fill(UInt64(sizeof(Float64)), gridsize)
     manifest = ExplicitChunkMap(table, index, offset, nbytes)
-    return ManifestArray{Float64}(manifest, (Int(n),), (1,); dimnames=["x"])
+    return ManifestArray{Float64}(manifest, (Int(n),), (1,); dimnames = ["x"])
 end
 
 @testset "serialize_parquet" begin
 
     @testset "column schema, padding, and C-order row mapping" begin
         va, I_missing, I_inline, inline_bytes = _pq2_3d_fixture()
-        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("air" => va))
-        fmt = KerchunkParquet(; recordsize=4)
+        group = ChunkManifest(; arrays = Dict{String, ManifestArray}("air" => va))
+        fmt = KerchunkParquet(; recordsize = 4)
 
         mktempdir() do dir
             root = joinpath(dir, "out.parq")
@@ -79,10 +79,10 @@ end
             @testset "column names, order, types and nullability" begin
                 ds0 = Parquet2.Dataset(joinpath(fielddir, "refs.0.parq"))
                 @test collect(keys(ds0.schema.children)) == ["path", "offset", "size", "raw"]
-                @test eltype(Parquet2.load(ds0, "path")) == Union{Missing,String}
+                @test eltype(Parquet2.load(ds0, "path")) == Union{Missing, String}
                 @test eltype(Parquet2.load(ds0, "offset")) == Int64
                 @test eltype(Parquet2.load(ds0, "size")) == Int64
-                @test eltype(Parquet2.load(ds0, "raw")) == Union{Missing,Vector{UInt8}}
+                @test eltype(Parquet2.load(ds0, "raw")) == Union{Missing, Vector{UInt8}}
             end
 
             function _pq2_rowfor(flat0)
@@ -151,12 +151,12 @@ end
                 table, fill(idx, grid), offset, fill(UInt64(8), grid)
             )
             va = ManifestArray{Float64}(
-                manifest, shape, chunkshape; dimnames=["x", "y", "z"]
+                manifest, shape, chunkshape; dimnames = ["x", "y", "z"]
             )
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
             out = joinpath(dir, "asym.parq")
-            ChunkManifests.save(out, group, KerchunkParquet(; recordsize=8))
+            ChunkManifests.save(out, group, KerchunkParquet(; recordsize = 8))
 
             # Independent of the writer: read each row back and require that the
             # chunk at flat position p carries the offset we assigned it.
@@ -175,8 +175,8 @@ end
         table = PathTable()
         idx = push_uri!(table, "x.bin")
         manifest = ExplicitChunkMap(table, fill(idx, (1,)), zeros(UInt64, 1), zeros(UInt64, 1))
-        va = ManifestArray{Float64}(manifest, (1,), (1,); dimnames=["x"])
-        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+        va = ManifestArray{Float64}(manifest, (1,), (1,); dimnames = ["x"])
+        group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
         mktempdir() do dir
             @test_throws "whole-object sentinel" ChunkManifests.save(
                 joinpath(dir, "z.parq"), group, KerchunkParquet()
@@ -188,8 +188,8 @@ end
         table = PathTable()
         push_uri!(table, "s.bin")
         manifest = AffineChunkMap(table, (), UInt64(0), (), UInt32(0))
-        va = ManifestArray{Float64}(manifest, (), (); dimnames=String[])
-        group = ChunkManifest(; arrays=Dict{String,ManifestArray}("scalar" => va))
+        va = ManifestArray{Float64}(manifest, (), (); dimnames = String[])
+        group = ChunkManifest(; arrays = Dict{String, ManifestArray}("scalar" => va))
         mktempdir() do dir
             @test_throws "zero-dimensional" ChunkManifests.save(
                 joinpath(dir, "s.parq"), group, KerchunkParquet()
@@ -199,13 +199,13 @@ end
 
     @testset "directory layout and .zmetadata structure, including a nested array" begin
         mktempdir() do dir
-            va_air = _pq2_contig_va(dir, 4; fname="air.bin")
-            va_nested = _pq2_contig_va(dir, 5; fname="nested.bin")
+            va_air = _pq2_contig_va(dir, 4; fname = "air.bin")
+            va_nested = _pq2_contig_va(dir, 5; fname = "nested.bin")
             group = ChunkManifest(;
-                arrays=Dict{String,ManifestArray}("air" => va_air, "grp/var" => va_nested),
-                attrs=Dict{String,Any}("title" => "demo"),
+                arrays = Dict{String, ManifestArray}("air" => va_air, "grp/var" => va_nested),
+                attrs = Dict{String, Any}("title" => "demo"),
             )
-            fmt = KerchunkParquet(; recordsize=4)
+            fmt = KerchunkParquet(; recordsize = 4)
             root = joinpath(dir, "layout.parq")
             ChunkManifests.save(root, group, fmt)
 
@@ -228,9 +228,9 @@ end
 
             metadata = doc["metadata"]
             for key in (
-                ".zgroup", ".zattrs", "air/.zarray", "air/.zattrs",
-                "grp/.zgroup", "grp/.zattrs", "grp/var/.zarray", "grp/var/.zattrs",
-            )
+                    ".zgroup", ".zattrs", "air/.zarray", "air/.zattrs",
+                    "grp/.zgroup", "grp/.zattrs", "grp/var/.zarray", "grp/var/.zattrs",
+                )
                 @test haskey(metadata, key)
                 @test metadata[key] isa AbstractDict
             end
@@ -245,8 +245,8 @@ end
         mktempdir() do dir
             n = 10
             va = _pq2_contig_va(dir, n)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
-            fmt = KerchunkParquet(; recordsize=4)
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
+            fmt = KerchunkParquet(; recordsize = 4)
             root = joinpath(dir, "roundtrip.parq")
             ChunkManifests.save(root, group, fmt)
             group2 = ChunkManifest(root, fmt)
@@ -260,29 +260,29 @@ end
                 end
             end
 
-            z1 = Zarr.zopen(ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va)))
-            z2 = Zarr.zopen(ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va2)))
+            z1 = Zarr.zopen(ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va)))
+            z2 = Zarr.zopen(ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va2)))
             @test z1["a"][:] == z2["a"][:]
         end
     end
 
     @testset "load: recordsize mismatch and missing .zmetadata fail fast" begin
         mktempdir() do dir
-            va = _pq2_contig_va(dir, 4; fname="m.bin")
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            va = _pq2_contig_va(dir, 4; fname = "m.bin")
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             root = joinpath(dir, "mismatch.parq")
-            ChunkManifests.save(root, group, KerchunkParquet(; recordsize=4))
+            ChunkManifests.save(root, group, KerchunkParquet(; recordsize = 4))
 
-            @test_throws "record_size=4" ChunkManifest(root, KerchunkParquet(; recordsize=5))
+            @test_throws "record_size=4" ChunkManifest(root, KerchunkParquet(; recordsize = 5))
             @test_throws "no .zmetadata" ChunkManifest(joinpath(dir, "nope.parq"), KerchunkParquet())
         end
     end
 
     @testset "whole-object reference is not supported on read" begin
         mktempdir() do dir
-            va = _pq2_contig_va(dir, 4; fname="w.bin")
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
-            fmt = KerchunkParquet(; recordsize=4)
+            va = _pq2_contig_va(dir, 4; fname = "w.bin")
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
+            fmt = KerchunkParquet(; recordsize = 4)
             root = joinpath(dir, "whole.parq")
             ChunkManifests.save(root, group, fmt)
 
@@ -292,12 +292,12 @@ end
             # it writes carries an explicit, nonzero byte length.
             fpath = joinpath(root, "a", "refs.0.parq")
             tbl = (;
-                path=PooledArrays.PooledArray(Union{String,Missing}["w.bin", missing, missing, missing]),
-                offset=Int64[0, 0, 0, 0],
-                size=Int64[0, 0, 0, 0],
-                raw=Vector{Union{Vector{UInt8},Missing}}(missing, 4),
+                path = PooledArrays.PooledArray(Union{String, Missing}["w.bin", missing, missing, missing]),
+                offset = Int64[0, 0, 0, 0],
+                size = Int64[0, 0, 0, 0],
+                raw = Vector{Union{Vector{UInt8}, Missing}}(missing, 4),
             )
-            Parquet2.writefile(fpath, tbl; compression_codec=:zstd, compute_statistics=false)
+            Parquet2.writefile(fpath, tbl; compression_codec = :zstd, compute_statistics = false)
 
             @test_throws "whole-object reference" ChunkManifest(root, fmt)
         end
@@ -310,7 +310,7 @@ end
         dir = mktempdir()
         n = 6
         va = _pq2_contig_va(dir, n)
-        cm = ChunkManifest(; arrays=Dict{String,ManifestArray}("d" => va))
+        cm = ChunkManifest(; arrays = Dict{String, ManifestArray}("d" => va))
         root = joinpath(dir, "refs.parq")
         ChunkManifests.save(root, cm, KerchunkParquet())
 

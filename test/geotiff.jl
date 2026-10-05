@@ -35,13 +35,13 @@ _gt_entry(id::Integer, type::Integer, s::AbstractString) =
 # `payload`'s pieces, placed contiguously after the tag pool except for
 # `gapbefore[i]` filler bytes immediately before `payload[i]`.
 function _gt_writetiff(
-    path::AbstractString, tags::Vector, offsettag::Integer, payload::Vector{Vector{UInt8}};
-    gapbefore::Vector{Int}=zeros(Int, length(payload)),
-)
-    sorted = sort(collect(tags); by=e -> e[1])
+        path::AbstractString, tags::Vector, offsettag::Integer, payload::Vector{Vector{UInt8}};
+        gapbefore::Vector{Int} = zeros(Int, length(payload)),
+    )
+    sorted = sort(collect(tags); by = e -> e[1])
     n = length(sorted)
     pos = 8 + 2 + 12 * n + 4
-    extoffset = Dict{Int,Int}()
+    extoffset = Dict{Int, Int}()
     for (i, e) in enumerate(sorted)
         if length(e[4]) > 4
             extoffset[i] = pos
@@ -93,8 +93,8 @@ function _gt_writetiff(
 end
 
 function _gt_basetags(;
-    width, height, bits, compression, sampleformat=1, samplesperpixel=1, planarconfig=1, photometric=1,
-)
+        width, height, bits, compression, sampleformat = 1, samplesperpixel = 1, planarconfig = 1, photometric = 1,
+    )
     return [
         _gt_entry(256, _GT_LONG, [UInt32(width)]),           # IMAGEWIDTH
         _gt_entry(257, _GT_LONG, [UInt32(height)]),          # IMAGELENGTH
@@ -108,10 +108,10 @@ function _gt_basetags(;
 end
 
 function _gt_striped(
-    path; width, height, rowsperstrip, bits, compression=1, predictor=1, sampleformat=1,
-    samplesperpixel=1, planarconfig=1, photometric=1,
-    payload, gapbefore=zeros(Int, length(payload)),
-)
+        path; width, height, rowsperstrip, bits, compression = 1, predictor = 1, sampleformat = 1,
+        samplesperpixel = 1, planarconfig = 1, photometric = 1,
+        payload, gapbefore = zeros(Int, length(payload)),
+    )
     nstrips = length(payload)
     bytecounts = UInt32.(length.(payload))
     tags = vcat(
@@ -127,9 +127,9 @@ function _gt_striped(
 end
 
 function _gt_tiled(
-    path; width, height, tilewidth, tilelength, bits, compression=1, predictor=1, sampleformat=1,
-    samplesperpixel=1, planarconfig=1, photometric=1, payload,
-)
+        path; width, height, tilewidth, tilelength, bits, compression = 1, predictor = 1, sampleformat = 1,
+        samplesperpixel = 1, planarconfig = 1, photometric = 1, payload,
+    )
     ntiles = length(payload)
     bytecounts = UInt32.(length.(payload))
     tags = vcat(
@@ -148,25 +148,25 @@ end
 # Splits a Julia-order (band, x, y) chunky array into row-groups of
 # `rowsperstrip` rows: band is dimension 1, so slicing then `vec`ing already
 # yields TIFF's own band-fastest, then-x, then-y byte run for that row group.
-function _gt_chunkyrows(data::AbstractArray{T,3}, rowsperstrip::Integer) where {T}
+function _gt_chunkyrows(data::AbstractArray{T, 3}, rowsperstrip::Integer) where {T}
     height = size(data, 3)
     return [
         Vector{UInt8}(reinterpret(UInt8, vec(data[:, :, r:min(r + rowsperstrip - 1, height)])))
-        for r in 1:rowsperstrip:height
+            for r in 1:rowsperstrip:height
     ]
 end
 
 # Pads a Julia-order (band, x, y) chunky array to whole tiles and splits it
 # into per-tile raw byte blocks, row-major in (tx, ty) to match TIFF's tile
 # ordering.
-function _gt_chunkytiles(data::AbstractArray{T,3}, tilewidth::Integer, tilelength::Integer) where {T}
+function _gt_chunkytiles(data::AbstractArray{T, 3}, tilewidth::Integer, tilelength::Integer) where {T}
     nsp, width, height = size(data)
     gridx, gridy = cld(width, tilewidth), cld(height, tilelength)
     padded = zeros(T, nsp, gridx * tilewidth, gridy * tilelength)
     padded[:, 1:width, 1:height] .= data
     payload = Vector{UInt8}[]
     for ty in 1:gridy, tx in 1:gridx
-        block = padded[:, (tx - 1) * tilewidth + 1:tx * tilewidth, (ty - 1) * tilelength + 1:ty * tilelength]
+        block = padded[:, ((tx - 1) * tilewidth + 1):(tx * tilewidth), ((ty - 1) * tilelength + 1):(ty * tilelength)]
         push!(payload, Vector{UInt8}(reinterpret(UInt8, vec(block))))
     end
     return payload
@@ -175,7 +175,7 @@ end
 # Raw strip bytes for a Julia-order (x, y, band) planar array, in the
 # sample-major entry order PLANARCONFIG=2 stores: every strip of band 1,
 # then every strip of band 2, and so on.
-function _gt_planarpayload(data::AbstractArray{T,3}, rowsperstrip::Integer) where {T}
+function _gt_planarpayload(data::AbstractArray{T, 3}, rowsperstrip::Integer) where {T}
     nsp = size(data, 3)
     payload = Vector{UInt8}[]
     for band in 1:nsp
@@ -192,7 +192,7 @@ function _gt_striprows(data::AbstractMatrix, rowsperstrip::Integer)
     height = size(data, 2)
     return [
         Vector{UInt8}(reinterpret(UInt8, vec(data[:, r:min(r + rowsperstrip - 1, height)])))
-        for r in 1:rowsperstrip:height
+            for r in 1:rowsperstrip:height
     ]
 end
 
@@ -230,7 +230,7 @@ _gt_rawvalue(typ::Integer, v::Real) =
 # with 273's value given as the placeholder `0` to be patched in.
 function _gt_buildpyramid(path, pages::Vector, nextof::Vector{Int}, pixeldata::Vector{Vector{UInt8}})
     npages = length(pages)
-    sorted = [sort(collect(p); by=first) for p in pages]
+    sorted = [sort(collect(p); by = first) for p in pages]
     ifdsizes = [2 + 12 * length(p) + 4 for p in sorted]
     ifdoffset = Vector{Int}(undef, npages)
     pos = 8
@@ -244,20 +244,22 @@ function _gt_buildpyramid(path, pages::Vector, nextof::Vector{Int}, pixeldata::V
     # counts above, so every reference can be resolved before any payload
     # byte is written.
     resolved = [
-        [(tag, typ, vals isa AbstractString ? vals : [v isa _GTPageRef ? ifdoffset[v.page] : v for v in vals])
-         for (tag, typ, vals) in p]
-        for p in sorted
+        [
+            (tag, typ, vals isa AbstractString ? vals : [v isa _GTPageRef ? ifdoffset[v.page] : v for v in vals])
+                for (tag, typ, vals) in p
+        ]
+            for p in sorted
     ]
 
     payload = UInt8[]
-    entries = Vector{Vector{Tuple{Int,Int,Int,Vector{UInt8}}}}()
+    entries = Vector{Vector{Tuple{Int, Int, Int, Vector{UInt8}}}}()
     for p in resolved
-        pageentries = Tuple{Int,Int,Int,Vector{UInt8}}[]
+        pageentries = Tuple{Int, Int, Int, Vector{UInt8}}[]
         for (tag, typ, vals) in p
             raw, count = if vals isa AbstractString
                 Vector{UInt8}(vals * "\0"), ncodeunits(vals) + 1
             else
-                reduce(vcat, (_gt_rawvalue(typ, v) for v in vals); init=UInt8[]), length(vals)
+                reduce(vcat, (_gt_rawvalue(typ, v) for v in vals); init = UInt8[]), length(vals)
             end
             field = if length(raw) <= 4
                 vcat(raw, zeros(UInt8, 4 - length(raw)))
@@ -328,7 +330,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
         end
         mktemp() do path, io
             data = rand(UInt16, 4, 3)
-            _gt_striped(path; width=4, height=3, rowsperstrip=3, bits=16, payload=_gt_striprows(data, 3))
+            _gt_striped(path; width = 4, height = 3, rowsperstrip = 3, bits = 16, payload = _gt_striprows(data, 3))
             @test ChunkManifests.candrive(GeoTIFFDriver(), path)
         end
     end
@@ -353,13 +355,13 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             data = rand(Float32, width, height)
             path = joinpath(dir, "affine.tif")
             _gt_striped(
-                path; width, height, rowsperstrip, bits=32, sampleformat=3,
-                payload=_gt_striprows(data, rowsperstrip),
+                path; width, height, rowsperstrip, bits = 32, sampleformat = 3,
+                payload = _gt_striprows(data, rowsperstrip),
             )
 
             # rowbytes = 7*4 = 28; chunkbytes=112 targets 4 rows/chunk, and
             # 12 is divisible by 4 — unrelated to the 5-row strips on disk.
-            group = ChunkManifests.scan(path, GeoTIFFDriver(; chunkbytes=112))
+            group = ChunkManifests.scan(path, GeoTIFFDriver(; chunkbytes = 112))
             va = ChunkManifests.arraysof(group)["0"]
 
             @test size(va) == (width, height)
@@ -369,7 +371,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test eltype(va) === Float32
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             @test Array(z[:, :]) == data
 
             img = TiffImages.load(path)
@@ -383,8 +385,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             path = joinpath(dir, "noncontig.tif")
             rows = _gt_striprows(data, rowsperstrip)
             _gt_striped(
-                path; width, height, rowsperstrip, bits=16,
-                payload=rows, gapbefore=[0, 16],
+                path; width, height, rowsperstrip, bits = 16,
+                payload = rows, gapbefore = [0, 16],
             )
 
             group = ChunkManifests.scan(path, GeoTIFFDriver())
@@ -393,7 +395,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test chunkshapeof(va) == (width, rowsperstrip)
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             @test Array(z[:, :]) == data
         end
 
@@ -404,7 +406,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             # Zarr chunk.
             fakecompressed = [rand(UInt8, 20), rand(UInt8, 14)]
             path = joinpath(dir, "shortstrip.tif")
-            _gt_striped(path; width, height, rowsperstrip, bits=16, compression=8, payload=fakecompressed)
+            _gt_striped(path; width, height, rowsperstrip, bits = 16, compression = 8, payload = fakecompressed)
             @test_throws "not a multiple of ROWSPERSTRIP" ChunkManifests.scan(path, GeoTIFFDriver())
         end
 
@@ -422,13 +424,13 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             write(rawpath, rand(UInt8, fullbytes + shortbytes))
 
             table = PathTable()
-            push_uri!(table, abspath(rawpath); size=filesize(rawpath))
+            push_uri!(table, abspath(rawpath); size = filesize(rawpath))
             index = fill(UInt32(1), (1, 2))
             offset = UInt64[0 fullbytes]
             nbytes = UInt64[fullbytes shortbytes]
             manifest = ExplicitChunkMap(table, index, offset, nbytes)
             va = ManifestArray{UInt16}(manifest, (width, height), (width, rowsperchunk))
-            store = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va))
+            store = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va))
 
             @test_throws "does not match" Zarr.zopen(store)[:, :]
         end
@@ -442,22 +444,22 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             payload = Vector{UInt8}[]
             for ty in 1:gridy, tx in 1:gridx
-                block = padded[(tx - 1) * tilewidth + 1:tx * tilewidth, (ty - 1) * tilelength + 1:ty * tilelength]
+                block = padded[((tx - 1) * tilewidth + 1):(tx * tilewidth), ((ty - 1) * tilelength + 1):(ty * tilelength)]
                 push!(payload, Zarr.zcompress(block, Zarr.ZlibCompressor()))
             end
 
             path = joinpath(dir, "tiled_deflate.tif")
-            _gt_tiled(path; width, height, tilewidth, tilelength, bits=16, compression=8, payload)
+            _gt_tiled(path; width, height, tilewidth, tilelength, bits = 16, compression = 8, payload)
 
             group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
             @test size(va) == (width, height)
             @test chunkshapeof(va) == (tilewidth, tilelength)
             @test chunkmapof(va) isa ExplicitChunkMap
-            @test compressorof(va) == Dict{String,Any}("id" => "zlib", "level" => -1)
+            @test compressorof(va) == Dict{String, Any}("id" => "zlib", "level" => -1)
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             @test Array(z[:, :]) == data
         end
 
@@ -466,8 +468,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             data = rand(UInt16, width, height)
             path = joinpath(dir, "predictor.tif")
             _gt_striped(
-                path; width, height, rowsperstrip, bits=16, compression=8, predictor=2,
-                payload=[Zarr.zcompress(data, Zarr.ZlibCompressor())],
+                path; width, height, rowsperstrip, bits = 16, compression = 8, predictor = 2,
+                payload = [Zarr.zcompress(data, Zarr.ZlibCompressor())],
             )
             group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
@@ -481,8 +483,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             width, height, rowsperstrip = 4, 4, 4
             path = joinpath(dir, "predictor3.tif")
             _gt_striped(
-                path; width, height, rowsperstrip, bits=32, sampleformat=3, compression=1, predictor=3,
-                payload=_gt_striprows(rand(Float32, width, height), rowsperstrip),
+                path; width, height, rowsperstrip, bits = 32, sampleformat = 3, compression = 1, predictor = 3,
+                payload = _gt_striprows(rand(Float32, width, height), rowsperstrip),
             )
             @test_throws "Predictor 3" ChunkManifests.scan(path, GeoTIFFDriver())
         end
@@ -492,8 +494,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             for (comp, needle) in ((5, "LZW"), (32773, "PackBits"), (7, "JPEG"), (50001, "WebP"))
                 path = joinpath(dir, "comp_$comp.tif")
                 _gt_striped(
-                    path; width, height, rowsperstrip, bits=16, compression=comp,
-                    payload=[rand(UInt8, 32)],
+                    path; width, height, rowsperstrip, bits = 16, compression = comp,
+                    payload = [rand(UInt8, 32)],
                 )
                 @test_throws needle ChunkManifests.scan(path, GeoTIFFDriver())
             end
@@ -504,8 +506,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             data = rand(UInt16, width, height)
             path = joinpath(dir, "planar_singleband.tif")
             _gt_striped(
-                path; width, height, rowsperstrip, bits=16, samplesperpixel=1, planarconfig=2,
-                payload=_gt_striprows(data, rowsperstrip),
+                path; width, height, rowsperstrip, bits = 16, samplesperpixel = 1, planarconfig = 2,
+                payload = _gt_striprows(data, rowsperstrip),
             )
             group = ChunkManifests.scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0"]
@@ -513,7 +515,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test dimnamesof(va) == ["x", "y"]
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             @test Array(z[:, :]) == data
         end
 
@@ -521,7 +523,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             width, height, rowsperstrip = 3, 3, 3
             path = joinpath(dir, "geo.tif")
             tags = vcat(
-                _gt_basetags(; width, height, bits=16, compression=1),
+                _gt_basetags(; width, height, bits = 16, compression = 1),
                 [
                     _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
                     _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
@@ -551,7 +553,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             # GeographicTypeGeoKey (2048).
             directory = UInt16[1, 1, 0, 1, 2048, 0, 1, 4326]
             tags = vcat(
-                _gt_basetags(; width, height, bits=16, compression=1),
+                _gt_basetags(; width, height, bits = 16, compression = 1),
                 [
                     _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
                     _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
@@ -569,7 +571,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             width, height, rowsperstrip = 3, 3, 3
             path = joinpath(dir, "nodata.tif")
             tags = vcat(
-                _gt_basetags(; width, height, bits=16, compression=1, sampleformat=2),
+                _gt_basetags(; width, height, bits = 16, compression = 1, sampleformat = 2),
                 [
                     _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
                     _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
@@ -586,7 +588,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
         @testset "multi-page: each IFD becomes its own keyed array" begin
             width, height, rowsperstrip = 3, 2, 2
             tags1 = vcat(
-                _gt_basetags(; width, height, bits=16, compression=1),
+                _gt_basetags(; width, height, bits = 16, compression = 1),
                 [
                     _gt_entry(278, _GT_LONG, [UInt32(rowsperstrip)]),
                     _gt_entry(273, _GT_LONG, zeros(UInt32, 1)),
@@ -607,9 +609,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             end
             path = joinpath(dir, "rgb_chunky.tif")
             _gt_striped(
-                path; width, height, rowsperstrip=height, bits=32, sampleformat=3,
-                samplesperpixel=nsp, planarconfig=1, photometric=2,
-                payload=[Vector{UInt8}(reinterpret(UInt8, vec(data3)))],
+                path; width, height, rowsperstrip = height, bits = 32, sampleformat = 3,
+                samplesperpixel = nsp, planarconfig = 1, photometric = 2,
+                payload = [Vector{UInt8}(reinterpret(UInt8, vec(data3)))],
             )
 
             group = ChunkManifests.scan(path, GeoTIFFDriver())
@@ -620,7 +622,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test chunkmapof(va) isa AffineChunkMap
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             result = Array(z[:, :, :])
             @test result == data3
             for b in 1:nsp
@@ -642,13 +644,13 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             end
             payload = [
                 Zarr.zcompress(block, Zarr.ZlibCompressor())
-                for block in _gt_chunkytiles(data3, tilewidth, tilelength)
+                    for block in _gt_chunkytiles(data3, tilewidth, tilelength)
             ]
 
             path = joinpath(dir, "rgb_tiled_deflate.tif")
             _gt_tiled(
-                path; width, height, tilewidth, tilelength, bits=16, compression=8,
-                samplesperpixel=nsp, planarconfig=1, photometric=2, payload,
+                path; width, height, tilewidth, tilelength, bits = 16, compression = 8,
+                samplesperpixel = nsp, planarconfig = 1, photometric = 2, payload,
             )
 
             group = ChunkManifests.scan(path, GeoTIFFDriver())
@@ -658,7 +660,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test chunkmapof(va) isa ExplicitChunkMap
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             result = Array(z[:, :, :])
             @test result == data3
             for b in 1:nsp
@@ -678,9 +680,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
 
             path = joinpath(dir, "rgb_predictor.tif")
             _gt_striped(
-                path; width, height, rowsperstrip=height, bits=16, compression=8, predictor=2,
-                samplesperpixel=nsp, planarconfig=1,
-                payload=[compressed],
+                path; width, height, rowsperstrip = height, bits = 16, compression = 8, predictor = 2,
+                samplesperpixel = nsp, planarconfig = 1,
+                payload = [compressed],
             )
 
             group = ChunkManifests.scan(path, GeoTIFFDriver())
@@ -689,7 +691,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test filtersof(va)[1]["samplesperpixel"] == nsp
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             @test Array(z[:, :, :]) == data3
         end
 
@@ -701,8 +703,8 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             end
             path = joinpath(dir, "planar_multiband.tif")
             _gt_striped(
-                path; width, height, rowsperstrip, bits=16, samplesperpixel=nsp, planarconfig=2,
-                payload=_gt_planarpayload(data3, rowsperstrip),
+                path; width, height, rowsperstrip, bits = 16, samplesperpixel = nsp, planarconfig = 2,
+                payload = _gt_planarpayload(data3, rowsperstrip),
             )
 
             group = ChunkManifests.scan(path, GeoTIFFDriver())
@@ -713,7 +715,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test chunkmapof(va) isa ExplicitChunkMap
 
             store = group
-            z = Zarr.zopen(store; path="0")
+            z = Zarr.zopen(store; path = "0")
             result = Array(z[:, :, :])
             @test result == data3
             for b in 1:nsp
@@ -777,9 +779,9 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test attrsof(va2)["parent"] == "0"
 
             store = group
-            @test Array(Zarr.zopen(store; path="0")[:, :]) == data0
-            @test Array(Zarr.zopen(store; path="1")[:, :]) == data1
-            @test Array(Zarr.zopen(store; path="2")[:, :]) == data2
+            @test Array(Zarr.zopen(store; path = "0")[:, :]) == data0
+            @test Array(Zarr.zopen(store; path = "1")[:, :]) == data1
+            @test Array(Zarr.zopen(store; path = "2")[:, :]) == data2
         end
 
         @testset "extent preservation: overview pixel scale derived from the extent, not an assumed factor" begin
@@ -875,7 +877,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test attrsof(vasub)["GeoTransform"][1] ≈ (width * 1.0) / subwidth
 
             store = group
-            @test Array(Zarr.zopen(store; path="0.sub1")[:, :]) == _gt_pyramidmatrix(subwidth, subheight)
+            @test Array(Zarr.zopen(store; path = "0.sub1")[:, :]) == _gt_pyramidmatrix(subwidth, subheight)
         end
 
         @testset "SubIFD cycle guard: a self-referencing SubIFDs offset errors rather than hangs" begin
@@ -913,7 +915,7 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
             @test size(va) == (720, 360)
             @test chunkshapeof(va) == (720, 1)
             @test chunkmapof(va) isa ExplicitChunkMap
-            @test compressorof(va) == Dict{String,Any}("id" => "zstd", "level" => 0)
+            @test compressorof(va) == Dict{String, Any}("id" => "zstd", "level" => 0)
             @test eltype(va) === Float64
             @test fillvalueof(va) !== nothing && isnan(fillvalueof(va))
         end

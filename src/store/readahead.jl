@@ -10,14 +10,16 @@ Cached bytes for `key`, or `nothing` on a miss. Throws if a cached entry's
 length disagrees with `nbytes`, since that can only mean two different chunks
 have been keyed alike.
 """
-function _cache_get(cache::ReadaheadCache, key::Tuple{String,UInt64}, nbytes::Integer)
+function _cache_get(cache::ReadaheadCache, key::Tuple{String, UInt64}, nbytes::Integer)
     return lock(cache.lock) do
         bytes = get(cache.entries, key, nothing)
         bytes === nothing && return nothing
-        length(bytes) == nbytes || throw(ArgumentError(
-            "ReadaheadCache: entry for $key has $(length(bytes)) cached bytes, " *
-            "but $nbytes were requested",
-        ))
+        length(bytes) == nbytes || throw(
+            ArgumentError(
+                "ReadaheadCache: entry for $key has $(length(bytes)) cached bytes, " *
+                    "but $nbytes were requested",
+            )
+        )
         return bytes
     end
 end
@@ -25,8 +27,8 @@ end
 # FIFO eviction: oldest-inserted entry goes first once nbytes exceeds
 # maxbytes. A key already present is left as is rather than reinserted, so a
 # race between two misses on the same chunk cannot double-count its bytes.
-function _cache_put!(cache::ReadaheadCache, key::Tuple{String,UInt64}, bytes::Vector{UInt8})
-    lock(cache.lock) do
+function _cache_put!(cache::ReadaheadCache, key::Tuple{String, UInt64}, bytes::Vector{UInt8})
+    return lock(cache.lock) do
         haskey(cache.entries, key) && return nothing
         cache.entries[key] = bytes
         push!(cache.order, key)
@@ -44,8 +46,8 @@ end
 # its successors in chunk-grid linear order stay in the same file, remain
 # VIRTUAL_CHUNK, and fit within `budget` bytes, up to `maxchunks` entries.
 function _readahead_plan(
-    m::AbstractChunkMap{N}, I::CartesianIndex{N}, maxchunks::Int, budget::Int
-) where {N}
+        m::AbstractChunkMap{N}, I::CartesianIndex{N}, maxchunks::Int, budget::Int
+    ) where {N}
     ax = chunkgridaxes(m)
     lin = LinearIndices(ax)
     cart = CartesianIndices(ax)
@@ -82,14 +84,14 @@ a speculative chunk that cannot be read never fails the chunk that was
 actually asked for.
 """
 function _readahead_fetch(
-    cache::ReadaheadCache,
-    transport::AbstractTransport,
-    m::AbstractChunkMap{N},
-    I::CartesianIndex{N},
-    uri::String,
-    offset::UInt64,
-    nbytes::UInt64,
-) where {N}
+        cache::ReadaheadCache,
+        transport::AbstractTransport,
+        m::AbstractChunkMap{N},
+        I::CartesianIndex{N},
+        uri::String,
+        offset::UInt64,
+        nbytes::UInt64,
+    ) where {N}
     cache.maxbytes == 0 && return fetchrange(transport, uri, ByteRange(offset, nbytes))
 
     key = (uri, offset)

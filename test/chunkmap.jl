@@ -105,7 +105,7 @@
         strides = (UInt64(8), UInt64(64))
 
         for (idx, uri) in ((1, "a.bin"), (2, "b.bin"), (3, "c.bin"))
-            m = AffineChunkMap(t, gridsize, UInt64(0), strides, UInt32(8); fileindex=idx)
+            m = AffineChunkMap(t, gridsize, UInt64(0), strides, UInt32(8); fileindex = idx)
             for I in CartesianIndices(gridsize)
                 @test chunklocation(m, I)[1] == uri
             end
@@ -116,10 +116,10 @@
         @test chunklocation(m, CartesianIndex(1, 1))[1] == "a.bin"
 
         @test_throws "out of range" AffineChunkMap(
-            t, gridsize, UInt64(0), strides, UInt32(8); fileindex=4
+            t, gridsize, UInt64(0), strides, UInt32(8); fileindex = 4
         )
         @test_throws "out of range" AffineChunkMap(
-            t, gridsize, UInt64(0), strides, UInt32(8); fileindex=0
+            t, gridsize, UInt64(0), strides, UInt32(8); fileindex = 0
         )
 
         # The invariant holds for every call form, not just the keyword one:

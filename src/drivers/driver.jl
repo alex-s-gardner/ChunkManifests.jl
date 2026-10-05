@@ -21,9 +21,11 @@ fallback throws so a driver that omits one fails at the call site rather than
 returning something silently wrong.
 """
 function scan(path, driver::AbstractDriver; kwargs...)
-    throw(ArgumentError(
-        "scan is not implemented for driver $(typeof(driver)) (path=$(repr(path)))"
-    ))
+    throw(
+        ArgumentError(
+            "scan is not implemented for driver $(typeof(driver)) (path=$(repr(path)))"
+        )
+    )
 end
 
 """

@@ -16,8 +16,8 @@ _TaggedTransport(tag::Symbol) = _TaggedTransport(tag, 4)
 _tagbyte(tag::Symbol) = UInt8(first(codeunits(string(tag))))
 
 function ChunkManifests.fetchrange(
-    t::_TaggedTransport, uri::AbstractString, r::ChunkManifests.ByteRange
-)
+        t::_TaggedTransport, uri::AbstractString, r::ChunkManifests.ByteRange
+    )
     return fill(_tagbyte(t.tag), Int(r.nbytes))
 end
 
@@ -31,18 +31,22 @@ ChunkManifests.concurrency(t::_TaggedTransport) = t.concurrency
     @testset "longest matching prefix wins" begin
         wide = _TaggedTransport(:wide)
         narrow = _TaggedTransport(:narrow)
-        c = ChunkManifests.TransportContainers([
-            "s3://" => wide, "s3://bucket/" => narrow
-        ])
+        c = ChunkManifests.TransportContainers(
+            [
+                "s3://" => wide, "s3://bucket/" => narrow,
+            ]
+        )
 
         @test ChunkManifests.resolve_transport(c, "s3://bucket/key") === narrow
         @test ChunkManifests.resolve_transport(c, "s3://bucket/sub/key") === narrow
         @test ChunkManifests.resolve_transport(c, "s3://other-bucket/key") === wide
 
         # order of insertion must not matter: only prefix length does
-        c2 = ChunkManifests.TransportContainers([
-            "s3://bucket/" => narrow, "s3://" => wide
-        ])
+        c2 = ChunkManifests.TransportContainers(
+            [
+                "s3://bucket/" => narrow, "s3://" => wide,
+            ]
+        )
         @test ChunkManifests.resolve_transport(c2, "s3://bucket/key") === narrow
         @test ChunkManifests.resolve_transport(c2, "s3://other-bucket/key") === wide
     end
@@ -50,15 +54,17 @@ ChunkManifests.concurrency(t::_TaggedTransport) = t.concurrency
     @testset "duplicate prefix is rejected" begin
         a = _TaggedTransport(:a)
         b = _TaggedTransport(:b)
-        @test_throws "duplicate prefix" ChunkManifests.TransportContainers([
-            "s3://bucket/" => a, "s3://bucket/" => b
-        ])
+        @test_throws "duplicate prefix" ChunkManifests.TransportContainers(
+            [
+                "s3://bucket/" => a, "s3://bucket/" => b,
+            ]
+        )
     end
 
     @testset "fallback catches anything unmatched" begin
         fallback = _TaggedTransport(:fallback)
         bound = _TaggedTransport(:bound)
-        c = ChunkManifests.TransportContainers(["mem://" => bound]; fallback=fallback)
+        c = ChunkManifests.TransportContainers(["mem://" => bound]; fallback = fallback)
 
         @test ChunkManifests.resolve_transport(c, "mem://x") === bound
         @test ChunkManifests.resolve_transport(c, "/local/path") === fallback
@@ -143,7 +149,7 @@ ChunkManifests.concurrency(t::_TaggedTransport) = t.concurrency
 
         @testset "a rejecting predicate blocks the fetch" begin
             authorize(uri) = !startswith(uri, "s3://")
-            c = ChunkManifests.TransportContainers(["s3://" => remote]; authorize=authorize)
+            c = ChunkManifests.TransportContainers(["s3://" => remote]; authorize = authorize)
 
             mktempdir() do dir
                 path = joinpath(dir, "a.bin")
@@ -164,7 +170,7 @@ ChunkManifests.concurrency(t::_TaggedTransport) = t.concurrency
         c = ChunkManifests.TransportContainers(["a://" => slow, "b://" => fast])
         @test ChunkManifests.concurrency(c) == 1
 
-        c2 = ChunkManifests.TransportContainers(Pair{String,ChunkManifests.AbstractTransport}[]; fallback=slow)
+        c2 = ChunkManifests.TransportContainers(Pair{String, ChunkManifests.AbstractTransport}[]; fallback = slow)
         @test ChunkManifests.concurrency(c2) == 1 # fallback is the slowest of {fallback, default http/https}
 
         c3 = ChunkManifests.TransportContainers(["s3://bucket/" => slow, "x://" => fast])

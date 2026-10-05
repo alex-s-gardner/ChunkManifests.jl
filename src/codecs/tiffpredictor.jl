@@ -25,14 +25,16 @@ package invented: it is not part of the Zarr or numcodecs specifications. A
 `.zarray` document naming it is readable by ChunkManifests.jl but not by Python
 `zarr`/`numcodecs` or any other Zarr implementation.
 """
-struct TIFFPredictor{T} <: Zarr.Filter{T,T}
+struct TIFFPredictor{T} <: Zarr.Filter{T, T}
     width::Int
     samplesperpixel::Int
 
     function TIFFPredictor{T}(width, samplesperpixel) where {T}
-        isbitstype(T) || throw(ArgumentError(
-            "TIFFPredictor element type must be a bits type, got $T"
-        ))
+        isbitstype(T) || throw(
+            ArgumentError(
+                "TIFFPredictor element type must be a bits type, got $T"
+            )
+        )
         w = Int(width)
         s = Int(samplesperpixel)
         w >= 1 || throw(ArgumentError("width must be at least 1, got $w"))
@@ -54,15 +56,19 @@ _rowsamples(f::TIFFPredictor) = f.width * f.samplesperpixel
 
 function _checkpredictorinput(v::AbstractVector, f::TIFFPredictor{T}) where {T}
     Base.require_one_based_indexing(v)
-    eltype(v) === T || throw(ArgumentError(
-        "TIFFPredictor{$T}: array has eltype $(eltype(v)), expected $T"
-    ))
+    eltype(v) === T || throw(
+        ArgumentError(
+            "TIFFPredictor{$T}: array has eltype $(eltype(v)), expected $T"
+        )
+    )
     rowsamples = _rowsamples(f)
     n = length(v)
-    n % rowsamples == 0 || throw(ArgumentError(
-        "TIFFPredictor: array length $n is not a multiple of width * samplesperpixel " *
-        "($(f.width) * $(f.samplesperpixel) = $rowsamples)"
-    ))
+    n % rowsamples == 0 || throw(
+        ArgumentError(
+            "TIFFPredictor: array length $n is not a multiple of width * samplesperpixel " *
+                "($(f.width) * $(f.samplesperpixel) = $rowsamples)"
+        )
+    )
     return rowsamples
 end
 
@@ -116,10 +122,12 @@ end
 
 function Zarr.getfilter(::Type{<:TIFFPredictor}, d::Dict)
     predictor = get(d, "predictor", 2)
-    predictor == 2 || throw(ArgumentError(
-        "TIFFPredictor only implements TIFF Predictor 2 (horizontal differencing); " *
-        "got predictor $predictor"
-    ))
+    predictor == 2 || throw(
+        ArgumentError(
+            "TIFFPredictor only implements TIFF Predictor 2 (horizontal differencing); " *
+                "got predictor $predictor"
+        )
+    )
     T = Zarr.typestr(d["dtype"])
     return TIFFPredictor{T}(d["width"], d["samplesperpixel"])
 end
@@ -142,11 +150,13 @@ plausible-but-wrong decode would silently corrupt floating-point rasters.
 function tiffpredictor_config(predictor::Integer, ::Type{T}, width::Integer, samplesperpixel::Integer) where {T}
     predictor == 1 && return nothing
     predictor == 2 && return JSON.lower(TIFFPredictor{T}(width, samplesperpixel))
-    predictor == 3 && throw(ArgumentError(
-        "TIFF Predictor 3 (floating-point) is not implemented in ChunkManifests; its decode " *
-        "has not been verified against a known answer, so it is refused rather than risk " *
-        "silently corrupting floating-point data"
-    ))
+    predictor == 3 && throw(
+        ArgumentError(
+            "TIFF Predictor 3 (floating-point) is not implemented in ChunkManifests; its decode " *
+                "has not been verified against a known answer, so it is refused rather than risk " *
+                "silently corrupting floating-point data"
+        )
+    )
     throw(ArgumentError("unknown TIFF Predictor value $predictor; TIFF defines only 1, 2 and 3"))
 end
 

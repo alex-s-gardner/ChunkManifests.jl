@@ -4,7 +4,7 @@ import Zarr
 
 # Builds a one-file-per-chunk ManifestArray over `n` Float64 chunks of one
 # element each, as in test/store.jl and test/readahead.jl.
-function _contig_zarr_va(dir::AbstractString, n::Integer; fname="contig.bin")
+function _contig_zarr_va(dir::AbstractString, n::Integer; fname = "contig.bin")
     path = joinpath(dir, fname)
     write(path, collect(Float64, 1:n))
     table = PathTable()
@@ -14,7 +14,7 @@ function _contig_zarr_va(dir::AbstractString, n::Integer; fname="contig.bin")
     offset = UInt64[(k - 1) * sizeof(Float64) for k in 1:n]
     nbytes = fill(UInt64(sizeof(Float64)), gridsize)
     manifest = ExplicitChunkMap(table, index, offset, nbytes)
-    va = ManifestArray{Float64}(manifest, (Int(n),), (1,); dimnames=["x"])
+    va = ManifestArray{Float64}(manifest, (Int(n),), (1,); dimnames = ["x"])
     return va, path
 end
 
@@ -30,13 +30,13 @@ end
         gridsize = cld.(shape, chunkshape)
         dimnames = ["x", "y", "z"]
         data = reshape(collect(Float64, 1:prod(shape)), shape)
-        compressor = Dict{String,Any}("id" => "zlib", "level" => 3)
+        compressor = Dict{String, Any}("id" => "zlib", "level" => 3)
         fillvalue = -9999.0
 
         mktempdir() do dir
             za = Zarr.zcreate(
                 Float64, Zarr.DirectoryStore(dir), shape...;
-                chunks=chunkshape, compressor=Zarr.ZlibCompressor(3), fill_value=fillvalue,
+                chunks = chunkshape, compressor = Zarr.ZlibCompressor(3), fill_value = fillvalue,
             )
             za[:, :, :] = data
 
@@ -46,7 +46,7 @@ end
             nbytes = zeros(UInt64, gridsize)
             for I in CartesianIndices(gridsize)
                 fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
-                index[I] = push_uri!(table, fname; size=filesize(fname))
+                index[I] = push_uri!(table, fname; size = filesize(fname))
                 nbytes[I] = filesize(fname)
             end
 
@@ -56,18 +56,18 @@ end
             index[I_missing] = ChunkManifests.MISSING_INDEX
             index[I_inline] = ChunkManifests.INLINE_INDEX
 
-            manifest = ExplicitChunkMap(table, index, offset, nbytes; inline=Dict(I_inline => inline_bytes))
+            manifest = ExplicitChunkMap(table, index, offset, nbytes; inline = Dict(I_inline => inline_bytes))
             va = ManifestArray{Float64}(
                 manifest, shape, chunkshape; fillvalue, compressor, dimnames,
-                attrs=Dict{String,Any}("units" => "m"),
+                attrs = Dict{String, Any}("units" => "m"),
             )
             group = ChunkManifest(;
-                arrays=Dict{String,ManifestArray}("" => va),
-                attrs=Dict{String,Any}("title" => "demo"),
-                provenance=Dict{String,Any}("driver" => "HDF5Driver"),
+                arrays = Dict{String, ManifestArray}("" => va),
+                attrs = Dict{String, Any}("title" => "demo"),
+                provenance = Dict{String, Any}("driver" => "HDF5Driver"),
             )
 
-            fmt = ZarrManifest(; chunkcells=4, compressor="zstd")
+            fmt = ZarrManifest(; chunkcells = 4, compressor = "zstd")
             outdir = ChunkManifests.save(joinpath(dir, "manifest_out"), group, fmt)
             group2 = ChunkManifest(outdir, fmt)
             va2 = arraysof(group2)[""]
@@ -99,8 +99,8 @@ end
             end
 
             @testset "bitwise identical through ChunkManifest + Zarr.zopen" begin
-                z1 = Zarr.zopen(ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va)))
-                z2 = Zarr.zopen(ChunkManifest(; arrays=Dict{String,ManifestArray}("" => va2)))
+                z1 = Zarr.zopen(ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va)))
+                z2 = Zarr.zopen(ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va2)))
                 @test z1[:, :, :] == z2[:, :, :]
             end
 
@@ -125,7 +125,7 @@ end
             write(pathB, rand(UInt8, 64))
 
             table = PathTable()
-            idxA = push_uri!(table, pathA; etag="etagA", size=UInt64(64), mtime=1.0)
+            idxA = push_uri!(table, pathA; etag = "etagA", size = UInt64(64), mtime = 1.0)
             idxB = push_uri!(table, pathB) # etag/size/mtime left as `nothing`
 
             gridsize = (4,)
@@ -133,8 +133,8 @@ end
             offset = UInt64[0, 8, 0, 8]
             nbytes = fill(UInt64(8), gridsize)
             manifest = ExplicitChunkMap(table, index, offset, nbytes)
-            va = ManifestArray{UInt8}(manifest, (4,), (1,); dimnames=["x"])
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            va = ManifestArray{UInt8}(manifest, (4,), (1,); dimnames = ["x"])
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
             fmt = ZarrManifest()
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
@@ -160,8 +160,8 @@ end
             table = PathTable()
             push_uri!(table, path)
             manifest = AffineChunkMap(table, (4, 5), UInt64(16), (UInt64(40), UInt64(8)), UInt32(8))
-            va = ManifestArray{Float64}(manifest, (4, 5), (1, 1); dimnames=["x", "y"])
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            va = ManifestArray{Float64}(manifest, (4, 5), (1, 1); dimnames = ["x", "y"])
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
             fmt = ZarrManifest()
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
@@ -179,10 +179,10 @@ end
 
     @testset "multi-array group with nested paths" begin
         mktempdir() do dir
-            arrays = Dict{String,ManifestArray}(
-                "a" => first(_contig_zarr_va(dir, 4; fname="a.bin")),
-                "grp/b" => first(_contig_zarr_va(dir, 5; fname="b.bin")),
-                "grp/sub/c" => first(_contig_zarr_va(dir, 6; fname="c.bin")),
+            arrays = Dict{String, ManifestArray}(
+                "a" => first(_contig_zarr_va(dir, 4; fname = "a.bin")),
+                "grp/b" => first(_contig_zarr_va(dir, 5; fname = "b.bin")),
+                "grp/sub/c" => first(_contig_zarr_va(dir, 6; fname = "c.bin")),
             )
             group = ChunkManifest(; arrays)
 
@@ -206,17 +206,17 @@ end
             n = 200
             va, _ = _contig_zarr_va(dir, n)
             manifest = chunkmapof(va)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
             # 200 cells chunked 8 at a time: 25 manifest chunks per column.
-            fmt = ZarrManifest(; chunkcells=8)
+            fmt = ZarrManifest(; chunkcells = 8)
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
             coldir = joinpath(outdir, "arrays", "0")
 
             allcolumnfiles() = [
                 joinpath(root, f)
-                for col in ("index", "offset", "nbytes")
-                for (root, _, fs) in walkdir(joinpath(coldir, col)) for f in fs
+                    for col in ("index", "offset", "nbytes")
+                    for (root, _, fs) in walkdir(joinpath(coldir, col)) for f in fs
             ]
             files_before = allcolumnfiles()
             totalbytes_before = sum(filesize, files_before)
@@ -263,10 +263,10 @@ end
             )
             nbytes = fill(UInt64(10), gridsize)
             manifest = ExplicitChunkMap(table, index, offset, nbytes)
-            va = ManifestArray{Float64}(manifest, shape, chunkshape; dimnames=["x", "y"])
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            va = ManifestArray{Float64}(manifest, shape, chunkshape; dimnames = ["x", "y"])
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
-            fmt = ZarrManifest(; chunkcells=2)
+            fmt = ZarrManifest(; chunkcells = 2)
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
             manifest2 = chunkmapof(arraysof(ChunkManifest(outdir, fmt))["a"])
             for I in CartesianIndices(gridsize)
@@ -278,8 +278,8 @@ end
     @testset "unrecognized compressor name fails fast" begin
         mktempdir() do dir
             va, _ = _contig_zarr_va(dir, 4)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
-            fmt = ZarrManifest(; compressor="lz4")
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
+            fmt = ZarrManifest(; compressor = "lz4")
             @test_throws "unrecognized compressor" ChunkManifests.save(joinpath(dir, "out"), group, fmt)
         end
     end
@@ -293,12 +293,12 @@ end
             end
 
             va, _ = _contig_zarr_va(dir, 4)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
             @testset "absent format_version field" begin
                 outdir = ChunkManifests.save(joinpath(dir, "out1"), group, fmt)
                 jsonpath = joinpath(outdir, "manifest.json")
-                doc = JSON.parse(read(jsonpath, String); dicttype=Dict{String,Any})
+                doc = JSON.parse(read(jsonpath, String); dicttype = Dict{String, Any})
                 delete!(doc, "format_version")
                 write(jsonpath, JSON.json(doc))
                 @test_throws "format_version" ChunkManifest(outdir, fmt)
@@ -307,7 +307,7 @@ end
             @testset "wrong format_version value" begin
                 outdir = ChunkManifests.save(joinpath(dir, "out2"), group, fmt)
                 jsonpath = joinpath(outdir, "manifest.json")
-                doc = JSON.parse(read(jsonpath, String); dicttype=Dict{String,Any})
+                doc = JSON.parse(read(jsonpath, String); dicttype = Dict{String, Any})
                 doc["format_version"] = 999
                 write(jsonpath, JSON.json(doc))
                 @test_throws "format_version 999" ChunkManifest(outdir, fmt)
@@ -316,7 +316,7 @@ end
             @testset "column shape contradicts recorded chunk grid" begin
                 outdir = ChunkManifests.save(joinpath(dir, "out3"), group, fmt)
                 jsonpath = joinpath(outdir, "manifest.json")
-                doc = JSON.parse(read(jsonpath, String); dicttype=Dict{String,Any})
+                doc = JSON.parse(read(jsonpath, String); dicttype = Dict{String, Any})
                 doc["arrays"][1]["manifest"]["gridsize"] = [2]
                 write(jsonpath, JSON.json(doc))
                 @test_throws "chunk grid" ChunkManifest(outdir, fmt)
@@ -331,7 +331,7 @@ end
         mktempdir() do dir
             va, _ = _contig_zarr_va(dir, 4)
             manifest = chunkmapof(va)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = ZarrManifest()
 
             store = Zarr.DictStore()
@@ -354,7 +354,7 @@ end
         mktempdir() do dir
             va, _ = _contig_zarr_va(dir, 5)
             manifest = chunkmapof(va)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = ZarrManifest()
 
             store = Zarr.DictStore()
@@ -377,11 +377,11 @@ end
         mktempdir() do dir
             va, _ = _contig_zarr_va(dir, 4)
             manifest = chunkmapof(va)
-            group = ChunkManifest(; arrays=Dict{String,ManifestArray}("a" => va))
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = ZarrManifest()
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
 
-            files = Dict{String,Vector{UInt8}}()
+            files = Dict{String, Vector{UInt8}}()
             for (root, _, fnames) in walkdir(outdir)
                 for fname in fnames
                     fpath = joinpath(root, fname)

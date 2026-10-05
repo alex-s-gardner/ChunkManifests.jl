@@ -15,14 +15,14 @@ import YAXArrays
     data = reshape(Int32.(1:(5 * 7)), 5, 7)
     HDF5.h5open(path, "w") do f
         d = HDF5.create_dataset(
-            f, "v", HDF5.datatype(Int32), HDF5.dataspace(data); chunk=(2, 3)
+            f, "v", HDF5.datatype(Int32), HDF5.dataspace(data); chunk = (2, 3)
         )
         HDF5.write(d, data)
     end
 
     counting = FetchCountingTransport()
     cm = ChunkManifest(
-        path; transport=counting, readahead=ReadaheadCache(; maxbytes=0)
+        path; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)
     )
 
     counting.count[] = 0

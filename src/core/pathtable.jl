@@ -5,14 +5,16 @@
 
 Empty [`PathTable`](@ref).
 """
-PathTable() = PathTable(FileEntry[], Dict{String,UInt32}())
+PathTable() = PathTable(FileEntry[], Dict{String, UInt32}())
 
 function _checkmetadata(uri, label, old, new)
     if old !== nothing && new !== nothing && old != new
-        throw(ArgumentError(
-            "push_uri!: $label for \"$uri\" conflicts with the existing entry " *
-            "(existing=$old, new=$new)",
-        ))
+        throw(
+            ArgumentError(
+                "push_uri!: $label for \"$uri\" conflicts with the existing entry " *
+                    "(existing=$old, new=$new)",
+            )
+        )
     end
     return nothing
 end
@@ -31,8 +33,8 @@ mutators here: a chunk map stores that index, so a caller cannot proceed
 without it and recovering it would mean a second lookup.
 """
 function push_uri!(
-    t::PathTable, uri::AbstractString; etag=nothing, size=nothing, mtime=nothing
-)
+        t::PathTable, uri::AbstractString; etag = nothing, size = nothing, mtime = nothing
+    )
     key = String(uri)
     etag = etag === nothing ? nothing : String(etag)
     size = size === nothing ? nothing : UInt64(size)
@@ -66,7 +68,7 @@ function _remaptable!(merged::PathTable, t::PathTable)
     remap = Vector{UInt32}(undef, length(t))
     for i in eachindex(remap)
         entry = t[i]
-        remap[i] = push_uri!(merged, entry.uri; etag=entry.etag, size=entry.size, mtime=entry.mtime)
+        remap[i] = push_uri!(merged, entry.uri; etag = entry.etag, size = entry.size, mtime = entry.mtime)
     end
     return remap
 end
@@ -93,9 +95,11 @@ function seturi!(t::PathTable, i, uri::AbstractString)
     key = String(uri)
     key == old.uri && return t
 
-    haskey(t.lookup, key) && throw(ArgumentError(
-        "seturi!: \"$key\" already names path table entry $(t.lookup[key])"
-    ))
+    haskey(t.lookup, key) && throw(
+        ArgumentError(
+            "seturi!: \"$key\" already names path table entry $(t.lookup[key])"
+        )
+    )
 
     delete!(t.lookup, old.uri)
     t.entries[i] = FileEntry(key, old.etag, old.size, old.mtime)
@@ -114,7 +118,7 @@ URI.
 Every array of a [`ChunkManifest`](@ref) shares one table, so moving an archive
 is one call however many arrays reference it.
 """
-function replace_prefix!(t::PathTable, pr::Pair{<:AbstractString,<:AbstractString})
+function replace_prefix!(t::PathTable, pr::Pair{<:AbstractString, <:AbstractString})
     old, new = pr
     for i in eachindex(t.entries)
         entry = t.entries[i]
@@ -122,10 +126,12 @@ function replace_prefix!(t::PathTable, pr::Pair{<:AbstractString,<:AbstractStrin
         newuri = new * chopprefix(entry.uri, old)
         newuri == entry.uri && continue
 
-        haskey(t.lookup, newuri) && throw(ArgumentError(
-            "replace_prefix!: rewriting \"$(entry.uri)\" to \"$newuri\" collides " *
-            "with existing entry $(t.lookup[newuri])",
-        ))
+        haskey(t.lookup, newuri) && throw(
+            ArgumentError(
+                "replace_prefix!: rewriting \"$(entry.uri)\" to \"$newuri\" collides " *
+                    "with existing entry $(t.lookup[newuri])",
+            )
+        )
 
         delete!(t.lookup, entry.uri)
         t.entries[i] = FileEntry(newuri, entry.etag, entry.size, entry.mtime)

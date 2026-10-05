@@ -18,10 +18,10 @@ so a series assembled from a directory listing is in whatever order the
 listing produced.
 """
 function ManifestSeries(
-    paths::Union{AbstractVector{<:AbstractString},Tuple{AbstractString,Vararg{AbstractString}}},
-    dim;
-    access::SourceAccess=AutoAccess(),
-)
+        paths::Union{AbstractVector{<:AbstractString}, Tuple{AbstractString, Vararg{AbstractString}}},
+        dim;
+        access::SourceAccess = AutoAccess(),
+    )
     isempty(paths) && throw(ArgumentError("ManifestSeries: no paths given"))
     return ManifestSeries(ChunkManifest[_frompath(p, access) for p in paths], dim)
 end
@@ -43,7 +43,7 @@ dimnameof(s::ManifestSeries) = s.dimname
 Base.length(s::ManifestSeries) = length(s.members)
 
 function Base.show(io::IO, s::ManifestSeries)
-    print(io, "ManifestSeries(", length(s.members), " manifests along ", repr(s.dimname), ")")
+    return print(io, "ManifestSeries(", length(s.members), " manifests along ", repr(s.dimname), ")")
 end
 
 # Which dimension of `a` the series' members lie along, or 0 when `a` does not
@@ -52,10 +52,12 @@ function _seriesdim(a::ManifestArray, dimname::AbstractString, key::AbstractStri
     dn = dimnamesof(a)
     hits = findall(==(dimname), dn)
     isempty(hits) && return 0
-    length(hits) == 1 || throw(ArgumentError(
-        "combine: array \"$key\" names dimension $(repr(dimname)) at positions " *
-        "$(hits) of its dimnames $(dn), so which axis the members lie along is ambiguous",
-    ))
+    length(hits) == 1 || throw(
+        ArgumentError(
+            "combine: array \"$key\" names dimension $(repr(dimname)) at positions " *
+                "$(hits) of its dimnames $(dn), so which axis the members lie along is ambiguous",
+        )
+    )
     return only(hits)
 end
 
@@ -63,7 +65,7 @@ end
 # own store. Reading is the reason `check=:values` is opt-in: it costs a fetch
 # per chunk and fails outright when a member's sources are unreachable.
 function _membervalues(m::ChunkManifest, key::AbstractString)
-    return collect(Zarr.zopen(m; path=key))
+    return collect(Zarr.zopen(m; path = key))
 end
 
 # Verifies that the members agree about an array the series does not
@@ -73,16 +75,18 @@ end
 # nothing short of reading the values distinguishes "same grid" from "same
 # bytes".
 function _checkshared(
-    ms::AbstractVector{ChunkManifest}, key::AbstractString, ref::ManifestArray,
-    dimname::AbstractString, check::Symbol,
-)
+        ms::AbstractVector{ChunkManifest}, key::AbstractString, ref::ManifestArray,
+        dimname::AbstractString, check::Symbol,
+    )
     check === :none && return nothing
-    disagrees(i, detail) = throw(ArgumentError(
-        "combine: array \"$key\" has no dimension named $(repr(dimname)), so it is not " *
-        "concatenated and only member $(firstindex(ms))'s copy survives, but member $i's " *
-        "$detail. Concatenate along a dimension the array has, or pass check=:none to take " *
-        "member $(firstindex(ms))'s copy regardless",
-    ))
+    disagrees(i, detail) = throw(
+        ArgumentError(
+            "combine: array \"$key\" has no dimension named $(repr(dimname)), so it is not " *
+                "concatenated and only member $(firstindex(ms))'s copy survives, but member $i's " *
+                "$detail. Concatenate along a dimension the array has, or pass check=:none to take " *
+                "member $(firstindex(ms))'s copy regardless",
+        )
+    )
 
     for i in eachindex(ms)
         i == firstindex(ms) && continue
@@ -144,26 +148,32 @@ Not exported: Rasters exports a `combine` of its own, and sharing the bare name
 would make it ambiguous for exactly the pair of packages a caller here is
 likely to have loaded.
 """
-function combine(s::ManifestSeries; check::Symbol=:shape, attrs=nothing)
-    check in (:shape, :values, :none) || throw(ArgumentError(
-        "combine: check=$(repr(check)) is not one of :shape, :values, :none"
-    ))
+function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
+    check in (:shape, :values, :none) || throw(
+        ArgumentError(
+            "combine: check=$(repr(check)) is not one of :shape, :values, :none"
+        )
+    )
     ms = membersof(s)
     dimname = dimnameof(s)
 
     firstarrays = arraysof(first(ms))
     refkeys = Set(keys(firstarrays))
-    isempty(refkeys) && throw(ArgumentError(
-        "combine: member $(firstindex(ms)) holds no arrays"
-    ))
+    isempty(refkeys) && throw(
+        ArgumentError(
+            "combine: member $(firstindex(ms)) holds no arrays"
+        )
+    )
     for i in eachindex(ms)
         i == firstindex(ms) && continue
         ks = Set(keys(arraysof(ms[i])))
-        ks == refkeys || throw(ArgumentError(
-            "combine: member $i has array keys $(sort(collect(ks))), expected " *
-            "$(sort(collect(refkeys))) (from member $(firstindex(ms))); differs by " *
-            "$(sort(collect(symdiff(ks, refkeys))))",
-        ))
+        ks == refkeys || throw(
+            ArgumentError(
+                "combine: member $i has array keys $(sort(collect(ks))), expected " *
+                    "$(sort(collect(refkeys))) (from member $(firstindex(ms))); differs by " *
+                    "$(sort(collect(symdiff(ks, refkeys))))",
+            )
+        )
     end
 
     # Resolved up front so that a dimension no array names is reported as such,
@@ -171,11 +181,13 @@ function combine(s::ManifestSeries; check::Symbol=:shape, attrs=nothing)
     arraykeys = sort!(collect(refkeys))
     refarrays = [firstarrays[key] for key in arraykeys]
     dimindex = map(_seriesdim, refarrays, fill(dimname, length(arraykeys)), arraykeys)
-    all(iszero, dimindex) && throw(ArgumentError(
-        "combine: no array names a dimension $(repr(dimname)), so there is nothing to " *
-        "concatenate. The members' arrays have dimnames " *
-        "$(sort(unique(vcat(map(dimnamesof, refarrays)...))))",
-    ))
+    all(iszero, dimindex) && throw(
+        ArgumentError(
+            "combine: no array names a dimension $(repr(dimname)), so there is nothing to " *
+                "concatenate. The members' arrays have dimnames " *
+                "$(sort(unique(vcat(map(dimnamesof, refarrays)...))))",
+        )
+    )
 
     # Settled before any chunk map is rebuilt: a conflicting attribute is pure
     # metadata, and reporting it only after the whole concatenation would make
@@ -189,7 +201,7 @@ function combine(s::ManifestSeries; check::Symbol=:shape, attrs=nothing)
     # its path table; the arrays left uncombined are brought onto it by the
     # constructor below.
     table = PathTable()
-    arrays = Dict{String,ManifestArray}()
+    arrays = Dict{String, ManifestArray}()
     for (key, ref, d) in zip(arraykeys, refarrays, dimindex)
         if d == 0
             _checkshared(ms, key, ref, dimname, check)
@@ -197,18 +209,20 @@ function combine(s::ManifestSeries; check::Symbol=:shape, attrs=nothing)
             continue
         end
         try
-            arrays[key] = concat([arraysof(m)[key] for m in ms]; dims=d, table)
+            arrays[key] = concat([arraysof(m)[key] for m in ms]; dims = d, table)
         catch e
             e isa ArgumentError || rethrow()
-            throw(ArgumentError(
-                "combine: array \"$key\" is concatenated along $(repr(dimname)), its " *
-                "dimension $d; member N appears as array N here. $(e.msg)",
-            ))
+            throw(
+                ArgumentError(
+                    "combine: array \"$key\" is concatenated along $(repr(dimname)), its " *
+                        "dimension $d; member N appears as array N here. $(e.msg)",
+                )
+            )
         end
     end
 
-    provenance = Dict{String,Any}(
+    provenance = Dict{String, Any}(
         "driver" => "combine", "ninputs" => length(ms), "dim" => dimname,
     )
-    return ChunkManifest(; arrays, table, attrs=mergedattrs, provenance)
+    return ChunkManifest(; arrays, table, attrs = mergedattrs, provenance)
 end
