@@ -587,9 +587,14 @@ end
 Read the object in place through HDF5's read-only S3 virtual file driver, so
 only the metadata libhdf5 actually touches is transferred.
 
-Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports and
-the HDF5 binaries shipped by `HDF5_jll` do not have; pointing HDF5.jl at a
-system library that does is what makes this available.
+Requires a libhdf5 built with that driver, which `HDF5.has_ros3()` reports.
+`HDF5_jll` carries it from 2.2.3 onward; an environment resolving an earlier
+one needs HDF5.jl pointed at a system library that has it.
+
+`aws` is the `HDF5.Drivers.ROS3` to open the object with, and `nothing` takes
+`HDF5.Drivers.ROS3()`, which declares no region. libhdf5 addresses an object by
+S3-style endpoint URL and parses it before issuing any request, so a URL it
+does not recognize as one fails there whatever the region says.
 """
 struct ROS3Access <: SourceAccess
     aws::Any

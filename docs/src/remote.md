@@ -48,5 +48,17 @@ same object is local.
 [`ROS3Access`](@ref) requires an `https://` endpoint rather than an `s3://` URI, because the
 region an `s3://` URI resolves to cannot be recovered from the URI alone.
 
+It has to be a real S3-style endpoint. libhdf5 parses the URL as one before issuing any
+request, so an arbitrary HTTP URL that merely serves the bytes — a plain web server, or a
+local one — is rejected at that point, whatever region the driver declares. This is why
+`ROS3Access` is marked unverified: the path cannot be exercised without an actual S3
+endpoint.
+
+The driver itself is configured by passing one to `aws`:
+
+```julia
+scan(url, HDF5Driver(); access = ROS3Access(; aws = HDF5.Drivers.ROS3(region, id, key)))
+```
+
 Reaching S3 for *chunk* bytes, as opposed to scanning, is a transport question rather than an
 access question — see [`S3Transport`](@ref) under [Fetching chunk bytes](@ref).

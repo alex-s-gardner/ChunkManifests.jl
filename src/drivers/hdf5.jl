@@ -514,10 +514,11 @@ function _scan_hdf5(
     HDF5.has_ros3() || throw(
         ArgumentError(
             "ROS3Access cannot scan $(repr(uri)): this libhdf5 has no read-only S3 " *
-                "virtual file driver (HDF5.has_ros3() is false, and the binaries shipped " *
-                "by HDF5_jll are built without it). Point HDF5.jl at a libhdf5 built with " *
-                "that driver, or scan with DownloadAccess(), which fetches the object " *
-                "once and works anywhere",
+                "virtual file driver (HDF5.has_ros3() is false). HDF5_jll carries it " *
+                "from 2.2.3 onward, so an earlier one resolved here is the usual cause; " *
+                "upgrade it, point HDF5.jl at a system libhdf5 built with that driver, " *
+                "or scan with DownloadAccess(), which fetches the object once and works " *
+                "anywhere",
         )
     )
     (startswith(uri, "https://") || startswith(uri, "http://")) || throw(

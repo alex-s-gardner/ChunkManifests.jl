@@ -122,23 +122,18 @@ end
 
     @testset "ROS3Access" begin
         if HDF5.has_ros3()
-            # Only reachable on a libhdf5 built with the driver, which the
-            # HDF5_jll binaries are not. Given no credentials, ros3 issues
-            # unauthenticated ranged GETs, so a local endpoint is enough to
-            # read a real file through it and confirm the driver is wired up
-            # rather than merely present.
+            # A local HTTP server cannot stand in for S3 here. libhdf5's
+            # s3comms URL parser rejects `http://127.0.0.1:<port>/<name>`
+            # before any request is made, and naming a region does not change
+            # that, so reading a real file through the driver needs a genuine
+            # S3-style endpoint and cannot be covered in this suite. What is
+            # covered is that the attempt fails as libhdf5's error rather than
+            # silently reading nothing. The exception type is asserted, not its
+            # text, which differs between platforms.
             _acc_withserver(read(src), "src.h5") do url
-                cm = ChunkManifests.scan(url, HDF5Driver(); access = ROS3Access())
-                @test sort(collect(keys(arraysof(cm)))) == ["data"]
-                @test Array(Zarr.zopen(cm)["data"][:]) == expected
-
-                m = chunkmapof(arraysof(cm)["data"])
-                for I in CartesianIndices(chunkgridaxes(m))
-                    @test chunklocation(m, I)[1] == url
-                end
-                # Nothing was fetched whole, so no size is recorded for the
-                # entry; see _scan_hdf5 for ROS3Access.
-                @test tableof(cm)[1].size === nothing
+                @test_throws HDF5.API.H5Error ChunkManifests.scan(
+                    url, HDF5Driver(); access = ROS3Access()
+                )
             end
 
             # On such a build AutoAccess prefers reading in place.
@@ -155,8 +150,9 @@ end
                 "s3://b/k.h5", HDF5Driver(); access = ROS3Access()
             )
         else
-            # The binaries shipped by HDF5_jll are built without the driver, so
-            # the message has to name the alternative rather than just fail.
+            # HDF5_jll carries the driver from 2.2.3 onward, so this branch is
+            # what an environment resolving an earlier one takes. The message
+            # has to name the alternative rather than just fail.
             msg = try
                 ChunkManifests.scan("https://h/k.h5", HDF5Driver(); access = ROS3Access())
                 ""
