@@ -193,7 +193,7 @@ function _save_chunkmanifest(
     return Dict{String,Any}(
         "kind" => "chunk",
         "gridsize" => collect(gridsize),
-        "pathtable" => _pathtable_to_json(manifest.table),
+        "tableof" => _pathtable_to_json(manifest.table),
         "inline" => inline,
     )
 end
@@ -202,7 +202,7 @@ function _save_affinemanifest(manifest::AffineChunkMap)
     return Dict{String,Any}(
         "kind" => "affine",
         "gridsize" => collect(manifest.gridsize),
-        "pathtable" => _pathtable_to_json(manifest.table),
+        "tableof" => _pathtable_to_json(manifest.table),
         "fileindex" => manifest.fileindex,
         "base" => manifest.base,
         "strides" => collect(manifest.strides),
@@ -244,7 +244,7 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
         doc = Dict{String,Any}(
             "path" => key,
             "dtype" => zarr_dtype_string(eltype(va)),
-            "shape" => collect(shapeof(va)),
+            "shape" => collect(size(va)),
             "chunkshape" => collect(chunkshapeof(va)),
             "fillvalue" => fillvalueof(va),
             "compressor" => compressorof(va),
@@ -307,7 +307,7 @@ end
 function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, arraydoc, label::AbstractString)
     mdoc = arraydoc["manifest"]
     kind = mdoc["kind"]
-    table = _pathtable_from_json(mdoc["pathtable"])
+    table = _pathtable_from_json(mdoc["tableof"])
     gridsize = NTuple{length(mdoc["gridsize"]),Int}(mdoc["gridsize"])
 
     if kind == "chunk"
@@ -331,7 +331,7 @@ function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, a
 end
 
 """
-    load(path, fmt::ZarrManifest) -> ChunkManifest
+    ChunkManifest(path, fmt::ZarrManifest) -> ChunkManifest
 
 Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
 `path`. `path` is resolved to a store through `Zarr.storefromstring`, the
@@ -340,22 +340,22 @@ back by this same method. A `ExplicitChunkMap`'s columns are opened as
 `Zarr.ZArray`s rather than materialized, so a manifest larger than memory can
 be read back lazily.
 """
-function load(path::AbstractString, fmt::ZarrManifest)
+function ChunkManifest(path::AbstractString, fmt::ZarrManifest)
     store, prefix = _resolvestore(path, false)
-    return load(store, prefix, fmt; label=path)
+    return ChunkManifest(store, prefix, fmt; label=path)
 end
 
 """
-    load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label=prefix) -> ChunkManifest
+    ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label=prefix) -> ChunkManifest
 
 Read a [`ZarrManifest`](@ref) from `store` under the key prefix `prefix`,
-exactly as `load(path, fmt)` does once it has resolved `path` to a store.
+exactly as `ChunkManifest(path, fmt)` does once it has resolved `path` to a store.
 `label` names `store`/`prefix` in any error message; it defaults to `prefix`
 since a bare store has no path of its own. Not part of the public interface;
 exists so a manifest's store-agnosticism can be exercised directly against
 any `Zarr.AbstractStore`.
 """
-function load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString=prefix)
+function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString=prefix)
     jsonbytes = store[prefix, _ZARR_MANIFEST_JSON]
     jsonbytes === nothing && throw(ArgumentError(
         "load: \"$label\" has no $_ZARR_MANIFEST_JSON; not a ZarrManifest directory"

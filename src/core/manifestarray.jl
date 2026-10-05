@@ -24,51 +24,8 @@ function ManifestArray{T}(
     attrs=Dict{String,Any}(),
     dimnames=["dim_$i" for i in 1:N],
 ) where {T,N}
-    length(shape) == N || throw(ArgumentError(
-        "ManifestArray: shape has $(length(shape)) dimensions but manifest has $N"
-    ))
-    length(chunkshape) == N || throw(ArgumentError(
-        "ManifestArray: chunkshape has $(length(chunkshape)) dimensions but manifest has $N"
-    ))
-    length(dimnames) == N || throw(ArgumentError(
-        "ManifestArray: dimnames has length $(length(dimnames)) but array has $N dimensions"
-    ))
-    haskey(attrs, "_ARRAY_DIMENSIONS") && throw(ArgumentError(
-        "ManifestArray: attrs must not contain \"_ARRAY_DIMENSIONS\"; it is derived " *
-        "from dimnames at serialization time",
-    ))
-
-    shapetuple = NTuple{N,Int}(Tuple(shape))
-    chunkshapetuple = NTuple{N,Int}(Tuple(chunkshape))
-    expected = cld.(shapetuple, chunkshapetuple)
-    actual = chunkgridsize(manifest)
-    expected == actual || throw(DimensionMismatch(
-        "ManifestArray: manifest chunk grid size $actual does not match " *
-        "cld.(shape, chunkshape) = $expected (shape=$shapetuple, chunkshape=$chunkshapetuple)",
-    ))
-
-    fv = if fillvalue === nothing
-        nothing
-    else
-        try
-            convert(T, fillvalue)
-        catch
-            throw(ArgumentError(
-                "ManifestArray: fill value $(repr(fillvalue)) is not representable " *
-                "as the element type $T",
-            ))
-        end
-    end
-
     return ManifestArray{T,N,typeof(manifest)}(
-        manifest,
-        shapetuple,
-        chunkshapetuple,
-        fv,
-        compressor,
-        filters,
-        attrs,
-        collect(String, dimnames),
+        manifest, shape, chunkshape, fillvalue, compressor, filters, attrs, dimnames
     )
 end
 
@@ -79,13 +36,6 @@ The chunk map locating `a`'s bytes — an [`ExplicitChunkMap`](@ref) with one
 entry per chunk, or an [`AffineChunkMap`](@ref) holding a closed form instead.
 """
 chunkmapof(a::ManifestArray) = a.manifest
-
-"""
-    shapeof(a::ManifestArray) -> NTuple{N,Int}
-
-Extent of `a` in elements, per dimension. Same as `size(a)`.
-"""
-shapeof(a::ManifestArray) = a.shape
 
 """
     chunkshapeof(a::ManifestArray) -> NTuple{N,Int}
@@ -165,11 +115,11 @@ end
 # that repointing a file is a single edit and validate costs one request per
 # file rather than per chunk. Identity, not equality: two equal tables would
 # still have to be kept in sync by hand after a seturi!/replace_prefix!.
-_sharestable(a::ManifestArray, table::PathTable) = pathtable(chunkmapof(a)) === table
+_sharestable(a::ManifestArray, table::PathTable) = tableof(chunkmapof(a)) === table
 
 function _rebuildchunkmap(a::ManifestArray{T}, m::AbstractChunkMap) where {T}
     return ManifestArray{T}(
-        m, shapeof(a), chunkshapeof(a);
+        m, size(a), chunkshapeof(a);
         fillvalue=fillvalueof(a),
         compressor=compressorof(a),
         filters=filtersof(a),
@@ -187,10 +137,10 @@ function _sharetable!(table::PathTable, arrays::AbstractDict{String,ManifestArra
     for key in sort!(collect(keys(arrays)))
         a = arrays[key]
         m = chunkmapof(a)
-        out[key] = if pathtable(m) === table
+        out[key] = if tableof(m) === table
             a
         else
-            _rebuildchunkmap(a, _retable(m, table, _remaptable!(table, pathtable(m))))
+            _rebuildchunkmap(a, _retable(m, table, _remaptable!(table, tableof(m))))
         end
     end
     return out
@@ -203,7 +153,7 @@ end
 function _normalizetable(arrays::AbstractDict{String,ManifestArray}, table)
     table === nothing || return table, _sharetable!(table, arrays)
     isempty(arrays) && return PathTable(), arrays
-    candidate = pathtable(chunkmapof(arrays[first(sort!(collect(keys(arrays))))]))
+    candidate = tableof(chunkmapof(arrays[first(sort!(collect(keys(arrays))))]))
     all(a -> _sharestable(a, candidate), values(arrays)) && return candidate, arrays
     fresh = PathTable()
     return fresh, _sharetable!(fresh, arrays)
@@ -256,7 +206,7 @@ or disabling readahead — without rescanning or rebuilding its arrays.
 function ChunkManifest(
     m::ChunkManifest;
     arrays=arraysof(m),
-    table=pathtable(m),
+    table=tableof(m),
     attrs=attrsof(m),
     provenance=provenanceof(m),
     transport::AbstractTransport=transportof(m),
@@ -291,7 +241,7 @@ and reload in every format.
 """
 provenanceof(g::ChunkManifest) = g.provenance
 
-pathtable(g::ChunkManifest) = g.table
+tableof(g::ChunkManifest) = g.table
 
 """
     transportof(g::ChunkManifest) -> AbstractTransport

@@ -25,6 +25,10 @@ present. A `uri` already in `t` returns its existing index without growing
 the table. If any of `etag`, `size` or `mtime` is given and conflicts with
 what is already stored for that `uri`, throws rather than silently keeping
 either value.
+
+This returns the index rather than `t`, unlike `Base.push!` and the other
+mutators here: a chunk map stores that index, so a caller cannot proceed
+without it and recovering it would mean a second lookup.
 """
 function push_uri!(
     t::PathTable, uri::AbstractString; etag=nothing, size=nothing, mtime=nothing
@@ -100,15 +104,18 @@ function seturi!(t::PathTable, i, uri::AbstractString)
 end
 
 """
-    replace_prefix!(t::PathTable, old => new) -> Int
+    replace_prefix!(t::PathTable, old => new) -> PathTable
 
 Rewrite every entry whose URI starts with `old` so that prefix becomes `new`,
-keeping `t`'s internal lookup consistent. Returns the number of entries
-changed. Throws if a rewrite would collide with another entry's URI.
+keeping `t`'s internal lookup consistent. Returns `t`, as `Base.replace!`
+returns its collection. Throws if a rewrite would collide with another entry's
+URI.
+
+Every array of a [`ChunkManifest`](@ref) shares one table, so moving an archive
+is one call however many arrays reference it.
 """
 function replace_prefix!(t::PathTable, pr::Pair{<:AbstractString,<:AbstractString})
     old, new = pr
-    count = 0
     for i in eachindex(t.entries)
         entry = t.entries[i]
         startswith(entry.uri, old) || continue
@@ -123,7 +130,6 @@ function replace_prefix!(t::PathTable, pr::Pair{<:AbstractString,<:AbstractStrin
         delete!(t.lookup, entry.uri)
         t.entries[i] = FileEntry(newuri, entry.etag, entry.size, entry.mtime)
         t.lookup[newuri] = UInt32(i)
-        count += 1
     end
-    return count
+    return t
 end

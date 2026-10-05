@@ -108,7 +108,7 @@ function concat(
 
     runningshift = 0
     for (i, m) in enumerate(ms)
-        remap = _remaptable!(merged, pathtable(m))
+        remap = _remaptable!(merged, tableof(m))
         index, offset, nbytes, inline = _materialize(m, remap)
         indices[i] = index
         offsets[i] = offset
@@ -223,8 +223,8 @@ function concat(
             "concat: array $i has dimnames $(dimnamesof(a)), expected $(dimnamesof(ref)) (from array 1)"
         ))
 
-        shape = shapeof(a)
-        refshape = shapeof(ref)
+        shape = size(a)
+        refshape = size(ref)
         for d in eachindex(shape)
             d == dims && continue
             shape[d] == refshape[d] || throw(ArgumentError(
@@ -236,7 +236,7 @@ function concat(
 
     for (i, a) in enumerate(xs)
         i == length(xs) && continue
-        extent = shapeof(a)[dims]
+        extent = size(a)[dims]
         chunklen = chunkshapeof(a)[dims]
         r = extent % chunklen
         r == 0 || throw(ArgumentError(
@@ -253,7 +253,7 @@ function concat(
 
     mergedmanifest = concat(collect(AbstractChunkMap, chunkmapof.(xs)); dims, table)
 
-    mergedshape = ntuple(d -> d == dims ? sum(shapeof(a)[dims] for a in xs) : shapeof(ref)[d], N)
+    mergedshape = ntuple(d -> d == dims ? sum(size(a)[dims] for a in xs) : size(ref)[d], N)
 
     return ManifestArray{eltype(ref)}(
         mergedmanifest,
@@ -284,6 +284,14 @@ transport is a fresh [`TransportContainers`](@ref) that resolves each URI by
 scheme — concatenating a local scan with a remote one yields a manifest whose
 files span both. Use `ChunkManifest(result; transport=...)` to supply
 credentials or restrict what may be fetched.
+
+`dims` is a number here and a name in [`ManifestSeries`](@ref) because the two
+address different things. Every array under a shared key has the same
+dimension order, so one number identifies the same axis in all of them;
+across a whole group it would not, since `time` is dimension 3 of a data
+variable and dimension 1 of its own coordinate. Use
+`ChunkManifests.combine(ManifestSeries(…, :time))` when the arrays disagree on
+where the dimension sits, and this when they agree.
 """
 function concat(
     gs::Union{AbstractVector{<:ChunkManifest},Tuple{Vararg{ChunkManifest}}};

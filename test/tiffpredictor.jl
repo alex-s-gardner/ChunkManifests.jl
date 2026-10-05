@@ -147,4 +147,26 @@ import Random
         @test z2[:] == original
     end
 
+    @testset "register_codec! accepts the callable first" begin
+        # A throwaway driver type so the registry entry cannot collide with a
+        # real driver's, and the two call forms can be compared directly.
+        struct _DoBlockDriver <: AbstractDriver end
+        struct _PositionalDriver <: AbstractDriver end
+
+        ChunkManifests.register_codec!(
+            _PositionalDriver, 999, ChunkManifests.COMPRESSOR,
+            (pipeline, itemsize) -> Dict{String,Any}("id" => "zlib"),
+        )
+        ChunkManifests.register_codec!(
+            _DoBlockDriver, 999, ChunkManifests.COMPRESSOR
+        ) do pipeline, itemsize
+            Dict{String,Any}("id" => "zlib")
+        end
+
+        a = ChunkManifests.lookup_codec(_PositionalDriver, 999)
+        b = ChunkManifests.lookup_codec(_DoBlockDriver, 999)
+        @test a.role == b.role == ChunkManifests.COMPRESSOR
+        @test a.convert(nothing, 4) == b.convert(nothing, 4)
+    end
+
 end

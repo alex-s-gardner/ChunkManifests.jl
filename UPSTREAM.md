@@ -23,6 +23,13 @@ The runtime `zarr_decodes_byte_filters()` probe stays either way: a patched
 branch is version-indistinguishable from an unpatched one, so a version bound
 cannot gate the behavior and a probe is the only correct test.
 
+**The pin does not reach Julia 1.10.** `[sources]` is a Julia 1.11 feature and
+is ignored by earlier versions, so `Manifest-v1.10.toml` resolves Zarr from the
+registry while `Manifest.toml` resolves the fork. On lts the probe therefore
+returns `false` and the tests take their unpatched branches — which is the only
+place those branches are exercised, and the reason a change can pass on release
+and fail on lts.
+
 ## Zarr.jl — split into subpackages, umbrella not yet released
 
 Zarr.jl is now a monorepo. `ZarrCore`, `ZarrBlosc`, `ZarrGCS`, `ZarrHTTP`,

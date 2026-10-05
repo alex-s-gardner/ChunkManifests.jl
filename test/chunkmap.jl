@@ -38,7 +38,7 @@
         @test_throws "MISSING_CHUNK" inlinebytes(m, CartesianIndex(1, 2))
 
         @test manifestversion(m) == ChunkManifests.MANIFEST_FORMAT_VERSION
-        @test pathtable(m) === t
+        @test tableof(m) === t
     end
 
     @testset "ExplicitChunkMap axes mismatch" begin
@@ -120,6 +120,19 @@
         )
         @test_throws "out of range" AffineChunkMap(
             t, gridsize, UInt64(0), strides, UInt32(8); fileindex=0
+        )
+
+        # The invariant holds for every call form, not just the keyword one:
+        # an out-of-range fileindex reaching the field would make every chunk
+        # read whichever file landed at that row.
+        @test_throws "out of range" AffineChunkMap{2}(
+            t, 4, gridsize, UInt64(0), strides, UInt32(8)
+        )
+        @test_throws "out of range" AffineChunkMap{2}(
+            t, 0, gridsize, UInt64(0), strides, UInt32(8)
+        )
+        @test_throws DimensionMismatch AffineChunkMap{2}(
+            t, 1, gridsize, UInt64(0), (UInt64(8),), UInt32(8)
         )
     end
 

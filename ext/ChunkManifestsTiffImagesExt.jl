@@ -533,7 +533,7 @@ function _gt_scanifd(
 end
 
 """
-    scan(driver::GeoTIFFDriver, path::AbstractString) -> ChunkManifest
+    scan(path::AbstractString, driver::GeoTIFFDriver) -> ChunkManifest
 
 Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each main-chain image file
 directory (page) becomes one array, keyed by its 0-based page index as a
@@ -563,7 +563,7 @@ or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
 entry nesting deeper than one level, and any IFD offset — main chain or
 `SubIFDs` — revisited while scanning, which would otherwise loop forever.
 """
-function ChunkManifests.scan(driver::ChunkManifests.GeoTIFFDriver, path::AbstractString)
+function ChunkManifests.scan(path::AbstractString, driver::ChunkManifests.GeoTIFFDriver)
     isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
 
     table = ChunkManifests.PathTable()

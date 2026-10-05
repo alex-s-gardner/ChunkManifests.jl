@@ -37,22 +37,8 @@ Build an [`AffineChunkMap`](@ref) over a chunk grid of size `gridsize`
 function AffineChunkMap(
     table::PathTable, gridsize, base, strides, chunkbytes; fileindex::Integer=1
 )
-    1 <= fileindex <= length(table) || throw(ArgumentError(
-        "AffineChunkMap: fileindex $fileindex is out of range for a path table " *
-        "holding $(length(table)) entries",
-    ))
-
-    gridsizetuple = map(Int, Tuple(gridsize))
-    stridestuple = map(UInt64, Tuple(strides))
-    N = length(gridsizetuple)
-    length(stridestuple) == N || throw(DimensionMismatch(
-        "AffineChunkMap: gridsize has $N dimensions but strides has $(length(stridestuple))"
-    ))
-
-    return AffineChunkMap{N}(
-        table, UInt32(fileindex), gridsizetuple, UInt64(base), stridestuple,
-        UInt32(chunkbytes),
-    )
+    N = length(Tuple(gridsize))
+    return AffineChunkMap{N}(table, fileindex, gridsize, base, strides, chunkbytes)
 end
 
 function _chunkstate(idx::UInt32)
@@ -62,8 +48,8 @@ function _chunkstate(idx::UInt32)
 end
 
 """
-    pathtable(m::AbstractChunkMap) -> PathTable
-    pathtable(g::ChunkManifest) -> PathTable
+    tableof(m::AbstractChunkMap) -> PathTable
+    tableof(g::ChunkManifest) -> PathTable
 
 The [`PathTable`](@ref) whose rows `m`'s chunk indices name.
 
@@ -71,7 +57,7 @@ Every array of a [`ChunkManifest`](@ref) shares one table by reference, so the
 table returned here is the manifest's own, not a copy: editing it through
 [`seturi!`](@ref) or [`replace_prefix!`](@ref) repoints every array at once.
 """
-pathtable(m::AbstractChunkMap) = m.table
+tableof(m::AbstractChunkMap) = m.table
 
 """
     manifestversion(m::AbstractChunkMap) -> Int
@@ -270,5 +256,5 @@ function ExplicitChunkMap(m::AffineChunkMap{N}) where {N}
         offset[J] = off
         nbytes[J] = len
     end
-    return ExplicitChunkMap(pathtable(m), index, offset, nbytes)
+    return ExplicitChunkMap(tableof(m), index, offset, nbytes)
 end

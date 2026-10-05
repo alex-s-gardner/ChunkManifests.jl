@@ -41,11 +41,11 @@ export ManifestFormat, ZarrManifest, KerchunkJSON, KerchunkParquet
 export ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK
 export FileEntry, PathTable, ManifestArray, ChunkManifest, ManifestSeries
 export chunkgridaxes, chunkgridsize, chunkstate, chunklocation, inlinebytes
-export manifestversion, pathtable
+export manifestversion, tableof
 export uriof, push_uri!, seturi!, replace_prefix!
 export fetchrange, fetchranges, objectsize
 export concat, validate, setchunk!
-export chunkmapof, shapeof, chunkshapeof, fillvalueof, compressorof, filtersof
+export chunkmapof, chunkshapeof, fillvalueof, compressorof, filtersof
 export attrsof, dimnamesof, arraysof, provenanceof, transportof
 export membersof, dimnameof
 

@@ -249,7 +249,7 @@ end
             fmt = KerchunkParquet(; recordsize=4)
             root = joinpath(dir, "roundtrip.parq")
             ChunkManifests.save(root, group, fmt)
-            group2 = ChunkManifests.load(root, fmt)
+            group2 = ChunkManifest(root, fmt)
             va2 = arraysof(group2)["a"]
 
             @testset "manifest contents agree chunk by chunk" begin
@@ -273,8 +273,8 @@ end
             root = joinpath(dir, "mismatch.parq")
             ChunkManifests.save(root, group, KerchunkParquet(; recordsize=4))
 
-            @test_throws "record_size=4" ChunkManifests.load(root, KerchunkParquet(; recordsize=5))
-            @test_throws "no .zmetadata" ChunkManifests.load(joinpath(dir, "nope.parq"), KerchunkParquet())
+            @test_throws "record_size=4" ChunkManifest(root, KerchunkParquet(; recordsize=5))
+            @test_throws "no .zmetadata" ChunkManifest(joinpath(dir, "nope.parq"), KerchunkParquet())
         end
     end
 
@@ -299,7 +299,7 @@ end
             )
             Parquet2.writefile(fpath, tbl; compression_codec=:zstd, compute_statistics=false)
 
-            @test_throws "whole-object reference" ChunkManifests.load(root, fmt)
+            @test_throws "whole-object reference" ChunkManifest(root, fmt)
         end
     end
 
@@ -321,7 +321,7 @@ end
         @test Array(Zarr.zopen(back)["d"][:]) == collect(Float64, 1:n)
         # Loading must leave every array on the manifest's own table.
         for a in values(arraysof(back))
-            @test pathtable(chunkmapof(a)) === pathtable(back)
+            @test tableof(chunkmapof(a)) === tableof(back)
         end
     end
 

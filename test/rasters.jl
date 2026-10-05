@@ -228,7 +228,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
         @testset "real NetCDF4 file: a window touches only the chunks it covers" begin
             counting = FetchCountingTransport(; coalesce=false)
             cm = ChunkManifest(
-                scan(HDF5Driver(), _RA_ITSLIVE_PATH; group="/grounded");
+                scan(_RA_ITSLIVE_PATH, HDF5Driver(); group="/grounded");
                 transport=counting, readahead=ReadaheadCache(; maxbytes=0),
             )
             va = arraysof(cm)["grounded"]
@@ -242,7 +242,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
             # more. No chunk of grounded itself is touched, which is what the
             # window counts below establish: it has 36 of them.
             @test counting.count[] == 2
-            @test size(r) == shapeof(va)
+            @test size(r) == size(va)
             @test Rasters.isdisk(r)
 
             counting.count[] = 0
@@ -276,7 +276,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
             # on its fixed-length-string `mapping` variable.
             arrays = Dict{String,ManifestArray}()
             for k in ("grounded", "x", "y")
-                merge!(arrays, arraysof(scan(HDF5Driver(), _RA_ITSLIVE_PATH; group="/$k")))
+                merge!(arrays, arraysof(scan(_RA_ITSLIVE_PATH, HDF5Driver(); group="/$k")))
             end
             cm = ChunkManifest(; arrays)
             r = Rasters.Raster(cm, "grounded")
@@ -318,7 +318,7 @@ _ra_decode(hv) = Union{Missing,Float64}[
             # would do it is `_dims(var, crs, mappedcrs)` — the one the
             # extension already calls — so a Raster built here picks a CRS up
             # with no change on this side once Rasters reads these keys.
-            cm = scan(HDF5Driver(), _RA_ITSLIVE_PATH)
+            cm = scan(_RA_ITSLIVE_PATH, HDF5Driver())
             ds = ZarrDatasets.ZarrDataset(cm)
 
             # The data variable names its grid-mapping variable, which is the

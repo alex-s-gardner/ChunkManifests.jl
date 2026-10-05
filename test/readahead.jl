@@ -205,7 +205,7 @@ end
             nchunks = 8
             va, _, vals = _contig_va(dir, nchunks)
             manifest = chunkmapof(va)
-            table = pathtable(manifest)
+            table = tableof(manifest)
 
             index = fill(UInt32(1), (nchunks,))
             offset = UInt64[(k - 1) * sizeof(Float64) for k in 1:nchunks]

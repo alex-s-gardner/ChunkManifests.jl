@@ -22,11 +22,11 @@ end
         _cc_write_h5(fileA, "x", dataA, (2, 3))
         _cc_write_h5(fileB, "x", dataB, (2, 3))
 
-        vaA = arraysof(scan(HDF5Driver(), fileA; group="/x"))["x"]
-        vaB = arraysof(scan(HDF5Driver(), fileB; group="/x"))["x"]
+        vaA = arraysof(scan(fileA, HDF5Driver(); group="/x"))["x"]
+        vaB = arraysof(scan(fileB, HDF5Driver(); group="/x"))["x"]
 
         merged = concat([vaA, vaB]; dims=2)
-        @test shapeof(merged) == (4, 15)
+        @test size(merged) == (4, 15)
         @test chunkshapeof(merged) == (2, 3)
 
         group = ChunkManifest(; arrays=Dict{String,ManifestArray}("" => merged))
@@ -142,7 +142,7 @@ end
             a2 = dummy_manifestarray((4, 6), (2, 3), "t2.bin")
             a3 = dummy_manifestarray((4, 3), (2, 3), "t3.bin")
             merged = concat([a1, a2, a3]; dims=2)
-            @test shapeof(merged) == (4, 15)
+            @test size(merged) == (4, 15)
             @test chunkgridsize(chunkmapof(merged)) == (2, 5)
         end
 
@@ -239,7 +239,7 @@ end
             a1 = dummy_manifestarray((4, 6), (2, 3), "p1.bin")
             a2 = dummy_manifestarray((4, 5), (2, 3), "p2.bin")  # final input, extent 5 not a multiple of 3
             merged = concat([a1, a2]; dims=2)
-            @test shapeof(merged) == (4, 11)
+            @test size(merged) == (4, 11)
         end
 
         @testset "single input and empty input" begin
@@ -269,8 +269,8 @@ end
 
             merged = concat([g1, g2]; dims=2)
             @test Set(keys(arraysof(merged))) == Set(["root", "nested/arr"])
-            @test shapeof(arraysof(merged)["root"]) == (4, 12)
-            @test shapeof(arraysof(merged)["nested/arr"]) == (4, 12)
+            @test size(arraysof(merged)["root"]) == (4, 12)
+            @test size(arraysof(merged)["nested/arr"]) == (4, 12)
             @test attrsof(merged)["title"] == "t"
             @test provenanceof(merged)["driver"] == "concat"
             @test provenanceof(merged)["ninputs"] == 2

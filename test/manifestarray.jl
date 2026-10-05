@@ -55,12 +55,35 @@
         )
     end
 
+    @testset "every call form validates, not just the coercing one" begin
+        m = dummymanifest(shape, chunkshape)
+        N = length(shape)
+        names = ["d$i" for i in 1:N]
+        empties() = (nothing, Dict{String,Any}[], Dict{String,Any}())
+
+        fv, filters, attrs = empties()
+        @test_throws DimensionMismatch ManifestArray{Float64,N,typeof(m)}(
+            m, ntuple(_ -> 99, N), chunkshape, fv, nothing, filters, attrs, names
+        )
+        @test_throws "not representable" ManifestArray{Int32,N,typeof(m)}(
+            m, shape, chunkshape, 0.5, nothing, filters, attrs, names
+        )
+        @test_throws "_ARRAY_DIMENSIONS" ManifestArray{Float64,N,typeof(m)}(
+            m, shape, chunkshape, fv, nothing, filters,
+            Dict{String,Any}("_ARRAY_DIMENSIONS" => names), names
+        )
+
+        # The coercing form still coerces: an Int fill value reaches a
+        # Float64 field as a Float64.
+        a = ManifestArray{Float64}(m, shape, chunkshape; fillvalue=0)
+        @test fillvalueof(a) === 0.0
+    end
+
     @testset "array interface and defaults" begin
         m = dummymanifest(shape, chunkshape)
         va = ManifestArray{Float64}(m, shape, chunkshape)
         @test size(va) == shape
         @test ndims(va) == 3
-        @test shapeof(va) == shape
         @test chunkshapeof(va) == chunkshape
         @test length(dimnamesof(va)) == 3
         @test chunkmapof(va) === m

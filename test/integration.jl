@@ -216,7 +216,7 @@ end
                 # a Zarr v2 dtype, so the scan takes it along with the rest and
                 # the file's projection parameters are reachable through the
                 # store. ZarrDatasets lists it beside the data variables.
-                g = scan(HDF5Driver(), _IT_ITSLIVE_PATH)
+                g = scan(_IT_ITSLIVE_PATH, HDF5Driver())
                 @test sort(collect(keys(arraysof(g)))) == ["grounded", "mapping", "x", "y"]
                 ds = ZarrDatasets.ZarrDataset(g)
                 @test "mapping" in collect(_IT_CDM.varnames(ds))
@@ -225,7 +225,7 @@ end
             end
 
             for (name, dimnames_expected) in (("grounded", ("x", "y")),)
-                group = scan(HDF5Driver(), _IT_ITSLIVE_PATH; group="/$name")
+                group = scan(_IT_ITSLIVE_PATH, HDF5Driver(); group="/$name")
                 mstore = group
                 ds = ZarrDatasets.ZarrDataset(mstore)
                 v = _IT_CDM.variable(ds, name)
@@ -244,9 +244,9 @@ end
 
     @testset "partial read on a real file fetches far fewer chunks than exist" begin
         if isfile(_IT_ITSLIVE_PATH)
-            group = scan(HDF5Driver(), _IT_ITSLIVE_PATH; group="/grounded")
+            group = scan(_IT_ITSLIVE_PATH, HDF5Driver(); group="/grounded")
             va = arraysof(group)["grounded"]
-            gridsize = cld.(shapeof(va), chunkshapeof(va))
+            gridsize = cld.(size(va), chunkshapeof(va))
             nchunks = prod(gridsize)
 
             counting = _IT_CountingTransport()

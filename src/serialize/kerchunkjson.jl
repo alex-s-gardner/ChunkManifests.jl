@@ -62,7 +62,7 @@ function _juliadtype(dtype, path, key)
     return T
 end
 
-# parse_chunkkey only consults shapeof/chunkshapeof, so a throwaway
+# parse_chunkkey only consults size/chunkshapeof, so a throwaway
 # ManifestArray over an AffineChunkMap sized to match the real chunk grid is
 # enough to reuse it before the real manifest exists; it is discarded once
 # the chunk loop below finishes.
@@ -283,7 +283,7 @@ function save(
 end
 
 """
-    load(path, fmt::KerchunkJSON) -> ChunkManifest
+    ChunkManifest(path, fmt::KerchunkJSON) -> ChunkManifest
 
 Read a kerchunk JSON reference-set document from `path` into a
 [`ChunkManifest`](@ref). `path` names one document, not a directory: it is
@@ -298,20 +298,20 @@ present in `refs` that does not parse against its array's chunk grid, and a
 `.zarray` dtype with no faithful Julia type, both throw naming the file and
 the offending key.
 """
-function load(path::AbstractString, fmt::KerchunkJSON)
+function ChunkManifest(path::AbstractString, fmt::KerchunkJSON)
     store, key = _resolvefilestore(path, false)
     return _load_kerchunkjson(store, key, path, fmt)
 end
 
 """
-    load(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON) -> ChunkManifest
+    ChunkManifest(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON) -> ChunkManifest
 
 Read a kerchunk JSON reference-set document from `store` under `key`,
-exactly as `load(path, fmt)` does once it has resolved `path` to a store.
+exactly as `ChunkManifest(path, fmt)` does once it has resolved `path` to a store.
 Not part of the public interface; exists so a manifest's store-agnosticism
 can be exercised directly against any `Zarr.AbstractStore`.
 """
-function load(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON)
+function ChunkManifest(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON)
     return _load_kerchunkjson(store, key, key, fmt)
 end
 
