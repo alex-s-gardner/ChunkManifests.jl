@@ -145,16 +145,30 @@ already-open lazy array, so no reopen happens. They are listed because an
 upstream change letting the lazy path retain an opened source would make that
 extension a thin shim.
 
-## Yggdrasil #14998 — ROS3 virtual file driver built OFF
+## Yggdrasil #14998 — ROS3 virtual file driver, merged, registration pending
 
 [JuliaPackaging/Yggdrasil#14998](https://github.com/JuliaPackaging/Yggdrasil/pull/14998),
-"HDF5: fix ROS3 VFD toggle variable name", open. Opened from this project.
+"HDF5: fix ROS3 VFD toggle variable name", **merged 2026-10-05** as
+`7d6bac575273a75bd84789e751beccd81f7a0e23`. Opened from this project.
 
-`ros3_vdf` is assigned where `-DHDF5_ENABLE_ROS3_VFD` reads `ros3_vfd`, so the
-flag receives an empty value and the driver is built OFF. `HDF5.has_ros3()` is
-therefore false on the binaries `HDF5_jll` ships, which is why `ROS3Access`
-requires pointing HDF5.jl at a system libhdf5 and why its tests skip by
-default.
+`ros3_vdf` was assigned where `-DHDF5_ENABLE_ROS3_VFD` reads `ros3_vfd`, so the
+flag received an empty value and the driver was built OFF.
+
+[JuliaRegistries/General#170657](https://github.com/JuliaRegistries/General/pull/170657),
+"New version: HDF5_jll v2.2.3+0", **merged 2026-10-05**, registers the build
+made from that merge commit. `HDF5_jll` 2.2.3 is therefore the first release
+whose libhdf5 is built with the ROS3 driver ON.
+
+HDF5.jl 0.17.4 widened its `HDF5_jll` bound to the whole `2` series, so
+`HDF5 = "0.17"` here reaches it and no compat change is needed. What an
+environment actually resolves is HDF5.jl's business, not this package's, which
+is why `HDF5.has_ros3()` stays the gate: a caller may sit on an older JLL
+whatever the newest release contains.
+
+**`ROS3Access` remains unverified.** That the driver is now compiled in is not
+the same as the code path working: nothing here has yet opened a real
+`https://` S3 endpoint through it. Confirming `HDF5.has_ros3()` on a resolved
+2.2.3 is the first step, not the whole of it.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 
