@@ -44,4 +44,40 @@ jobs:
           # them: without this the real-data cases skip and a green run says
           # nothing about them.
           CHUNKMANIFESTS_REQUIRE_FIXTURES: all
+      - uses: julia-actions/julia-processcoverage@v1
+      # One upload, from the job whose coverage is representative. Every job
+      # instruments, but nine uploads of the same figure tell Codecov nothing
+      # the first one did not.
+      - if: matrix.version == '1' && matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          # Tokenless uploads from a public repo are rate-limited; set the
+          # CODECOV_TOKEN secret to lift that.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # gh-pages for the built site, pull-requests for the preview comment.
+      contents: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          # docs/Project.toml requires 1.11 or later: its `[sources]` pin on
+          # Zarr is what makes the doctests resolve the same version the tests do.
+          version: '1'
+      - uses: julia-actions/cache@v2
+      # Builds, runs the doctests, and deploys. `make.jl` sets checkdocs and
+      # doctest, so a missing docstring or a stale example fails this job.
+      - uses: julia-actions/julia-docdeploy@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
 

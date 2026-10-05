@@ -1,3 +1,31 @@
+"""
+    ChunkManifests
+
+Read existing HDF5, NetCDF4 and GeoTIFF/COG files as Zarr arrays without copying or
+converting them.
+
+Scanning a source file records where each chunk's *compressed* bytes already live — which
+file, which byte offset, how many bytes — in a [`ChunkManifest`](@ref). A manifest is itself
+a `Zarr.AbstractStore`, so `Zarr.zopen` over one gives lazy, chunked, codec-decoded access
+to the original file in place.
+
+Array data is never decoded here. A manifest serves the source files' bytes untouched and
+Zarr.jl's codec pipeline decodes them, which is what makes the result byte-for-byte
+identical to reading the original file.
+
+```julia
+using ChunkManifests, Zarr
+
+cm = ChunkManifest("granule.h5")   # scan a source file
+z = Zarr.zopen(cm)                 # a lazy ZArray tree
+z["gt1l/h_li"][1:100]              # reads only the chunks it needs
+```
+
+Scanning is the expensive step, so the intended workflow is to scan once, save the manifest
+with [`save`](@ref ChunkManifests.save), and reuse it.
+
+Full documentation: <https://alex-s-gardner.github.io/ChunkManifests.jl>.
+"""
 module ChunkManifests
 
 import Base64
