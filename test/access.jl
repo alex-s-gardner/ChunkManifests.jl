@@ -220,7 +220,6 @@ end
         catch e
             sprint(showerror, e)
         end
-        @test occursin("DownloadAccess", msg)
-        @test occursin("scan(", msg)
+        @test occursin("scan(\"s3://bucket/granule.h5\", HDF5Driver())", msg)
     end
 end

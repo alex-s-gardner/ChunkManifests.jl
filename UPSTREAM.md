@@ -38,21 +38,27 @@ returns `false` and the tests take their unpatched branches — which is the onl
 place those branches are exercised, and the reason a change can pass on release
 and fail on lts.
 
-## Zarr.jl — split into subpackages, umbrella not yet released
+## Zarr.jl — split into subpackages, umbrella released at 0.11.0
 
 Zarr.jl is now a monorepo. `ZarrCore`, `ZarrBlosc`, `ZarrGCS`, `ZarrHTTP`,
 `ZarrS3`, `ZarrZip`, `ZarrZlib` and `ZarrZstd` are each registered at 0.11.0,
-published between 2026-09-21 and 2026-09-28. The `Zarr` package is registered
-only up to **0.10.2**, and the repository carries no `v0.11.0` tag for it.
+published between 2026-09-18 and 2026-09-28. The `Zarr` umbrella package
+followed at **0.11.0 on 2026-10-06**: it depends on every subpackage with
+compat `"0.11.0"` (any 0.11.x) and re-exports `ZarrCore`'s public names.
 
-`Zarr = "0.10"` in `Project.toml` therefore bounds the pre-split package, which
-is also what the `[sources]` branch forks. Clearing the #354 pin means taking a
-dependency on whichever package publishes the fix, not deleting four lines.
+So once `ZarrCore` 0.11.1 is registered (#356 above), `Zarr` 0.11.0 resolves
+to a `ZarrCore` carrying the #354 fix with no new `Zarr` release needed.
 
-What that costs is unmeasured. `ChunkManifest` subtypes `Zarr.AbstractStore`
-and adds methods to `Zarr.storefromstring`, `Zarr.store_read_strategy` and the
-undocumented `Zarr.read_items!`. Whether the split preserves those spellings,
-and which package exports them, has not been checked.
+`Zarr = "0.10"` in `Project.toml` still bounds the pre-split package, which is
+also what the `[sources]` branch forks. Clearing the #354 pin therefore means
+moving to `Zarr = "0.11"`, not deleting four lines.
+
+What that move costs is unmeasured. `ChunkManifest` subtypes
+`Zarr.AbstractStore` and adds methods to `Zarr.storefromstring`,
+`Zarr.store_read_strategy` and the undocumented `Zarr.read_items!`. The
+re-export covers only `ZarrCore`'s public names, so whether each of those is
+still reachable as `Zarr.<name>` — or must be qualified as `ZarrCore.<name>` —
+has not been checked.
 
 ## Zarr.jl — byte order in a dtype string is ignored
 

@@ -512,7 +512,8 @@ function _walk!(arrays, table, fileindex, f, group, prefix::AbstractString, file
 end
 
 """
-    scan(path::AbstractString, driver::HDF5Driver; group::AbstractString="/") -> ChunkManifest
+    scan(path::AbstractString, driver::HDF5Driver;
+         group::AbstractString="/", siblings::Bool=true, access::SourceAccess=AutoAccess()) -> ChunkManifest
 
 Scan the HDF5 or NetCDF4 file at `path`, starting from `group` (the file
 root, `"/"`, by default). Returns a [`ChunkManifest`](@ref) whose array keys
@@ -520,6 +521,15 @@ are the HDF5 paths of its datasets relative to `group`, joined with `"/"`,
 and whose manifests point into `path` without reading or decoding any
 chunk's bytes. If `group` names a dataset rather than a group, the result
 holds that one array, keyed by its own name.
+
+With `siblings=true`, the result also holds the variables the scanned ones
+cannot be interpreted without — dimension scales, `coordinates` and
+`grid_mapping` variables — even when they lie outside `group`.
+
+`access` decides how the file's metadata bytes are reached. The default,
+[`AutoAccess`](@ref), opens a local path directly and reads a remote one
+(`http(s)://`, `s3://`) in place through [`RangeAccess`](@ref), or through
+[`DownloadAccess`](@ref) on a libhdf5 whose driver layout is unverified.
 
 Chunked datasets become a [`ExplicitChunkMap`](@ref); contiguous datasets
 become an [`AffineChunkMap`](@ref) of one block. A chunk HDF5 never
