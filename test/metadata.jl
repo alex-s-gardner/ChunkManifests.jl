@@ -122,6 +122,28 @@ import Zarr
 
         va_nothing = mkva(Float64, (2, 2), (2, 2); fillvalue = nothing)
         @test JSON.parse(String(ChunkManifests.zarray_json(va_nothing)))["fill_value"] === nothing
+
+        # Zarr v2 spells a complex fill value as the two parts in an array.
+        # Written as a Complex, JSON emits the struct as an object and a reader
+        # gets a mapping where it expects a number. A NISAR RSLC band carries
+        # one, which is the case that found this.
+        va_complex = mkva(ComplexF32, (2, 2), (2, 2); fillvalue = ComplexF32(1.5, -2.5))
+        doc = JSON.parse(String(ChunkManifests.zarray_json(va_complex)))
+        @test doc["fill_value"] == [1.5, -2.5]
+        @test ChunkManifests._fillvaluefromjson(doc["fill_value"], ComplexF32) ===
+            ComplexF32(1.5, -2.5)
+
+        # The three spellings the spec reserves for a value JSON has no literal
+        # for, in both directions and in either part of a complex one.
+        for (value, text) in (NaN => "NaN", Inf => "Infinity", -Inf => "-Infinity")
+            va = mkva(Float64, (2, 2), (2, 2); fillvalue = value)
+            @test JSON.parse(String(ChunkManifests.zarray_json(va)))["fill_value"] == text
+            back = ChunkManifests._fillvaluefromjson(text, Float64)
+            @test isnan(value) ? isnan(back) : back == value
+        end
+        va_naninf = mkva(ComplexF64, (2, 2), (2, 2); fillvalue = ComplexF64(NaN, -Inf))
+        @test JSON.parse(String(ChunkManifests.zarray_json(va_naninf)))["fill_value"] ==
+            ["NaN", "-Infinity"]
     end
 
     @testset "end-to-end Zarr.zopen round trip" begin

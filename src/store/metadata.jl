@@ -54,6 +54,10 @@ function _jsonfillvalue(v::AbstractFloat)
     isinf(v) && return v > 0 ? "Infinity" : "-Infinity"
     return v
 end
+# Zarr v2 writes a complex fill value as the two parts in an array. Left as a
+# Complex, JSON writes the struct as an object and a reader gets a mapping
+# where it expects a number.
+_jsonfillvalue(v::Complex) = [_jsonfillvalue(real(v)), _jsonfillvalue(imag(v))]
 
 # The inverse, reading a document back. Only a floating-point array's fill
 # value is reinterpreted: the three spellings are reserved for those, and a
@@ -64,6 +68,12 @@ function _fillvaluefromjson(v::AbstractString, ::Type{T}) where {T <: AbstractFl
     v == "Infinity" && return T(Inf)
     v == "-Infinity" && return T(-Inf)
     return v
+end
+function _fillvaluefromjson(v::AbstractVector, ::Type{Complex{T}}) where {T}
+    length(v) == 2 || return v
+    return Complex{T}(
+        _fillvaluefromjson(v[1], T), _fillvaluefromjson(v[2], T)
+    )
 end
 
 # JSON has no literal for a non-finite number, so an attribute holding one
