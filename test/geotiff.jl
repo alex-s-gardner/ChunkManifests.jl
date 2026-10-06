@@ -379,6 +379,17 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
                 end
             end
 
+            # The transport a scan read through is the manifest's, so reading
+            # it does not fall back to a default one.
+            counting = FetchCountingTransport()
+            cmt = ChunkManifests.scan(
+                path, GeoTIFFDriver(); access = RangeAccess(; transport = counting)
+            )
+            @test transportof(cmt) === counting
+            before = counting.count[]
+            @test Array(Zarr.zopen(cmt)["0"][:, :]) == data
+            @test counting.count[] > before
+
             # The URI is recorded as given, and a remote one is read in place.
             @test tableof(
                 ChunkManifests.scan(

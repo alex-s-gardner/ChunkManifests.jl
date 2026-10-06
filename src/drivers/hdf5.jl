@@ -549,7 +549,8 @@ function _scan_hdf5(
     return withsourcepath(access, uri) do localpath
         recorded = _isremote(uri) ? String(uri) : abspath(localpath)
         _scan_hdf5_open(
-            driver, localpath, recorded, filesize(localpath), nothing; group, siblings
+            driver, localpath, recorded, filesize(localpath), nothing;
+            group, siblings, transport = _scantransport(access)
         )
     end
 end
@@ -595,7 +596,7 @@ function _scan_hdf5(
     # given the endpoint form it can address.
     return _scan_hdf5_open(
         driver, _ros3openloc(access, uri), String(uri), nothing,
-        _ros3driver(access); group, siblings
+        _ros3driver(access); group, siblings, transport = _scantransport(access)
     )
 end
 
@@ -675,6 +676,7 @@ function _scan_hdf5_open(
         h5driver;
         group::AbstractString,
         siblings::Bool = true,
+        transport::AbstractTransport = TransportContainers(),
     )
     table = PathTable()
     arrays = Dict{String, ManifestArray}()
@@ -694,7 +696,7 @@ function _scan_hdf5_open(
     end
 
     provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
-    return ChunkManifest(; arrays, attrs = groupattrs, provenance)
+    return ChunkManifest(; arrays, attrs = groupattrs, provenance, transport)
 end
 
 # Reads the object in place through byte-range requests, so nothing moves but
@@ -723,7 +725,9 @@ function _scan_hdf5(
         end
     end
     provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
-    return ChunkManifest(; arrays, attrs = groupattrs, provenance)
+    return ChunkManifest(
+        ; arrays, attrs = groupattrs, provenance, transport = _scantransport(access)
+    )
 end
 
 # Walks an already-open file. Separate from opening it because RangeAccess

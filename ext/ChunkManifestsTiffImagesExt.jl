@@ -628,7 +628,10 @@ function _gt_scan(
         )
     )
     io = ChunkManifests.RangeIO(access, uri, total)
-    return _gt_build(driver, String(uri), total, _gt_readpages(io, uri))
+    return _gt_build(
+        driver, String(uri), total, _gt_readpages(io, uri),
+        ChunkManifests._scantransport(access),
+    )
 end
 
 # Every other mechanism resolves to a local path, which is what the reader
@@ -640,12 +643,16 @@ function _gt_scan(
     )
     return ChunkManifests.withsourcepath(access, uri) do localpath
         recorded = ChunkManifests._isremote(uri) ? String(uri) : abspath(localpath)
-        _gt_build(driver, recorded, filesize(localpath), _gt_readpages(localpath))
+        _gt_build(
+            driver, recorded, filesize(localpath), _gt_readpages(localpath),
+            ChunkManifests._scantransport(access),
+        )
     end
 end
 
 function _gt_build(
-        driver::ChunkManifests.GeoTIFFDriver, path::AbstractString, filebytes, pages
+        driver::ChunkManifests.GeoTIFFDriver, path::AbstractString, filebytes, pages,
+        transport::ChunkManifests.AbstractTransport,
     )
     table = ChunkManifests.PathTable()
     fileindex = ChunkManifests.push_uri!(table, path; size = filebytes)
@@ -667,7 +674,7 @@ function _gt_build(
     end
 
     provenance = Dict{String, Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
-    return ChunkManifests.ChunkManifest(; arrays, provenance)
+    return ChunkManifests.ChunkManifest(; arrays, provenance, transport)
 end
 
 # Registration mutates dictionaries owned by ChunkManifests, not by this

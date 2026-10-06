@@ -125,6 +125,28 @@ end
         )
     end
 
+    @testset "a scan's transport is the manifest's" begin
+        # A manifest built through a transport that is authenticated, or bound
+        # to particular prefixes, is of little use if reading it falls back to
+        # a default one. FetchCountingTransport counts, so the reads can be
+        # shown to go through the same object rather than merely compare equal.
+        for access in (
+                DownloadAccess(; transport = FetchCountingTransport()),
+                RangeAccess(; transport = FetchCountingTransport()),
+            )
+            cm = scan(src, HDF5Driver(); access)
+            @test transportof(cm) === access.transport
+            before = access.transport.count[]
+            @test Array(Zarr.zopen(cm)["data"][:]) == expected
+            # Reading went through it, with nothing re-attached.
+            @test access.transport.count[] > before
+        end
+
+        # A mechanism that carries no transport leaves the manifest its own.
+        @test transportof(scan(src, HDF5Driver(); access = LocalAccess())) isa
+            TransportContainers
+    end
+
     @testset "RangeAccess" begin
         # Driven over a local file through LocalTransport, so the virtual file
         # driver is exercised with no network: the mechanism under test is the

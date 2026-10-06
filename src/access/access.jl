@@ -19,6 +19,15 @@ transfers more than they asked for.
 """
 resolve_access(access::SourceAccess, driver, uri::AbstractString) = access
 
+# The transport a scan read through, which the manifest it produces then reads
+# its chunks with. A manifest built through a transport that is authenticated,
+# or bound to particular prefixes, is of little use if reading it falls back to
+# a default one. Mechanisms that do their own I/O carry none, and leave the
+# manifest its default.
+_scantransport(::SourceAccess) = TransportContainers()
+_scantransport(access::DownloadAccess) = access.transport
+_scantransport(access::RangeAccess) = access.transport
+
 function resolve_access(::AutoAccess, driver, uri::AbstractString)
     _isremote(uri) || return LocalAccess()
     return _remoteaccess(driver, uri)
