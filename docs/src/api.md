@@ -55,7 +55,6 @@ AutoAccess
 LocalAccess
 DownloadAccess
 RangeAccess
-ROS3Access
 ```
 
 ## Saved formats

@@ -52,7 +52,7 @@ end
         )
         # A caller who names a mechanism gets it, so nothing silently transfers
         # more than they asked for.
-        for acc in (LocalAccess(), DownloadAccess(), ROS3Access(), RangeAccess())
+        for acc in (LocalAccess(), DownloadAccess(), RangeAccess())
             @test ChunkManifests.resolve_access(acc, HDF5Driver(), src) === acc
         end
     end
@@ -66,7 +66,7 @@ end
         @test ChunkManifests.withsourcepath(identity, DownloadAccess(), src) == src
         # A mechanism that reads in place has no local path to hand over.
         @test_throws "does not resolve" ChunkManifests.withsourcepath(
-            identity, ROS3Access(), "https://h/k.h5"
+            identity, RangeAccess(), "https://h/k.h5"
         )
     end
 
@@ -210,109 +210,6 @@ end
             @test_throws "pagebuffer must be nonnegative" RangeAccess(; pagebuffer = -1)
             @test_throws "blocksize must be nonnegative" RangeAccess(; blocksize = -1)
             @test_throws "cachelimit must be positive" RangeAccess(; cachelimit = 0)
-        end
-    end
-
-    @testset "ROS3Access" begin
-        # AutoAccess never chooses this one, on any build: no read through
-        # libhdf5's own S3 driver has ever completed. Reading a remote object
-        # in place is RangeAccess's job, through this package's transports.
-        for uri in ("https://h/b/k.h5", "http://h/b/k.h5", "s3://b/k.h5")
-            @test !(
-                ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), uri) isa
-                    ROS3Access
-            )
-        end
-
-        @testset "the region is libhdf5's to resolve" begin
-            # Nothing here looks a region up. libhdf5 takes it from the driver,
-            # then AWS_REGION, then AWS_DEFAULT_REGION, then the AWS
-            # configuration file and profile, and reports its absence itself —
-            # so resolving it here would both duplicate that and pre-empt the
-            # configuration file a caller's region usually lives in.
-            withenv("AWS_REGION" => "eu-central-1") do
-                @test ChunkManifests._ros3driver(ROS3Access()).aws_region == ""
-            end
-            given = ChunkManifests._ros3driver(ROS3Access(; region = "us-west-2"))
-            @test given.aws_region == "us-west-2"
-            # A region on its own reads unauthenticated.
-            @test given.authenticate == false
-            # A driver supplied outright is used as it stands.
-            configured = HDF5.Drivers.ROS3(1, true, "us-east-2", "id", "key")
-            @test ChunkManifests._ros3driver(
-                ROS3Access(; region = "unused", aws = configured)
-            ) === configured
-        end
-
-        @testset "an s3:// URI becomes an endpoint" begin
-            # The one place a region is needed as a value here rather than
-            # inside libhdf5: the endpoint host has to be built.
-            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => nothing) do
-                @test ChunkManifests._ros3openloc(
-                    ROS3Access(; region = "us-west-2"), "s3://bkt/k.h5"
-                ) == "https://bkt.s3.us-west-2.amazonaws.com/k.h5"
-                @test ChunkManifests._ros3openloc(
-                    ROS3Access(; region = "eu-west-1"), "s3://bkt/deep/path/k.h5"
-                ) == "https://bkt.s3.eu-west-1.amazonaws.com/deep/path/k.h5"
-                @test_throws "host needs a region" ChunkManifests._ros3openloc(
-                    ROS3Access(), "s3://bkt/k.h5"
-                )
-                # A driver supplied outright carries the region too.
-                @test ChunkManifests._ros3openloc(
-                    ROS3Access(; aws = HDF5.Drivers.ROS3(1, false, "us-east-2", "", "")),
-                    "s3://bkt/k.h5",
-                ) == "https://bkt.s3.us-east-2.amazonaws.com/k.h5"
-            end
-            withenv("AWS_REGION" => "eu-west-1", "AWS_DEFAULT_REGION" => "ap-south-1") do
-                @test ChunkManifests._ros3openloc(ROS3Access(), "s3://bkt/k.h5") ==
-                    "https://bkt.s3.eu-west-1.amazonaws.com/k.h5"
-            end
-            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => "ap-south-1") do
-                @test ChunkManifests._ros3openloc(ROS3Access(), "s3://bkt/k.h5") ==
-                    "https://bkt.s3.ap-south-1.amazonaws.com/k.h5"
-            end
-            # An endpoint is already one and passes through untouched, region
-            # or no region.
-            @test ChunkManifests._ros3openloc(ROS3Access(), "https://h/b/k.h5") ==
-                "https://h/b/k.h5"
-            # A bucket with no key names no object.
-            @test_throws "needs a bucket and a key" ChunkManifests._ros3openloc(
-                ROS3Access(; region = "us-west-2"), "s3://bkt"
-            )
-            @test_throws "needs a key after the bucket" ChunkManifests._ros3openloc(
-                ROS3Access(; region = "us-west-2"), "s3://bkt/"
-            )
-        end
-
-        if HDF5.has_ros3()
-            # A scheme naming no S3 object is refused before anything is
-            # opened. s3://, http:// and https:// are the three it takes.
-            @test_throws "needs an s3://, http:// or https:// URI" ChunkManifests.scan(
-                "ftp://h/b/k.h5", HDF5Driver(); access = ROS3Access(; region = "us-west-2")
-            )
-
-            # Nothing here points the driver at a live server. A local HTTP
-            # server cannot stand in for S3 — libhdf5 addresses an object by a
-            # URL it reads a bucket and a key out of — and an attempt through
-            # one leaves the test process unable to exit on Windows: every
-            # testset passes and the run then sits idle until the job's
-            # timeout. Reading through this driver needs a real endpoint, so it
-            # is covered nowhere.
-        else
-            # HDF5_jll carries the driver from 2.2.3 onward, so this branch is
-            # what an environment resolving an earlier one takes. The message
-            # has to name the alternative rather than just fail.
-            msg = try
-                ChunkManifests.scan(
-                    "https://h/b/k.h5", HDF5Driver();
-                    access = ROS3Access(; region = "us-west-2"),
-                )
-                ""
-            catch e
-                sprint(showerror, e)
-            end
-            @test occursin("has_ros3", msg)
-            @test occursin("DownloadAccess", msg)
         end
     end
 

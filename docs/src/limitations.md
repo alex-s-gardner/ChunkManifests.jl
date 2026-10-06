@@ -79,25 +79,21 @@ reserves for exactly this.
 
 ## Remote scanning
 
-Only [`DownloadAccess`](@ref) and [`LocalAccess`](@ref) are verified end to end.
-[`ROS3Access`](@ref) does not currently work with the `HDF5_jll` binaries, which are the
-first to ship the driver at all. Opening an object through libhdf5's read-only S3 driver
-hangs: it waits for the S3 request to report completion and nothing signals it, on
-Linux and on macOS alike, against objects that plain HTTP requests read immediately. There is
-no timeout that would turn that into an error. [`AutoAccess`](@ref) therefore never selects
-it and [`DownloadAccess`](@ref) is the mechanism to rely on for a remote object.
-`UPSTREAM.md` records the reproducer and backtrace.
+[`RangeAccess`](@ref) reads a remote object in place, and is what [`AutoAccess`](@ref)
+selects. Its own limit is that libhdf5 has no public API for registering a virtual file
+driver, so the HDF5 path is enabled only for libhdf5 versions whose driver struct layout has
+been verified — currently 2.2.x — and refuses on others rather than risk a mismatched struct.
+The GeoTIFF path needs no such gate: it reads through a stream, with no libhdf5 involved.
 
-Were it working it would still need a libhdf5 built with the driver — `HDF5_jll` ships one
-from 2.2.3, and `HDF5.has_ros3()` is the check — an AWS region, and a URL naming both a
-bucket and a key. It also negotiates TLS whatever the URL's scheme says, so a plaintext
-`http://` endpoint is unreachable through it.
+How much a range-read scan costs depends on how far a file's metadata is spread. Where it
+approaches the size of the object, [`DownloadAccess`](@ref) moves the same bytes in fewer
+requests and leaves a cached copy; see [Remote sources](@ref).
 
-Range-based scanning through [`RangeAccess`](@ref) is what [`AutoAccess`](@ref) uses instead,
-and needs none of that. Its own limit is that libhdf5 has no public API for registering a
-virtual file driver, so it is enabled only for libhdf5 versions whose driver struct layout
-has been verified — currently 2.2.x — and refuses on others rather than risk a mismatched
-struct. See [Remote sources](@ref).
+libhdf5's own read-only S3 driver is not used. It hangs on open — waiting for a request to
+report completion that never does, on Linux and macOS alike, against objects plain HTTP
+requests read immediately — and there is no timeout that would turn that into an error.
+`UPSTREAM.md` records the reproducer. Nothing depends on it: range reads cover the same
+ground through this package's transports, over more URL shapes than libhdf5's parser accepts.
 
 ## Not in scope
 
