@@ -199,10 +199,16 @@ failed, which is how the following was established:
   be an AWS one.
 - Against a real endpoint it hangs. See the next entry.
 
-So `ROS3Access` cannot be exercised at all with these binaries. `AutoAccess`
-selects `DownloadAccess` for every remote URI, and the absence of any timeout
-control over libhdf5's own requests is a second reason not to put it on the
-default path.
+So `ROS3Access` cannot be exercised at all with these binaries, and the
+absence of any timeout control over libhdf5's own requests means a caller who
+names it waits without an error to act on.
+
+**Nothing waits on this.** `RangeAccess` reads a remote object in place
+through this package's own transports, which is what `AutoAccess` selects, so
+the capability libhdf5's driver would have provided is covered without it —
+over more URL shapes, since libhdf5's parser needs a bucket and a key. The
+entries above are kept as a record of what was established about the driver,
+not as a blocker.
 
 ## HDF5_jll 2.2.3 — the ROS3 driver hangs on open
 
