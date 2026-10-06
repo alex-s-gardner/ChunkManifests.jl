@@ -72,9 +72,8 @@ cm = scan(url, HDF5Driver(); access = RangeAccess(; transport = mytransport))
 Zarr.zopen(cm)["v"][1:4, 1:4]      # reads through mytransport, nothing re-attached
 ```
 
-[`DownloadAccess`](@ref) carries its transport forward the same way. A mechanism that carries
-none — [`LocalAccess`](@ref), or [`ROS3Access`](@ref), where libhdf5 does its own I/O —
-leaves the manifest its default.
+[`DownloadAccess`](@ref) carries its transport forward the same way. A mechanism that carries none, as
+[`LocalAccess`](@ref) does, leaves the manifest its default.
 
 A manifest loaded from a saved document has no scan to inherit from, so give it one there:
 
