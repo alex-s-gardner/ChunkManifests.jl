@@ -63,6 +63,9 @@ reserves for exactly this.
   from Julia in any format but not from Python. Predictor 3 is refused.
 - TIFF strips are not padded to a full size, so a final partial strip cannot be a Zarr chunk.
   Tiled TIFFs and COGs map cleanly; striped ones may not.
+- A remote GeoTIFF is read in place by [`RangeAccess`](@ref) like an HDF5 one, through a
+  seekable stream rather than a virtual file driver, so it needs no verified libhdf5. LZW,
+  PackBits, JPEG and WebP are still refused whether the file is local or remote.
 - LZW, PackBits, JPEG and WebP compression are refused.
 
 ### Kerchunk

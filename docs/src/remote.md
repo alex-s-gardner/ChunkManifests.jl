@@ -17,7 +17,7 @@ inferred.
 | [`LocalAccess`](@ref) | a local file, directly | implemented |
 | [`DownloadAccess`](@ref) | the whole object once, into a local cache | implemented; verified end to end over HTTP |
 | [`ROS3Access`](@ref) | metadata only, via libhdf5's read-only S3 driver | implemented, **unverified**; needs a libhdf5 built with that driver (`HDF5_jll` ships one from 2.2.3 — check `HDF5.has_ros3()`) and an AWS region |
-| [`RangeAccess`](@ref) | metadata only, in aligned blocks through this package's transports | implemented; what [`AutoAccess`](@ref) chooses for a remote object |
+| [`RangeAccess`](@ref) | metadata only, in aligned blocks through this package's transports | implemented; what [`AutoAccess`](@ref) chooses for a remote object, for both HDF5 and GeoTIFF |
 
 ```julia
 scan("https://host/granule.h5", HDF5Driver(); access = DownloadAccess())
@@ -45,10 +45,23 @@ readers that never saw the cache.
 
 ## Reading in place with `RangeAccess`
 
-[`RangeAccess`](@ref) serves libhdf5 through a virtual file driver backed by this package's
-transports, so a scan issues byte-range requests and the object is never fetched whole. It
-covers every scheme the transports do — `http://`, `https://`, `s3://` — and the `authorize`
+[`RangeAccess`](@ref) issues byte-range requests instead of fetching the object, over every
+scheme the transports cover — `http://`, `https://`, `s3://` — and through the `authorize`
 hook that governs them.
+
+How those bytes reach a format reader differs by format, and that is the only part that
+does:
+
+- **HDF5 and NetCDF4** are read through a libhdf5 *virtual file driver*, since libhdf5 does
+  its own I/O.
+- **GeoTIFF and COG** are read through [`RangeIO`](@ref), a seekable stream that TiffImages
+  walks exactly as it walks a local file.
+
+Both sit in `src/access/`, a layer below building a manifest: deciding which ranges to ask
+for and which to keep is a separate concern from what a manifest is, and the drivers above
+take bytes from it without knowing where they came from. A COG's tag directories are compact
+and clustered, so an exact-range scan of a 1.4 MiB Sentinel-2 COG reads **2230 bytes**, 0.15%
+of it.
 
 ### Minimizing round trips
 
@@ -82,6 +95,33 @@ Scanning a 331 KiB NetCDF4 granule over HTTPS, varying one at a time:
 The gain levels off here because this granule's metadata is scattered through it. A product
 written with paged metadata aggregation concentrates it instead, which is what makes a single
 `initialread` cover the whole scan.
+
+### When to fetch the object instead
+
+How much a range-read scan costs depends on how far a file's metadata is spread, not on its
+size. Two real files, both scanned with the same mechanism:
+
+| file | requests | bytes read | share | time |
+|---|---|---|---|---|
+| NISAR RSLC, 16.3 GiB, paged metadata | 1 | 8.4 MB | 0.05% | 8 s |
+| NetCDF4 mosaic, 189 MiB, metadata spread throughout | 189 | 198 MB | 100% | 26 s |
+| the same mosaic, [`DownloadAccess`](@ref) | — | 198 MB | 100% | **15 s** |
+
+For the mosaic, range reads end up moving the whole object in more requests than a download
+takes, and gain nothing by it — so [`DownloadAccess`](@ref) is faster and leaves a cached
+copy for the next scan. Reading that file by exact ranges rather than blocks does cut the
+bytes to 8.7%, but costs 6614 requests and seven minutes.
+
+The quantity to watch is **how many bytes a scan pulls against the size of the object**. If
+it approaches the whole thing, fetch it instead:
+
+```julia
+scan(url, HDF5Driver(); access = DownloadAccess(; cachedir = "/data/cache", keep = true))
+```
+
+Nothing switches mechanism on your behalf. A named mechanism is never substituted, and
+`AutoAccess` choosing range reads is a default suited to the large files it was built for,
+not a judgement about any particular object.
 
 Varying `blocksize` alone, with no initial read:
 

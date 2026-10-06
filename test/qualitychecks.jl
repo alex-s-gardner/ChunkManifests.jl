@@ -2,6 +2,7 @@ using Aqua
 using ExplicitImports
 import HDF5
 import HTTP
+import TiffImages
 import JSON
 
 # Last in the suite, so every extension is loaded by the time this runs and the
@@ -54,11 +55,14 @@ end
         # HDF5.API.libhdf5 is owned by HDF5_jll but is how HDF5.jl documents
         # naming the library in a ccall, which the range virtual file driver
         # has to do: libhdf5 exposes no public API for registering one, so
-        # there is no wrapper in HDF5.jl to call instead.
+        # there is no wrapper in HDF5.jl to call instead. TiffImages.format"TIFF"
+        # is FileIO's, and is the stream wrapper TiffImages itself reads a
+        # TiffFile from, so the GeoTIFF driver names it the same way.
         all_qualified_accesses_via_owners = (;
             skip = (
                 Base => Core, HTTP => Base, JSON => parentmodule(JSON.lower),
                 HDF5.API => HDF5.API.HDF5_jll,
+                TiffImages => TiffImages.FileIO,
             ),
         ),
     )

@@ -53,6 +53,7 @@ include("drivers/driver.jl")
 # below building a manifest, and separate from it.
 include("access/access.jl")
 include("access/rangesource.jl")
+include("access/rangeio.jl")
 include("access/hdf5vfd.jl")
 include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")

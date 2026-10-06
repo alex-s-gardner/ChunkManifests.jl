@@ -346,6 +346,51 @@ _gt_pyramidpixels(width, height) = Vector{UInt8}(reinterpret(UInt8, vec(_gt_pyra
     end
 
     mktempdir() do dir
+        @testset "RangeAccess reads the tags without a local copy" begin
+            # Driven over a local file through LocalTransport, so the stream is
+            # exercised with no network: what is under test is reading a TIFF
+            # by seeking within byte ranges, not where the bytes came from.
+            width, height, rowsperstrip = 7, 12, 5
+            data = rand(Float32, width, height)
+            path = joinpath(dir, "ranged.tif")
+            _gt_striped(
+                path; width, height, rowsperstrip, bits = 32, sampleformat = 3,
+                payload = _gt_striprows(data, rowsperstrip),
+            )
+            reference = ChunkManifests.scan(path, GeoTIFFDriver())
+            refkeys = sort(collect(keys(arraysof(reference))))
+
+            # `initialread` 0 seeks to exactly what the reader asked for; a
+            # span covering the file serves every read from memory. The sizes
+            # between exercise a read that starts inside the prefetched head
+            # and continues past it.
+            for initialread in (0, 8, 64, 1 << 16)
+                for blocksize in (0, 16, 1 << 20)
+                    access = RangeAccess(;
+                        transport = LocalTransport(), initialread, blocksize
+                    )
+                    cm = ChunkManifests.scan(path, GeoTIFFDriver(); access)
+                    @test sort(collect(keys(arraysof(cm)))) == refkeys
+                    va = arraysof(cm)["0"]
+                    @test size(va) == (width, height)
+                    @test eltype(va) === Float32
+                    # The pixels must decode, not merely the tags parse.
+                    @test Array(Zarr.zopen(cm)["0"][:, :]) == data
+                end
+            end
+
+            # The URI is recorded as given, and a remote one is read in place.
+            @test tableof(
+                ChunkManifests.scan(
+                    path, GeoTIFFDriver();
+                    access = RangeAccess(; transport = LocalTransport()),
+                )
+            )[1].uri == path
+            @test ChunkManifests.resolve_access(
+                AutoAccess(), GeoTIFFDriver(), "https://h/x.tif"
+            ) isa RangeAccess
+        end
+
         @testset "uncompressed striped: AffineChunkMap, re-chunked freely, end-to-end pixels" begin
             # width != height, and ROWSPERSTRIP=5 over IMAGELENGTH=12 leaves a
             # ragged final strip (5, 5, 2 rows) — irrelevant for uncompressed,

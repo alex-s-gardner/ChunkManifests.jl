@@ -68,6 +68,16 @@ KerchunkParquet
 ChunkManifests.save
 ```
 
+## Byte access
+
+How the bytes a reader needs are fetched and reused, a layer below building a manifest.
+
+```@docs
+ChunkManifests.RangeIO
+ChunkManifests.rangecost
+ChunkManifests.withrangefile
+```
+
 ## Transports
 
 ```@docs
