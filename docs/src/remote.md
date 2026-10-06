@@ -115,15 +115,20 @@ virtual-host form (`https://bucket.s3.region.amazonaws.com/key`) and the path fo
 (`https://host/bucket/key`) give it those; a URL with a single path segment does not, and is
 refused by its parser. The host itself need not be an AWS one.
 
-### Unverified
+### It does not currently work
 
-No read through this driver has been verified end to end, which is why
-[`DownloadAccess`](@ref) is the mechanism to rely on and the one [`AutoAccess`](@ref) picks.
+**Opening an object through this driver hangs** with the `HDF5_jll` binaries. libhdf5 waits
+on a condition variable for the S3 request to report completion and nothing ever signals it,
+so the call never returns and there is no timeout to bound it — not from here, and not from
+libhdf5. Reproduced on Linux and macOS against a public object that plain HTTP requests read
+in under a fifth of a second.
 
-Confirming it needs a real endpoint: a local stand-in cannot serve, because the driver
-negotiates TLS regardless of the URL's scheme and a certificate the AWS SDK trusts is more
-than a test server offers. A second reason not to put it on the default path is that none of
-libhdf5's requests can be bounded from here — there is no timeout to set.
+So [`DownloadAccess`](@ref) is the mechanism to use for a remote object, and the one
+[`AutoAccess`](@ref) picks. `UPSTREAM.md` in the repository records the reproducer, the
+backtrace and the versions, for a report to HDF5 or to Yggdrasil.
+
+Everything up to the request is right — URL, bucket, key, region, anonymous credentials — so
+this should start working, with no change here, once the underlying library does.
 
 Reaching S3 for *chunk* bytes, as opposed to scanning, is a transport question rather than an
 access question — see [`S3Transport`](@ref) under [Fetching chunk bytes](@ref).

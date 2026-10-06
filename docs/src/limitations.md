@@ -62,16 +62,17 @@ bitshuffle, and any nonzero per-chunk `filter_mask`.
 ## Remote scanning
 
 Only [`DownloadAccess`](@ref) and [`LocalAccess`](@ref) are verified end to end.
-[`ROS3Access`](@ref) is implemented but unverified: no read through libhdf5's read-only S3
-driver has been confirmed end to end, which is why [`AutoAccess`](@ref) never selects it and
-[`DownloadAccess`](@ref) is the mechanism to rely on for a remote object. It also needs a
-libhdf5 built with that driver — `HDF5_jll` ships one from 2.2.3, and `HDF5.has_ros3()` is
-the check since an environment may resolve an earlier one — an AWS region, and a URL naming
-both a bucket and a key.
+[`ROS3Access`](@ref) does not currently work. Opening an object through libhdf5's read-only
+S3 driver hangs: it waits for the S3 request to report completion and nothing signals it, on
+Linux and on macOS alike, against objects that plain HTTP requests read immediately. There is
+no timeout that would turn that into an error. [`AutoAccess`](@ref) therefore never selects
+it and [`DownloadAccess`](@ref) is the mechanism to rely on for a remote object.
+`UPSTREAM.md` records the reproducer and backtrace.
 
-The driver also negotiates TLS whatever the URL's scheme says, so a plaintext `http://`
-endpoint is unreachable through it, and no request it makes can be bounded by a timeout from
-here.
+Were it working it would still need a libhdf5 built with the driver — `HDF5_jll` ships one
+from 2.2.3, and `HDF5.has_ros3()` is the check — an AWS region, and a URL naming both a
+bucket and a key. It also negotiates TLS whatever the URL's scheme says, so a plaintext
+`http://` endpoint is unreachable through it.
 
 Range-based scanning is not implemented; it needs a custom libhdf5 virtual file driver. See
 [Remote sources](@ref).

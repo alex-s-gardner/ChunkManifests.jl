@@ -197,18 +197,74 @@ failed, which is how the following was established:
 - The URL parser does want a bucket *and* a key: a single path segment
   (`https://host/file.h5`) is refused, two are accepted, and the host need not
   be an AWS one.
-- Against a real endpoint it did not fail, but it did not finish either. A
-  scan of one GOES-16 NetCDF4 granule in the public `noaa-goes16` bucket, by
-  both `s3://` and regional-endpoint form, ran about fourteen minutes without
-  completing and was stopped. That is not evidence of a hang: the granule is
-  large, ROS3 issues many small ranged GETs with no coalescing of its own, and
-  the run's output was block-buffered so no progress was visible.
+- Against a real endpoint it hangs. See the next entry.
 
-So verifying this needs a real endpoint over TLS, and a deliberate attempt — a
-small object, a bounded wall clock, `HDF5_ROS3_VFD_DEBUG=1` — rather than a
-quick check. Until one read succeeds, `AutoAccess` selects `DownloadAccess` for
-every remote URI, and the absence of any timeout control over libhdf5's own
-requests is a second reason not to put it on the default path.
+So `ROS3Access` cannot be exercised at all with these binaries. `AutoAccess`
+selects `DownloadAccess` for every remote URI, and the absence of any timeout
+control over libhdf5's own requests is a second reason not to put it on the
+default path.
+
+## HDF5 2.2 — the ROS3 driver never returns from opening an object
+
+`H5Fopen` through the read-only S3 driver does not come back. Reproduced on
+`ubuntu-latest` and on macOS, against a public object that plain HTTP requests
+read in under a fifth of a second. Not reported upstream.
+
+The reproducer needs only HDF5.jl:
+
+```julia
+import HDF5
+url = "https://its-live-data.s3.us-west-2.amazonaws.com/NSIDC/" *
+    "velocity_image_pair_sample/landsatOLI/v02/N80E010/" *
+    "LC09_L1TP_013243_20230801_20230802_02_T1_X_" *
+    "LC08_L1TP_013243_20240811_20240815_02_T1_G0120V02_P028.nc"
+HDF5.h5open(url, "r"; driver = HDF5.Drivers.ROS3(1, false, "us-west-2", "", ""))
+```
+
+That object is a 0.34 MB NetCDF4 granule in the public ITS_LIVE bucket, which
+is in `us-west-2`. It needs no credentials: an anonymous `HEAD` answers 200 and
+an anonymous `GET` with `Range: bytes=0-7` answers 206 with the HDF5 magic
+number, both in under 0.15 s from the same hosts the call hangs on. So the
+object, its permissions and the network are not involved.
+
+Where it stops, from the backtrace of the killed process:
+
+```
+pthread_cond_wait                   libc
+aws_condition_variable_wait         libaws-c-common
+aws_condition_variable_wait_pred    libaws-c-common
+H5FD__s3comms_s3r_open              libhdf5
+H5FD__ros3_open → H5FD_open → H5F_open → H5Fopen
+```
+
+`s3r_open` waits on a condition variable for the asynchronous S3 request to
+report completion, and nothing ever signals it. `HDF5_ROS3_VFD_LOG_LEVEL=info`
+shows the same thing from the other side: one request handed to the network and
+never finishing, logged every five seconds —
+
+```
+Requests-in-flight(approx/exact):1/1  Requests-preparing:0  Requests-queued:0
+Requests-network(get/put/default/total):0/0/1/1  Requests-streaming-waiting:0
+```
+
+— with no HTTP status, no transport error and no TLS error at any point.
+
+Two candidate causes ruled out:
+
+- **Credentials.** The default chain fails and the anonymous provider succeeds
+  immediately, which is correct for a public object. `AWS_EC2_METADATA_DISABLED=true`
+  changes nothing, so this is not instance-metadata probing.
+- **A missing TLS provider.** `s2n_tls_jll` is installed and loaded, so
+  `aws-c-io` has the TLS backend it needs on Linux.
+
+Versions: HDF5.jl 0.17.4, `HDF5_jll` 2.2.3+0 (libhdf5 reports 2.2.0),
+`aws_c_s3_jll` 0.11.5+0, `aws_c_io_jll` 0.26.3+0, `aws_c_common_jll` 0.12.6+0,
+`s2n_tls_jll` 1.7.11+0.
+
+Whether this is a defect in HDF5's driver or in how the aws-c-* libraries are
+built for the JLL is not established, which is what decides whether it belongs
+to HDFGroup/hdf5 or to Yggdrasil. HDF5 2.x rewrote this driver onto the AWS SDK
+for C, so it is new code either way.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 
