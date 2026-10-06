@@ -210,7 +210,33 @@ default path.
 `ubuntu-latest` and on macOS, against a public object that plain HTTP requests
 read in under a fifth of a second. Not reported upstream.
 
-The reproducer needs only HDF5.jl:
+It is not a Julia-side problem: the same hang happens from C, with no Julia in
+the process.
+
+```c
+#include "hdf5.h"
+#include "H5FDros3.h"
+
+/* the URL below, elided for width */
+static const char *URL = "https://its-live-data.s3.us-west-2.amazonaws.com/...P028.nc";
+
+H5FD_ros3_fapl_t fa;
+memset(&fa, 0, sizeof(fa));
+fa.version = 1;
+fa.authenticate = false;                /* public object */
+strncpy(fa.aws_region, "us-west-2", H5FD_ROS3_MAX_REGION_LEN);
+
+hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
+H5Pset_fapl_ros3(fapl, &fa);
+H5Fopen(URL, H5F_ACC_RDONLY, fapl);     /* never returns */
+```
+
+Built against the `HDF5_jll` artifact's own headers and library, it prints the
+parsed URL and the request headers and then sits in `H5Fopen` until a
+self-imposed `SIGALRM` kills it. So HDF5.jl is not involved, and the defect is
+in libhdf5's driver or in the aws-c-* libraries it is linked against.
+
+The equivalent from Julia, which needs only HDF5.jl:
 
 ```julia
 import HDF5
@@ -264,7 +290,9 @@ Versions: HDF5.jl 0.17.4, `HDF5_jll` 2.2.3+0 (libhdf5 reports 2.2.0),
 Whether this is a defect in HDF5's driver or in how the aws-c-* libraries are
 built for the JLL is not established, which is what decides whether it belongs
 to HDFGroup/hdf5 or to Yggdrasil. HDF5 2.x rewrote this driver onto the AWS SDK
-for C, so it is new code either way.
+for C, so it is new code either way. Separating the two needs a libhdf5 built
+outside the JLL, against its own aws-c-s3; the C reproducer above is what to
+run against one.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 
