@@ -53,47 +53,53 @@ same object is local.
 
 ### The region
 
-libhdf5 will not open anything without an AWS region, and reports that from inside its own S3
-layer rather than saying what is missing, so the region is resolved before opening — and in
-most cases without anything being configured.
-
-An AWS endpoint names its region in the host:
+libhdf5 will not open anything without an AWS region, and resolves one itself — from the
+driver, then `AWS_REGION`, then `AWS_DEFAULT_REGION`, then the AWS configuration file and
+profile (honoring `AWS_CONFIG_FILE` and `AWS_PROFILE`). It reports a missing region as its
+own error, so there is nothing to supply if your environment is already configured for AWS:
 
 ```julia
 scan("https://bucket.s3.us-west-2.amazonaws.com/granule.h5", HDF5Driver(); access = ROS3Access())
 ```
 
-Both endpoint forms carry it, as do the dualstack and older `s3-<region>` spellings.
-
-An `s3://` URI names none, and neither does a regionless endpoint like
-`bucket.s3.amazonaws.com` — a bucket in any region answers there, and S3 redirects rather than
-serving it. So the bucket is asked: one `HEAD` to the regionless endpoint returns
-`x-amz-bucket-region`, without credentials, and on an error response as well as a successful
-one, which resolves a private or requester-pays bucket you cannot read.
-
-```julia
-scan("s3://bucket/granule.h5", HDF5Driver(); access = ROS3Access())
-```
-
-The sources, in order of how specific each is to the object:
-
-| source | costs |
-|---|---|
-| `region` passed to `ROS3Access` | nothing |
-| a region the URL names | nothing |
-| S3's answer for the bucket | one `HEAD` |
-| `AWS_REGION`, then `AWS_DEFAULT_REGION` | nothing |
-
-Scanning throws naming all of them when none answers. A host outside `amazonaws.com` is never
-asked — an S3-compatible service has its own naming, and probing an unrelated host's root is
-not this package's business — so one of those needs `region` or the environment:
+`region` overrides that chain where you want to be explicit:
 
 ```julia
 scan(url, HDF5Driver(); access = ROS3Access(; region = "us-west-2"))
 ```
 
-The environment comes last on purpose: `AWS_REGION` is an ambient default, and reading a
-`us-west-2` bucket as whatever it happens to say fails the request.
+This package deliberately does not resolve the region itself. Doing so would duplicate a
+chain libhdf5 already implements more fully, and would pre-empt the configuration file a
+region usually lives in.
+
+An `s3://` URI is the one exception. Its endpoint host has to be built here — `s3://` names
+no host — so the region is needed as a value rather than inside libhdf5, and comes from
+`region`, `AWS_REGION` or `AWS_DEFAULT_REGION`. The AWS configuration file is out of reach
+without an AWS client, so a region living only there does not serve an `s3://` URI, and
+scanning one says so.
+
+```julia
+scan("s3://bucket/granule.h5", HDF5Driver(); access = ROS3Access(; region = "us-west-2"))
+```
+
+The manifest records the URI as given either way, so chunks are read back through whichever
+transport it names.
+
+### An S3-compatible endpoint
+
+libhdf5 addresses a bucket virtual-host style by default, prepending it to the host — so
+`http://minio.example.com/bucket/key` is requested as `Host: bucket.minio.example.com`, which
+usually does not resolve. Two of libhdf5's own environment variables cover this:
+
+| variable | effect |
+|---|---|
+| `HDF5_ROS3_VFD_FORCE_PATH_STYLE` | address the bucket in the path instead of the host |
+| `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` | send requests to a different endpoint |
+| `HDF5_ROS3_VFD_DEBUG` | print the parsed URL, request headers and failure reason |
+
+The endpoint must speak TLS. libhdf5 2.x's driver is built on the AWS SDK for C and
+negotiates TLS whatever the URL's scheme says, so a plaintext `http://` server is not
+reachable through it.
 
 A region on its own reads unauthenticated, which is what a public bucket wants. An
 authenticated bucket needs the driver supplied outright, which overrides `region`:
@@ -111,10 +117,13 @@ refused by its parser. The host itself need not be an AWS one.
 
 ### Unverified
 
-No read through this driver has been verified end to end. A local HTTP server does not stand
-in for S3 — libhdf5 parses a two-segment URL and then fails inside its own S3 layer — so
-confirming it needs a real endpoint. Until then [`DownloadAccess`](@ref) is the mechanism to
-rely on, and the one [`AutoAccess`](@ref) picks.
+No read through this driver has been verified end to end, which is why
+[`DownloadAccess`](@ref) is the mechanism to rely on and the one [`AutoAccess`](@ref) picks.
+
+Confirming it needs a real endpoint: a local stand-in cannot serve, because the driver
+negotiates TLS regardless of the URL's scheme and a certificate the AWS SDK trusts is more
+than a test server offers. A second reason not to put it on the default path is that none of
+libhdf5's requests can be bounded from here — there is no timeout to set.
 
 Reaching S3 for *chunk* bytes, as opposed to scanning, is a transport question rather than an
 access question — see [`S3Transport`](@ref) under [Fetching chunk bytes](@ref).

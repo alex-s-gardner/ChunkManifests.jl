@@ -69,6 +69,10 @@ libhdf5 built with that driver — `HDF5_jll` ships one from 2.2.3, and `HDF5.ha
 the check since an environment may resolve an earlier one — an AWS region, and a URL naming
 both a bucket and a key.
 
+The driver also negotiates TLS whatever the URL's scheme says, so a plaintext `http://`
+endpoint is unreachable through it, and no request it makes can be bounded by a timeout from
+here.
+
 Range-based scanning is not implemented; it needs a custom libhdf5 virtual file driver. See
 [Remote sources](@ref).
 

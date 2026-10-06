@@ -129,132 +129,63 @@ end
                 DownloadAccess
         end
 
-        @testset "the region an endpoint names" begin
-            # Both AWS endpoint forms carry the region in the host, as do the
-            # dualstack and older `s3-<region>` spellings; `s3-external-1` is a
-            # us-east-1 alias. A regionless endpoint names none and is not
-            # taken for us-east-1: a bucket in any region answers there. A host
-            # outside amazonaws.com names none either.
-            for (uri, region) in (
-                    "https://bkt.s3.us-west-2.amazonaws.com/k.h5" => "us-west-2",
-                    "https://s3.us-west-2.amazonaws.com/bkt/k.h5" => "us-west-2",
-                    "https://bkt.s3.dualstack.eu-central-1.amazonaws.com/k" => "eu-central-1",
-                    "https://bkt.s3-ap-south-1.amazonaws.com/k.h5" => "ap-south-1",
-                    "https://bkt.s3-external-1.amazonaws.com/k.h5" => "us-east-1",
-                    "https://my.bkt.name.s3.ca-central-1.amazonaws.com/k.h5" => "ca-central-1",
-                    # DNS is case-insensitive, so the host is folded.
-                    "https://BKT.S3.US-WEST-2.AMAZONAWS.COM/k.h5" => "us-west-2",
-                    "https://bkt.s3.amazonaws.com/k.h5" => nothing,
-                    "https://s3.amazonaws.com/bkt/k.h5" => nothing,
-                    "https://bkt.s3-accelerate.amazonaws.com/k.h5" => nothing,
-                    "https://data.nsidc.earthdatacloud.nasa.gov/x/y.h5" => nothing,
-                    "https://minio.example.com:9000/bkt/k.h5" => nothing,
-                    "https://example.invalid/bkt/k.h5" => nothing,
-                )
-                @test ChunkManifests._hostregion(uri) == region
+        @testset "the region is libhdf5's to resolve" begin
+            # Nothing here looks a region up. libhdf5 takes it from the driver,
+            # then AWS_REGION, then AWS_DEFAULT_REGION, then the AWS
+            # configuration file and profile, and reports its absence itself —
+            # so resolving it here would both duplicate that and pre-empt the
+            # configuration file a caller's region usually lives in.
+            withenv("AWS_REGION" => "eu-central-1") do
+                @test ChunkManifests._ros3driver(ROS3Access()).aws_region == ""
             end
-        end
-
-        @testset "the bucket an S3 URI names" begin
-            # A bucket is what S3 is asked about, so a URI naming none is not
-            # asked about at all — including every host outside amazonaws.com.
-            for (uri, bucket) in (
-                    "s3://bkt/k.h5" => "bkt",
-                    "s3://bkt/deep/path/k.h5" => "bkt",
-                    "https://bkt.s3.amazonaws.com/k.h5" => "bkt",
-                    "https://my.bkt.name.s3.amazonaws.com/k.h5" => "my.bkt.name",
-                    "https://s3.amazonaws.com/bkt/k.h5" => "bkt",
-                    "https://s3.us-west-2.amazonaws.com/bkt/deep/k.h5" => "bkt",
-                    "https://s3.amazonaws.com/" => nothing,
-                    "https://minio.example.com/bkt/k.h5" => nothing,
-                    "/local/path.h5" => nothing,
-                )
-                @test ChunkManifests._s3bucket(uri) == bucket
-            end
-        end
-
-        @testset "asking S3 for the region" begin
-            # S3 answers with the region in a header, on an error response as
-            # well as a successful one, which is what resolves a bucket that
-            # cannot be read. Served locally here: the behaviour under test is
-            # reading that header, not reaching AWS.
-            for status in (200, 403, 301)
-                served = HTTP.serve!("127.0.0.1", 0) do _
-                    return HTTP.Response(status, ["x-amz-bucket-region" => "eu-west-1"])
-                end
-                try
-                    url = "http://127.0.0.1:$(HTTP.port(served))/"
-                    @test ChunkManifests._discoverregion(url) == "eu-west-1"
-                finally
-                    close(served)
-                end
-            end
-            # A response without the header answers nothing rather than
-            # inventing a region.
-            served = HTTP.serve!(_ -> HTTP.Response(200), "127.0.0.1", 0)
-            try
-                url = "http://127.0.0.1:$(HTTP.port(served))/"
-                @test ChunkManifests._discoverregion(url) === nothing
-            finally
-                close(served)
-            end
-            # Nor does a probe that cannot be made at all.
-            @test ChunkManifests._discoverregion(
-                "http://127.0.0.1:1/"; timeout = 1
-            ) === nothing
-        end
-
-        @testset "region resolution" begin
-            # A host outside amazonaws.com, so nothing here asks S3 anything.
-            uri = "https://h/b/k.h5"
-            aws = "https://bkt.s3.us-west-2.amazonaws.com/k.h5"
-            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => nothing) do
-                @test_throws "needs an AWS region" ChunkManifests._ros3region(
-                    ROS3Access(), uri
-                )
-                # An AWS endpoint naming its region needs nothing configured.
-                @test ChunkManifests._ros3region(ROS3Access(), aws) == "us-west-2"
-                @test ChunkManifests._ros3region(
-                    ROS3Access(; region = "us-west-2"), uri
-                ) == "us-west-2"
-            end
-            withenv("AWS_REGION" => "eu-central-1", "AWS_DEFAULT_REGION" => "ap-south-1") do
-                # AWS_REGION wins over AWS_DEFAULT_REGION where neither the URL
-                # nor S3 answers...
-                @test ChunkManifests._ros3region(ROS3Access(), uri) == "eu-central-1"
-                # ...but the URL's own region wins over the environment, which
-                # is an ambient default and would fail the request here.
-                @test ChunkManifests._ros3region(ROS3Access(), aws) == "us-west-2"
-                # An explicit region wins over both.
-                @test ChunkManifests._ros3region(ROS3Access(; region = "us-east-1"), aws) ==
-                    "us-east-1"
-            end
-            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => "ap-south-1") do
-                @test ChunkManifests._ros3region(ROS3Access(), uri) == "ap-south-1"
-            end
-            # A driver supplied outright carries the region, which is what
-            # builds an endpoint from an s3:// URI.
+            given = ChunkManifests._ros3driver(ROS3Access(; region = "us-west-2"))
+            @test given.aws_region == "us-west-2"
+            # A region on its own reads unauthenticated.
+            @test given.authenticate == false
+            # A driver supplied outright is used as it stands.
             configured = HDF5.Drivers.ROS3(1, true, "us-east-2", "id", "key")
-            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => nothing) do
-                @test ChunkManifests._ros3region(ROS3Access(; aws = configured), uri) ==
-                    "us-east-2"
-            end
+            @test ChunkManifests._ros3driver(
+                ROS3Access(; region = "unused", aws = configured)
+            ) === configured
         end
 
         @testset "an s3:// URI becomes an endpoint" begin
-            @test ChunkManifests._ros3endpoint("s3://bkt/k.h5", "us-west-2") ==
-                "https://bkt.s3.us-west-2.amazonaws.com/k.h5"
-            @test ChunkManifests._ros3endpoint("s3://bkt/deep/path/k.h5", "eu-west-1") ==
-                "https://bkt.s3.eu-west-1.amazonaws.com/deep/path/k.h5"
-            # An endpoint is already one and is passed through untouched.
-            @test ChunkManifests._ros3endpoint("https://h/b/k.h5", "us-west-2") ==
+            # The one place a region is needed as a value here rather than
+            # inside libhdf5: the endpoint host has to be built.
+            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => nothing) do
+                @test ChunkManifests._ros3openloc(
+                    ROS3Access(; region = "us-west-2"), "s3://bkt/k.h5"
+                ) == "https://bkt.s3.us-west-2.amazonaws.com/k.h5"
+                @test ChunkManifests._ros3openloc(
+                    ROS3Access(; region = "eu-west-1"), "s3://bkt/deep/path/k.h5"
+                ) == "https://bkt.s3.eu-west-1.amazonaws.com/deep/path/k.h5"
+                @test_throws "host needs a region" ChunkManifests._ros3openloc(
+                    ROS3Access(), "s3://bkt/k.h5"
+                )
+                # A driver supplied outright carries the region too.
+                @test ChunkManifests._ros3openloc(
+                    ROS3Access(; aws = HDF5.Drivers.ROS3(1, false, "us-east-2", "", "")),
+                    "s3://bkt/k.h5",
+                ) == "https://bkt.s3.us-east-2.amazonaws.com/k.h5"
+            end
+            withenv("AWS_REGION" => "eu-west-1", "AWS_DEFAULT_REGION" => "ap-south-1") do
+                @test ChunkManifests._ros3openloc(ROS3Access(), "s3://bkt/k.h5") ==
+                    "https://bkt.s3.eu-west-1.amazonaws.com/k.h5"
+            end
+            withenv("AWS_REGION" => nothing, "AWS_DEFAULT_REGION" => "ap-south-1") do
+                @test ChunkManifests._ros3openloc(ROS3Access(), "s3://bkt/k.h5") ==
+                    "https://bkt.s3.ap-south-1.amazonaws.com/k.h5"
+            end
+            # An endpoint is already one and passes through untouched, region
+            # or no region.
+            @test ChunkManifests._ros3openloc(ROS3Access(), "https://h/b/k.h5") ==
                 "https://h/b/k.h5"
             # A bucket with no key names no object.
-            @test_throws "needs a bucket and a key" ChunkManifests._ros3endpoint(
-                "s3://bkt", "us-west-2"
+            @test_throws "needs a bucket and a key" ChunkManifests._ros3openloc(
+                ROS3Access(; region = "us-west-2"), "s3://bkt"
             )
-            @test_throws "needs a key after the bucket" ChunkManifests._ros3endpoint(
-                "s3://bkt/", "us-west-2"
+            @test_throws "needs a key after the bucket" ChunkManifests._ros3openloc(
+                ROS3Access(; region = "us-west-2"), "s3://bkt/"
             )
         end
 
