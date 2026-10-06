@@ -117,6 +117,12 @@ function ChunkManifests.fetchranges(
     return [ChunkManifests.fetchrange(t, uri, r) for r in rs]
 end
 
+# Delegated, not counted: a size lookup is not a range fetch, and the cases
+# that assert on the count are measuring reads. RangeAccess needs this to
+# learn how large the object it is seeking within is.
+ChunkManifests.objectsize(t::FetchCountingTransport, uri::AbstractString) =
+    ChunkManifests.objectsize(t.inner, uri)
+
 # A one-block AffineChunkMap pointing at `uri`, and a ManifestArray over one,
 # for cases that need a chunk grid of a given shape without a file behind it.
 function dummy_chunkmap(shape, chunkshape, uri)

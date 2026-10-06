@@ -54,6 +54,7 @@ SourceAccess
 AutoAccess
 LocalAccess
 DownloadAccess
+RangeAccess
 ROS3Access
 ```
 
@@ -65,6 +66,16 @@ ZarrManifest
 KerchunkJSON
 KerchunkParquet
 ChunkManifests.save
+```
+
+## Byte access
+
+How the bytes a reader needs are fetched and reused, a layer below building a manifest.
+
+```@docs
+ChunkManifests.RangeIO
+ChunkManifests.rangecost
+ChunkManifests.withrangefile
 ```
 
 ## Transports
@@ -164,8 +175,21 @@ ChunkManifests.DRIVER_REGISTRY
 ### A new transport
 
 A transport implements [`fetchrange`](@ref), [`fetchranges`](@ref) and
-[`objectsize`](@ref). The three below have defaults, and exist so that a backend whose
-request costs differ from the defaults can say so.
+[`objectsize`](@ref). Match these signatures exactly:
+
+```julia
+fetchrange(t::MyTransport, uri::AbstractString, r::ByteRange) -> Vector{UInt8}
+fetchranges(t::MyTransport, uri::AbstractString, rs::AbstractVector{ByteRange}) -> Vector{Vector{UInt8}}
+objectsize(t::MyTransport, uri::AbstractString) -> Integer
+```
+
+Leaving `uri` or `rs` untyped makes a method *ambiguous* with the generic one rather than
+overriding it — more specific in the first argument, less in the rest, so neither wins. The
+failure surfaces from inside a concurrent read as a `TaskFailedException`, which is a long
+way from the cause.
+
+The three below have defaults, and exist so that a backend whose request costs differ from
+the defaults can say so.
 
 ```@docs
 ChunkManifests.maxgap

@@ -586,6 +586,67 @@ struct DownloadAccess <: SourceAccess
 end
 
 """
+    RangeAccess(; transport=TransportContainers(), pagebuffer=4 * 1024 * 1024)
+
+Read the object in place through byte-range requests, so only the metadata
+libhdf5 actually touches is transferred.
+
+This is the mechanism [`AutoAccess`](@ref) chooses for a remote object. It
+serves libhdf5 through a virtual file driver backed by `transport`, which means
+every scheme the transports cover — `http://`, `https://`, `s3://` — and the
+`authorize` hook that governs them.
+
+`initialread` is how much of the head of the object to fetch in one request
+when it is opened, which every read inside that span is then served from. HDF5
+puts its superblock there and a file written for cloud access keeps the rest of
+its metadata nearby, so a span covering it turns a scan into one or two
+requests. It is capped at the object's size, so a small file costs one request
+whatever the setting; `0` fetches nothing up front.
+
+`pagebuffer` sizes libhdf5's own page buffer. A file written with paged
+metadata aggregation, as a cloud-optimized product is, then has its metadata
+read in a few large aligned requests rather than many small scattered ones;
+`0` turns the buffer off.
+
+Scanning a 331 KiB NetCDF4 granule over HTTPS this way takes 11 requests and
+2905 bytes, under 1% of the file. The ratio improves with file size, which is
+the point: [`DownloadAccess`](@ref) transfers the whole object to read the same
+metadata.
+
+!!! note
+    The driver is registered with libhdf5 through a struct whose layout is not
+    a stable public API, so it is enabled only for the libhdf5 versions whose
+    layout has been verified. On any other version, scanning with this throws
+    and names [`DownloadAccess`](@ref) as the alternative rather than risking
+    a mismatched struct.
+"""
+struct RangeAccess <: SourceAccess
+    transport::AbstractTransport
+    initialread::Int
+    pagebuffer::Int
+    blocksize::Int
+    cachelimit::Int
+end
+
+function RangeAccess(;
+        transport::AbstractTransport = TransportContainers(),
+        initialread::Integer = 4 * 1024 * 1024,
+        pagebuffer::Integer = 4 * 1024 * 1024,
+        blocksize::Integer = 1024 * 1024,
+        cachelimit::Integer = 256 * 1024 * 1024,
+    )
+    initialread >= 0 ||
+        throw(ArgumentError("initialread must be nonnegative, got $initialread"))
+    pagebuffer >= 0 ||
+        throw(ArgumentError("pagebuffer must be nonnegative, got $pagebuffer"))
+    blocksize >= 0 || throw(ArgumentError("blocksize must be nonnegative, got $blocksize"))
+    cachelimit > 0 || throw(ArgumentError("cachelimit must be positive, got $cachelimit"))
+    return RangeAccess(
+        transport, Int(initialread), Int(pagebuffer), Int(blocksize), Int(cachelimit)
+    )
+end
+
+"""
     ROS3Access(; region=nothing, aws=nothing)
 
 Read the object in place through HDF5's read-only S3 virtual file driver, so

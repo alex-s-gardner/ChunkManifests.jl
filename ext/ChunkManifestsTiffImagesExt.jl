@@ -86,8 +86,22 @@ end
 # running set so a self-referencing or circular pointer in a malformed file
 # raises immediately instead of looping forever.
 function _gt_readpages(path::AbstractString)
-    pages = open(path, "r") do io
-        tf = read(io, TiffImages.TiffFile)
+    return open(path, "r") do io
+        _gt_readpages(io, path)
+    end
+end
+
+# Takes an already-open stream so the same walk serves a local file and a
+# remote object: ChunkManifests.RangeIO is a seekable stream over byte-range
+# requests, and TiffImages reads tag directories through it exactly as it
+# reads them from a file.
+function _gt_readpages(io::IO, path::AbstractString)
+    pages = let
+        # TiffImages reads a TiffFile from a FileIO stream, which is what its
+        # own IOStream method wraps one in. Wrapping here lets the same walk
+        # take a RangeIO over a remote object.
+        stream = TiffImages.getstream(TiffImages.format"TIFF", io, String(path))
+        tf = read(stream, TiffImages.TiffFile)
         # A TIFF declares its byte order in its header ("MM" for big-endian),
         # and the sample data follows it. This store passes a source's bytes
         # through untouched and Zarr.jl ignores the byte-order marker in a
@@ -124,7 +138,7 @@ function _gt_readpages(path::AbstractString)
             offset = nextoffset
             mainidx += 1
         end
-        return result
+        result
     end
     isempty(pages) && throw(ArgumentError("scan: \"$path\" has no image file directories"))
     return pages
@@ -590,13 +604,58 @@ or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
 entry nesting deeper than one level, and any IFD offset — main chain or
 `SubIFDs` — revisited while scanning, which would otherwise loop forever.
 """
-function ChunkManifests.scan(path::AbstractString, driver::ChunkManifests.GeoTIFFDriver)
-    isfile(path) || throw(ArgumentError("scan: no such file $(repr(path))"))
+function ChunkManifests.scan(
+        path::AbstractString, driver::ChunkManifests.GeoTIFFDriver;
+        access::ChunkManifests.SourceAccess = ChunkManifests.AutoAccess(),
+    )
+    return _gt_scan(driver, path, ChunkManifests.resolve_access(access, driver, path))
+end
 
+# A remote object is read in place: a COG keeps its tag directories and tile
+# offsets together, and those are all a scan needs, so this moves a small
+# clustered part of the object rather than the whole of it. No libhdf5 is
+# involved, so unlike the HDF5 driver there is no struct layout to verify.
+function _gt_scan(
+        driver::ChunkManifests.GeoTIFFDriver, uri::AbstractString,
+        access::ChunkManifests.RangeAccess,
+    )
+    total = ChunkManifests.objectsize(access.transport, uri)
+    total === nothing && throw(
+        ArgumentError(
+            "RangeAccess cannot scan $(repr(uri)): its size is not known, and a TIFF is " *
+                "read by seeking within it. Scan with DownloadAccess(), which fetches " *
+                "the object once and works anywhere",
+        )
+    )
+    io = ChunkManifests.RangeIO(access, uri, total)
+    return _gt_build(
+        driver, String(uri), total, _gt_readpages(io, uri),
+        ChunkManifests._scantransport(access),
+    )
+end
+
+# Every other mechanism resolves to a local path, which is what the reader
+# then opens. The recorded URI stays the one the caller named, so a manifest
+# built from a cached copy is valid for a reader that never saw the cache.
+function _gt_scan(
+        driver::ChunkManifests.GeoTIFFDriver, uri::AbstractString,
+        access::ChunkManifests.SourceAccess,
+    )
+    return ChunkManifests.withsourcepath(access, uri) do localpath
+        recorded = ChunkManifests._isremote(uri) ? String(uri) : abspath(localpath)
+        _gt_build(
+            driver, recorded, filesize(localpath), _gt_readpages(localpath),
+            ChunkManifests._scantransport(access),
+        )
+    end
+end
+
+function _gt_build(
+        driver::ChunkManifests.GeoTIFFDriver, path::AbstractString, filebytes, pages,
+        transport::ChunkManifests.AbstractTransport,
+    )
     table = ChunkManifests.PathTable()
-    fileindex = ChunkManifests.push_uri!(table, abspath(path); size = filesize(path))
-
-    pages = _gt_readpages(path)
+    fileindex = ChunkManifests.push_uri!(table, path; size = filebytes)
 
     arrays = Dict{String, ChunkManifests.ManifestArray}()
     primarygeo = Dict{String, Any}()
@@ -615,13 +674,18 @@ function ChunkManifests.scan(path::AbstractString, driver::ChunkManifests.GeoTIF
     end
 
     provenance = Dict{String, Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
-    return ChunkManifests.ChunkManifest(; arrays, provenance)
+    return ChunkManifests.ChunkManifest(; arrays, provenance, transport)
 end
 
 # Registration mutates dictionaries owned by ChunkManifests, not by this
 # extension; precompiling the extension does not replay that mutation into a
 # fresh session the way it would for a dict this module owned itself, so it
 # has to happen in __init__ rather than at top level.
+# A remote object is read in place by default: that is what a COG's layout is
+# for, and nothing here depends on a struct layout that might not match.
+ChunkManifests._remoteaccess(::ChunkManifests.GeoTIFFDriver, ::AbstractString) =
+    ChunkManifests.RangeAccess()
+
 function __init__()
     ChunkManifests.register_codec!(
         ChunkManifests.GeoTIFFDriver, 8, ChunkManifests.COMPRESSOR,

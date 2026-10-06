@@ -61,6 +61,28 @@ fails with [`S3Transport`](@ref)'s own construction error, naming AWSS3 as what 
 is not swallowed into `fallback`, which would try to read the key as a local path and fail
 with a confusing file-not-found error instead.
 
+## The transport a scan used is the manifest's
+
+A scan reads through a transport, and the manifest it produces reads its chunks through the
+same one. So a transport that is authenticated, or bound to particular prefixes, is
+configured once:
+
+```julia
+cm = scan(url, HDF5Driver(); access = RangeAccess(; transport = mytransport))
+Zarr.zopen(cm)["v"][1:4, 1:4]      # reads through mytransport, nothing re-attached
+```
+
+[`DownloadAccess`](@ref) carries its transport forward the same way. A mechanism that carries
+none — [`LocalAccess`](@ref), or [`ROS3Access`](@ref), where libhdf5 does its own I/O —
+leaves the manifest its default.
+
+A manifest loaded from a saved document has no scan to inherit from, so give it one there:
+
+```julia
+loaded = ChunkManifest(path, ZarrManifest())
+cm = ChunkManifest(loaded; transport = mytransport)
+```
+
 ## Restricting what a manifest may read
 
 A manifest is an instruction to fetch whatever URIs it names, so reading an untrusted one

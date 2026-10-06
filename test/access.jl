@@ -43,11 +43,16 @@ end
 
     @testset "AutoAccess chooses per path, named mechanisms are never substituted" begin
         @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), src) isa LocalAccess
-        @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), "s3://b/k.h5") isa
-            DownloadAccess
+        # A remote object is read in place where that is possible, so a scan
+        # moves metadata rather than the object, and fetched whole only where
+        # the virtual file driver cannot be registered.
+        remote = ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), "s3://b/k.h5")
+        @test remote isa (
+            ChunkManifests._rangevfdsupported() ? RangeAccess : DownloadAccess
+        )
         # A caller who names a mechanism gets it, so nothing silently transfers
         # more than they asked for.
-        for acc in (LocalAccess(), DownloadAccess(), ROS3Access())
+        for acc in (LocalAccess(), DownloadAccess(), ROS3Access(), RangeAccess())
             @test ChunkManifests.resolve_access(acc, HDF5Driver(), src) === acc
         end
     end
@@ -120,13 +125,103 @@ end
         )
     end
 
+    @testset "a scan's transport is the manifest's" begin
+        # A manifest built through a transport that is authenticated, or bound
+        # to particular prefixes, is of little use if reading it falls back to
+        # a default one. FetchCountingTransport counts, so the reads can be
+        # shown to go through the same object rather than merely compare equal.
+        for access in (
+                DownloadAccess(; transport = FetchCountingTransport()),
+                RangeAccess(; transport = FetchCountingTransport()),
+            )
+            cm = scan(src, HDF5Driver(); access)
+            @test transportof(cm) === access.transport
+            before = access.transport.count[]
+            @test Array(Zarr.zopen(cm)["data"][:]) == expected
+            # Reading went through it, with nothing re-attached.
+            @test access.transport.count[] > before
+        end
+
+        # A mechanism that carries no transport leaves the manifest its own.
+        @test transportof(scan(src, HDF5Driver(); access = LocalAccess())) isa
+            TransportContainers
+    end
+
+    @testset "RangeAccess" begin
+        # Driven over a local file through LocalTransport, so the virtual file
+        # driver is exercised with no network: the mechanism under test is the
+        # driver, not where the bytes came from.
+        if ChunkManifests._rangevfdsupported()
+            reference = scan(src, HDF5Driver(); access = LocalAccess())
+            refkeys = sort(collect(keys(arraysof(reference))))
+
+            @testset "matches a local scan however reads are gathered" begin
+                # `blocksize` 0 fetches exactly what libhdf5 asked for; a block
+                # larger than the file collapses to one request. The sizes
+                # between exercise assembling a read that spans blocks, and the
+                # `initialread` cases exercise one served partly from the
+                # prefetched head and partly not — both places an off-by-one
+                # would show.
+                for initialread in (0, 256, 4096, 1 << 20)
+                    for blocksize in (0, 512, 4096, 1 << 20)
+                        access = RangeAccess(;
+                            transport = LocalTransport(), initialread, blocksize,
+                            pagebuffer = 0,
+                        )
+                        cm = scan(src, HDF5Driver(); access)
+                        @test sort(collect(keys(arraysof(cm)))) == refkeys
+                        # Assembled bytes must decode, not merely arrive.
+                        @test Array(Zarr.zopen(cm)["data"][:]) == expected
+                    end
+                end
+            end
+
+            @testset "records the URI it was given" begin
+                cm = scan(src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport()))
+                @test length(tableof(cm)) == 1
+                @test tableof(cm)[1].uri == src
+                # The size had to be known to address the object at all.
+                @test tableof(cm)[1].size == UInt64(filesize(src))
+            end
+
+            @testset "points at the chunks rather than reading them" begin
+                cm = scan(
+                    src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport())
+                )
+                m = chunkmapof(arraysof(cm)["data"])
+                # Whatever the scan read, it never needed a chunk's payload:
+                # the manifest records where each one is.
+                for I in CartesianIndices(chunkgridaxes(m))
+                    @test chunkstate(m, I) == VIRTUAL_CHUNK
+                    @test chunklocation(m, I)[3] > 0
+                end
+            end
+
+            # A mechanism that reads in place has no local path to hand over.
+            @test_throws "does not resolve" ChunkManifests.withsourcepath(
+                identity, RangeAccess(), "https://h/b/k.h5"
+            )
+        else
+            @test_skip "RangeAccess needs a libhdf5 whose driver struct layout is verified"
+        end
+
+        @testset "keywords are checked" begin
+            @test_throws "initialread must be nonnegative" RangeAccess(; initialread = -1)
+            @test_throws "pagebuffer must be nonnegative" RangeAccess(; pagebuffer = -1)
+            @test_throws "blocksize must be nonnegative" RangeAccess(; blocksize = -1)
+            @test_throws "cachelimit must be positive" RangeAccess(; cachelimit = 0)
+        end
+    end
+
     @testset "ROS3Access" begin
-        # AutoAccess never reads in place, on any build: no read through the
-        # driver has been verified, and it refuses URLs an automatic choice
-        # would be handed. Reading in place is asked for by name.
+        # AutoAccess never chooses this one, on any build: no read through
+        # libhdf5's own S3 driver has ever completed. Reading a remote object
+        # in place is RangeAccess's job, through this package's transports.
         for uri in ("https://h/b/k.h5", "http://h/b/k.h5", "s3://b/k.h5")
-            @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), uri) isa
-                DownloadAccess
+            @test !(
+                ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), uri) isa
+                    ROS3Access
+            )
         end
 
         @testset "the region is libhdf5's to resolve" begin
