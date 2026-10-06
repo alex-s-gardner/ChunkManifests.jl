@@ -45,7 +45,18 @@ function _datasetattrs(dset)
     out = Dict{String, Any}()
     for k in keys(HDF5.attrs(dset))
         k in _DIMENSION_SCALE_ATTRS && continue
-        out[k] = HDF5.read_attribute(dset, k)
+        value = HDF5.read_attribute(dset, k)
+        # A non-finite value cannot be written to any of the JSON documents a
+        # manifest is read through, so it is dropped here rather than failing a
+        # scan over it. `_FillValue = NaN` on a NetCDF4 coordinate variable is
+        # the case this reaches; the array's own fill value is kept, since
+        # `.zarray` has a spelling for it.
+        if _hasnonfinite(value)
+            @warn "dropping an attribute whose value is not representable in JSON; " *
+                "the array's own fill value is unaffected" dataset = HDF5.name(dset) attribute = k value maxlog = 1
+            continue
+        end
+        out[k] = value
     end
     return out
 end
@@ -383,9 +394,59 @@ function _scancontiguous(table, dset, shape, ::Type{T}, context::AbstractString)
     return manifest, shape, nothing, Dict{String, Any}[]
 end
 
+# Variable-length strings, which NetCDF4 writers use for scalar metadata
+# variables — a CF `grid_mapping` and whatever provenance a producer attaches.
+_isvlenstring(::Type{T}) where {T} = T === Cstring
+
+# A variable-length string dataset holds pointers into HDF5's global heap, so
+# its own bytes describe nothing a reader could decode and there is no byte
+# range worth recording. The values are read here instead and embedded as one
+# inline chunk of fixed-length records, which is the dtype Zarr v2 has for a
+# string and the only way these variables survive into a manifest at all.
+#
+# Padding is NUL to the longest value, which is what numpy's `|S<n>` means and
+# what a fixed-length HDF5 string does. Scanning already has the file open and
+# these variables carry a few bytes, so reading them costs nothing worth
+# avoiding.
+function _scanvlenstring!(arrays, table, f, dset, dsetpath::AbstractString, context)
+    raw = read(dset)
+    values = raw isa AbstractString ? [String(raw)] : map(String, vec(_corder(raw)))
+    width = max(1, maximum(sizeof, values; init = 0))
+    T = Zarr.MaxLengthString{width, UInt8}
+
+    shape = size(dset)
+    bytes = zeros(UInt8, width * length(values))
+    for (i, s) in pairs(values)
+        units = codeunits(s)
+        copyto!(bytes, (i - 1) * width + 1, units, 1, min(length(units), width))
+    end
+
+    gridsize = ntuple(_ -> 1, length(shape))
+    manifest = ExplicitChunkMap(
+        table, fill(INLINE_INDEX, gridsize), zeros(UInt64, gridsize),
+        fill(UInt64(length(bytes)), gridsize);
+        inline = Dict(CartesianIndex(gridsize) => bytes),
+    )
+
+    dimnames = something(
+        _dimnames(f, dset, length(shape)), ["dim_$i" for i in 1:length(shape)]
+    )
+    arrays[dsetpath] = ManifestArray{T}(
+        manifest, shape, shape;
+        fillvalue = nothing, compressor = nothing, filters = Dict{String, Any}[],
+        attrs = _datasetattrs(dset), dimnames,
+    )
+    return nothing
+end
+
+# Chunk bytes are C-ordered, and a Julia array is not, so an array of more than
+# one dimension is permuted before being flattened.
+_corder(a::AbstractArray) = ndims(a) <= 1 ? a : permutedims(a, ndims(a):-1:1)
+
 function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractString, filepath)
     context = "$filepath: dataset \"$dsetpath\""
     T = eltype(dset)
+    _isvlenstring(T) && return _scanvlenstring!(arrays, table, f, dset, dsetpath, context)
     _checkdtype(T, context)
     _checkbyteorder(dset, T, context)
 
