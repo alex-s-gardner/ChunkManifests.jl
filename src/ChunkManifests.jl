@@ -49,8 +49,11 @@ include("store/metadata.jl")
 include("store/readahead.jl")
 include("store/manifeststore.jl")
 include("drivers/driver.jl")
-include("drivers/access.jl")
-include("drivers/rangevfd.jl")
+# Byte access: how the bytes a reader needs are fetched and reused. A layer
+# below building a manifest, and separate from it.
+include("access/access.jl")
+include("access/rangesource.jl")
+include("access/hdf5vfd.jl")
 include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")
 include("serialize/zarrnative.jl")
