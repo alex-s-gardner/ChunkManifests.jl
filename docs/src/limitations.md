@@ -40,7 +40,22 @@ opposite order to the host, and to a kerchunk document declaring a big-endian dt
 ### HDF5 and NetCDF4
 
 Rejected outright, naming the file and the feature: szip, nbit, scaleoffset, LZF, LZ4,
-bitshuffle, and any nonzero per-chunk `filter_mask`.
+bitshuffle, and any nonzero per-chunk `filter_mask`. A compound dtype is rejected the same
+way — no Zarr v2 dtype describes its layout.
+
+A **variable-length string** dataset is not rejected: it holds pointers into HDF5's global
+heap, so there are no bytes worth referencing, and its values are read during the scan and
+embedded as fixed-length `|SN` records instead. NetCDF4 writers use this dtype for scalar
+metadata variables — a CF `grid_mapping`, or whatever provenance a producer attaches — so
+refusing it would make many real files unscannable. The cost is that those values are copied
+into the manifest rather than referenced, which is why it applies to strings and not to data.
+
+An attribute whose value is **not finite** is dropped, with a warning naming it. JSON has no
+literal for `NaN` or an infinity: a bare one is what zarr-python emits and Python parses, but
+Julia's JSON parser refuses it, and permitting it turns every integer in the document into a
+float. `_FillValue = NaN` on a NetCDF4 coordinate variable is the case this reaches. The
+array's own fill value is unaffected — `.zarray` carries it as the string the Zarr v2 spec
+reserves for exactly this.
 
 ### GeoTIFF and COG
 

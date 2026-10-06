@@ -74,7 +74,7 @@ function Base.getindex(s::ChunkManifest, key::AbstractString)
 
     if prefix == "" || _isgrouppath(s, prefix)
         leaf == ".zgroup" && return zgroup_json()
-        leaf == ".zattrs" && return Vector{UInt8}(JSON.json(prefix == "" ? attrsof(s) : Dict{String, Any}()))
+        leaf == ".zattrs" && return Vector{UInt8}(JSON.json(_jsonsafeattrs(prefix == "" ? attrsof(s) : Dict{String, Any}())))
     end
     return nothing
 end

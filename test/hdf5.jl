@@ -641,20 +641,33 @@ end
             @test Zarr.zopen(g)["nochunks"][:] == zeros(Int32, 4)
         end
 
-        @testset "variable-length and compound dtypes are refused by name" begin
-            # Both have a layout no Zarr v2 dtype describes. Serving their bytes
-            # as opaque would hand back numbers that decode to nothing.
-            for nm in ("vlen", "compound")
-                err = try
-                    scan(fn, HDF5Driver(); group = "/$nm")
-                    nothing
-                catch e
-                    e
-                end
-                @test err isa ArgumentError
-                @test occursin("no faithful Zarr v2 dtype", err.msg)
-                @test occursin("dataset \"$nm\"", err.msg)
+        @testset "a compound dtype is refused by name" begin
+            # A layout no Zarr v2 dtype describes. Serving its bytes as opaque
+            # would hand back numbers that decode to nothing.
+            err = try
+                scan(fn, HDF5Driver(); group = "/compound")
+                nothing
+            catch e
+                e
             end
+            @test err isa ArgumentError
+            @test occursin("no faithful Zarr v2 dtype", err.msg)
+            @test occursin("dataset \"compound\"", err.msg)
+        end
+
+        @testset "variable-length strings become fixed-length records" begin
+            # A variable-length string holds heap pointers, so there is no byte
+            # range to record: the values are read at scan time and embedded,
+            # widened to the longest of them. This is the dtype a NetCDF4
+            # writer gives a scalar metadata variable.
+            cm = scan(fn, HDF5Driver(); group = "/vlen")
+            va = arraysof(cm)["vlen"]
+            @test eltype(va) === Zarr.MaxLengthString{2, UInt8}
+            @test ChunkManifests.zarr_dtype_string(eltype(va)) == "|S2"
+            @test chunkstate(chunkmapof(va), CartesianIndex(1)) == INLINE_CHUNK
+            # No file is read for it, so a manifest carrying one is portable.
+            @test inlinebytes(chunkmapof(va), CartesianIndex(1)) == b"abcd"
+            @test string.(Zarr.zopen(cm)["vlen"][:]) == ["ab", "cd"]
         end
     end
 end

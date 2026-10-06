@@ -250,10 +250,10 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
             "dtype" => zarr_dtype_string(eltype(va)),
             "shape" => collect(size(va)),
             "chunkshape" => collect(chunkshapeof(va)),
-            "fillvalue" => fillvalueof(va),
+            "fillvalue" => _jsonfillvalue(fillvalueof(va)),
             "compressor" => compressorof(va),
             "filters" => filtersof(va),
-            "attrs" => attrsof(va),
+            "attrs" => _jsonsafeattrs(attrsof(va)),
             "dimnames" => dimnamesof(va),
         )
 
@@ -395,7 +395,7 @@ function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::Z
 
         arrays[key] = ManifestArray{T}(
             manifest, shape, chunkshape;
-            fillvalue = arraydoc["fillvalue"],
+            fillvalue = _fillvaluefromjson(arraydoc["fillvalue"], T),
             compressor = arraydoc["compressor"],
             filters = Dict{String, Any}[Dict{String, Any}(f) for f in arraydoc["filters"]],
             attrs = Dict{String, Any}(arraydoc["attrs"]),

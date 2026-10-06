@@ -240,7 +240,7 @@ function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, 
 
     manifest = ExplicitChunkMap(table, index, offset, nbytes; inline)
     attrs, dimnames = _attrsanddimnames(zattrsdoc, N)
-    fillvalue = get(zarraydoc, "fill_value", nothing)
+    fillvalue = _fillvaluefromjson(get(zarraydoc, "fill_value", nothing), T)
     compressor = get(zarraydoc, "compressor", nothing)
     filters = get(zarraydoc, "filters", nothing)
     filters = filters === nothing ? Dict{String, Any}[] : Vector{Dict{String, Any}}(filters)
@@ -325,7 +325,7 @@ function save(
     refs = Dict{String, Any}()
 
     refs[".zgroup"] = String(zgroup_json())
-    refs[".zattrs"] = String(Vector{UInt8}(JSON.json(attrsof(group))))
+    refs[".zattrs"] = String(Vector{UInt8}(JSON.json(_jsonsafeattrs(attrsof(group)))))
     for g in _implicitgroups(keys(arrays))
         refs["$g/.zgroup"] = String(zgroup_json())
         refs["$g/.zattrs"] = String(Vector{UInt8}(JSON.json(Dict{String, Any}())))

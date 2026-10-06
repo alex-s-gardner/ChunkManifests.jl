@@ -45,6 +45,43 @@ end
 zarr_dtype_string(::Type{Zarr.MaxLengthString{N, UInt8}}) where {N} = "|S$N"
 zarr_dtype_string(::Type{Zarr.ASCIIChar}) = "|S1"
 
+# JSON has no literal for a non-finite number, and Zarr v2 spells the three it
+# needs as strings. A NaN fill value is what a NetCDF4 writer leaves on a
+# coordinate variable, so this is the common case rather than an edge one.
+_jsonfillvalue(v) = v
+function _jsonfillvalue(v::AbstractFloat)
+    isnan(v) && return "NaN"
+    isinf(v) && return v > 0 ? "Infinity" : "-Infinity"
+    return v
+end
+
+# The inverse, reading a document back. Only a floating-point array's fill
+# value is reinterpreted: the three spellings are reserved for those, and a
+# fixed-length-string array's fill value is a string in its own right.
+_fillvaluefromjson(v, ::Type) = v
+function _fillvaluefromjson(v::AbstractString, ::Type{T}) where {T <: AbstractFloat}
+    v == "NaN" && return T(NaN)
+    v == "Infinity" && return T(Inf)
+    v == "-Infinity" && return T(-Inf)
+    return v
+end
+
+# JSON has no literal for a non-finite number, so an attribute holding one
+# cannot be written at all: a bare `NaN` is what zarr-python emits and what
+# Python parses, but JSON.jl refuses it, and permitting it on read turns every
+# integer in the document into a float. Such an attribute is therefore dropped
+# rather than re-typed, which would hand a consumer a string where it expects a
+# number. An array's own fill value is unaffected: `.zarray` carries it in the
+# spelling the Zarr v2 spec reserves for it.
+_hasnonfinite(v::AbstractFloat) = !isfinite(v)
+_hasnonfinite(v::AbstractArray) = any(_hasnonfinite, v)
+_hasnonfinite(@nospecialize(v)) = false
+
+function _jsonsafeattrs(attrs::AbstractDict)
+    any(kv -> _hasnonfinite(last(kv)), pairs(attrs)) || return attrs
+    return Dict{String, Any}(k => v for (k, v) in pairs(attrs) if !_hasnonfinite(v))
+end
+
 """
     zarray_json(va::ManifestArray) -> Vector{UInt8}
 
@@ -68,7 +105,7 @@ function zarray_json(va::ManifestArray{T, N}) where {T, N}
         "chunks" => collect(Int, reverse(chunkshapeof(va))),
         "dtype" => zarr_dtype_string(T),
         "compressor" => compressorof(va),
-        "fill_value" => fillvalueof(va),
+        "fill_value" => _jsonfillvalue(fillvalueof(va)),
         "order" => "C",
         "filters" => isempty(filters) ? nothing : filters,
     )
@@ -87,7 +124,7 @@ That entry is derived from `va.dimnames` here, in Zarr's C order, rather than
 read from `va.attrs`, so the two cannot disagree.
 """
 function zattrs_json(va::ManifestArray)
-    doc = copy(attrsof(va))
+    doc = Dict{String, Any}(_jsonsafeattrs(attrsof(va)))
     doc["_ARRAY_DIMENSIONS"] = reverse(dimnamesof(va))
     return Vector{UInt8}(JSON.json(doc))
 end
