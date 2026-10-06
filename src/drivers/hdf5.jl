@@ -557,11 +557,17 @@ end
 # libhdf5 reads the object in place, so only the metadata it touches moves.
 # No local copy exists to take a size from, and asking for one would cost a
 # request that nothing here needs.
-# This driver does not override `_remoteaccess`, so AutoAccess fetches a remote
-# object rather than reaching ROS3Access, even where libhdf5 has the S3 driver.
-# No read through that driver has been verified, and its URL parser refuses a
-# URL it cannot read a bucket and a key out of, so it is not something an
-# automatic choice can rest on. Reading in place is asked for by name.
+# Read a remote object in place where that is possible, which is the whole
+# point of a manifest: a scan then moves the metadata libhdf5 asks for instead
+# of the object. `RangeAccess` does this through the package's own transports,
+# so it covers every scheme they do.
+#
+# It falls back to fetching only where the virtual file driver cannot be
+# registered, which is a libhdf5 whose struct layout has not been verified.
+# ROS3Access is never chosen: no read through libhdf5's own S3 driver has ever
+# completed, and it is reached by name only.
+_remoteaccess(::HDF5Driver, ::AbstractString) =
+    _rangevfdsupported() ? RangeAccess() : DownloadAccess()
 function _scan_hdf5(
         driver::HDF5Driver, uri::AbstractString, access::ROS3Access;
         group::AbstractString, siblings::Bool,
@@ -679,6 +685,56 @@ function _scan_hdf5_open(
             HDF5.h5open(openloc, "r") :
             HDF5.h5open(openloc, "r"; driver = h5driver)
         try
+            _scan_hdf5_walk!(
+                arrays, table, groupattrs, f, recorded, recordedsize; group, siblings
+            )
+        finally
+            close(f)
+        end
+    end
+
+    provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
+    return ChunkManifest(; arrays, attrs = groupattrs, provenance)
+end
+
+# Reads the object in place through byte-range requests, so nothing moves but
+# the metadata libhdf5 asks for. There is no local copy to take a size from,
+# but one was needed to address the object at all, so it is recorded.
+function _scan_hdf5(
+        driver::HDF5Driver, uri::AbstractString, access::RangeAccess;
+        group::AbstractString, siblings::Bool,
+    )
+    total = objectsize(access.transport, uri)
+    total === nothing && throw(
+        ArgumentError(
+            "RangeAccess cannot scan $(repr(uri)): its size is not known, and libhdf5 " *
+                "needs one to address the object. Scan with DownloadAccess(), which " *
+                "fetches the object once and works anywhere",
+        )
+    )
+    table = PathTable()
+    arrays = Dict{String, ManifestArray}()
+    groupattrs = Dict{String, Any}()
+    lock(HDF5_IO) do
+        withrangefile(access, uri, total) do f
+            _scan_hdf5_walk!(
+                arrays, table, groupattrs, f, String(uri), total; group, siblings
+            )
+        end
+    end
+    provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
+    return ChunkManifest(; arrays, attrs = groupattrs, provenance)
+end
+
+# Walks an already-open file. Separate from opening it because RangeAccess
+# opens through a file access property list rather than a driver object, and
+# both paths have to agree on what a scan collects.
+function _scan_hdf5_walk!(
+        arrays, table, groupattrs, f, recorded::AbstractString, recordedsize;
+        group::AbstractString, siblings::Bool,
+    )
+    return begin
+        begin
             fileindex = push_uri!(table, recorded; size = recordedsize)
             root = group == "/" ? f : f[group]
             try
@@ -702,13 +758,8 @@ function _scan_hdf5_open(
             finally
                 root === f || close(root)
             end
-        finally
-            close(f)
         end
     end
-
-    provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
-    return ChunkManifest(; arrays, attrs = groupattrs, provenance)
 end
 
 register_codec!(HDF5Driver, 1, COMPRESSOR, (cd, itemsize) -> Dict{String, Any}("id" => "zlib", "level" => Int(cd[1])))

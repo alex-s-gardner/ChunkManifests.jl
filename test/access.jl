@@ -43,11 +43,16 @@ end
 
     @testset "AutoAccess chooses per path, named mechanisms are never substituted" begin
         @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), src) isa LocalAccess
-        @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), "s3://b/k.h5") isa
-            DownloadAccess
+        # A remote object is read in place where that is possible, so a scan
+        # moves metadata rather than the object, and fetched whole only where
+        # the virtual file driver cannot be registered.
+        remote = ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), "s3://b/k.h5")
+        @test remote isa (
+            ChunkManifests._rangevfdsupported() ? RangeAccess : DownloadAccess
+        )
         # A caller who names a mechanism gets it, so nothing silently transfers
         # more than they asked for.
-        for acc in (LocalAccess(), DownloadAccess(), ROS3Access())
+        for acc in (LocalAccess(), DownloadAccess(), ROS3Access(), RangeAccess())
             @test ChunkManifests.resolve_access(acc, HDF5Driver(), src) === acc
         end
     end
@@ -120,13 +125,81 @@ end
         )
     end
 
+    @testset "RangeAccess" begin
+        # Driven over a local file through LocalTransport, so the virtual file
+        # driver is exercised with no network: the mechanism under test is the
+        # driver, not where the bytes came from.
+        if ChunkManifests._rangevfdsupported()
+            reference = scan(src, HDF5Driver(); access = LocalAccess())
+            refkeys = sort(collect(keys(arraysof(reference))))
+
+            @testset "matches a local scan, at every block size" begin
+                # 0 fetches exactly what libhdf5 asked for; a block larger than
+                # the file collapses to one request. The sizes between exercise
+                # assembling a read that spans blocks, which is where an
+                # off-by-one would show.
+                for blocksize in (0, 512, 4096, 1 << 20)
+                    access = RangeAccess(;
+                        transport = LocalTransport(), blocksize, pagebuffer = 0
+                    )
+                    cm = scan(src, HDF5Driver(); access)
+                    @test sort(collect(keys(arraysof(cm)))) == refkeys
+                    # Assembled bytes must decode, not merely arrive.
+                    @test Array(Zarr.zopen(cm)["data"][:]) == expected
+                end
+            end
+
+            @testset "records the URI it was given" begin
+                cm = scan(src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport()))
+                @test length(tableof(cm)) == 1
+                @test tableof(cm)[1].uri == src
+                # The size had to be known to address the object at all.
+                @test tableof(cm)[1].size == UInt64(filesize(src))
+            end
+
+            @testset "reads only part of the file" begin
+                counted = Ref(0)
+                access = RangeAccess(;
+                    transport = LocalTransport(), blocksize = 0, pagebuffer = 0
+                )
+                cm = scan(src, HDF5Driver(); access)
+                total = sum(
+                    chunklocation(chunkmapof(arraysof(cm)["data"]), I)[3]
+                    for I in CartesianIndices(chunkgridaxes(chunkmapof(arraysof(cm)["data"])))
+                )
+                # Whatever the scan read, it never needed the chunk payload:
+                # the manifest points at it rather than containing it.
+                @test total > 0
+                @test all(
+                    chunkstate(chunkmapof(arraysof(cm)["data"]), I) == VIRTUAL_CHUNK
+                    for I in CartesianIndices(chunkgridaxes(chunkmapof(arraysof(cm)["data"])))
+                )
+            end
+
+            # A mechanism that reads in place has no local path to hand over.
+            @test_throws "does not resolve" ChunkManifests.withsourcepath(
+                identity, RangeAccess(), "https://h/b/k.h5"
+            )
+        else
+            @test_skip "RangeAccess needs a libhdf5 whose driver struct layout is verified"
+        end
+
+        @testset "keywords are checked" begin
+            @test_throws "pagebuffer must be nonnegative" RangeAccess(; pagebuffer = -1)
+            @test_throws "blocksize must be nonnegative" RangeAccess(; blocksize = -1)
+            @test_throws "cachelimit must be positive" RangeAccess(; cachelimit = 0)
+        end
+    end
+
     @testset "ROS3Access" begin
-        # AutoAccess never reads in place, on any build: no read through the
-        # driver has been verified, and it refuses URLs an automatic choice
-        # would be handed. Reading in place is asked for by name.
+        # AutoAccess never chooses this one, on any build: no read through
+        # libhdf5's own S3 driver has ever completed. Reading a remote object
+        # in place is RangeAccess's job, through this package's transports.
         for uri in ("https://h/b/k.h5", "http://h/b/k.h5", "s3://b/k.h5")
-            @test ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), uri) isa
-                DownloadAccess
+            @test !(
+                ChunkManifests.resolve_access(AutoAccess(), HDF5Driver(), uri) isa
+                    ROS3Access
+            )
         end
 
         @testset "the region is libhdf5's to resolve" begin

@@ -17,17 +17,24 @@ inferred.
 | [`LocalAccess`](@ref) | a local file, directly | implemented |
 | [`DownloadAccess`](@ref) | the whole object once, into a local cache | implemented; verified end to end over HTTP |
 | [`ROS3Access`](@ref) | metadata only, via libhdf5's read-only S3 driver | implemented, **unverified**; needs a libhdf5 built with that driver (`HDF5_jll` ships one from 2.2.3 — check `HDF5.has_ros3()`) and an AWS region |
-| `RangeAccess` | metadata only, coalesced through this package's transports | **not implemented** — needs a custom libhdf5 virtual file driver |
+| [`RangeAccess`](@ref) | metadata only, in aligned blocks through this package's transports | implemented; what [`AutoAccess`](@ref) chooses for a remote object |
 
 ```julia
 scan("https://host/granule.h5", HDF5Driver(); access = DownloadAccess())
 scan(url, HDF5Driver(); access = DownloadAccess(; cachedir = "/data/cache", keep = true))
 ```
 
-[`AutoAccess`](@ref), the default, reads a local path directly and fetches a remote one. It
-never chooses [`ROS3Access`](@ref), on any build: an automatic choice has to work for every
-remote URI, and reading in place neither works for every URI nor has been verified for any.
-Reading in place is something you ask for by name.
+[`AutoAccess`](@ref), the default, reads a local path directly and a remote one in place
+through [`RangeAccess`](@ref) — so pointing a scan at a remote object moves the metadata
+libhdf5 asks for, not the object:
+
+```julia
+scan("s3://bucket/granule.h5", HDF5Driver())      # reads what it needs, nothing more
+```
+
+It falls back to fetching only where the virtual file driver cannot be registered, which is a
+libhdf5 whose struct layout this package has not verified. It never chooses
+[`ROS3Access`](@ref) on any build: no read through libhdf5's own S3 driver has ever completed.
 
 A mechanism you name explicitly is never silently substituted, so nothing transfers more than
 you asked for: naming [`ROS3Access`](@ref) on a libhdf5 without that driver fails rather than
@@ -36,13 +43,44 @@ quietly downloading the object.
 A manifest built from a cached copy records the **original** URI, so it stays valid for
 readers that never saw the cache.
 
+## Reading in place with `RangeAccess`
+
+[`RangeAccess`](@ref) serves libhdf5 through a virtual file driver backed by this package's
+transports, so a scan issues byte-range requests and the object is never fetched whole. It
+covers every scheme the transports do — `http://`, `https://`, `s3://` — and the `authorize`
+hook that governs them.
+
+Reads are served from aligned blocks: a miss fetches whole blocks, and a run of adjacent
+misses becomes one request. That trades bytes against round trips, which is the trade that
+matters over a network. Scanning a 331 KiB NetCDF4 granule over HTTPS:
+
+| `blocksize` | requests | bytes read | share of the file |
+|---|---|---|---|
+| `0` (exactly what was asked for) | 83 | 56 833 | 17% |
+| 8 KiB | 17 | 134 024 | 40% |
+| 32 KiB | 8 | 240 520 | 71% |
+| 1 MiB (the default) | 1 | 338 824 | 100% |
+
+On a file this small a 1 MiB block is the whole object, so the default collapses to one
+request. That inverts as the file grows: the metadata a scan touches does not scale with the
+data, so on a multi-gigabyte granule the same default reads a handful of blocks. Set
+`blocksize = 0` to fetch exactly what libhdf5 asked for and nothing else.
+
+`pagebuffer` sizes libhdf5's own page buffer. A product written with paged metadata
+aggregation — what "cloud optimized" usually means for HDF5 — then has its metadata read in a
+few large aligned requests rather than many small scattered ones.
+
+The driver is registered through a struct whose layout is not stable public API, so it is
+enabled only for libhdf5 versions whose layout has been verified. On any other version it
+refuses and names [`DownloadAccess`](@ref), rather than risking a mismatched struct.
+
 ## The cost of `DownloadAccess`
 
 [`DownloadAccess`](@ref) transfers the whole object even though scanning reads only its
-metadata. The workflow this package is built around — scan once, [save the
-manifest](@ref "Saving and loading"), reuse it — amortizes that to one transfer per file
-ever, which is tolerable for granule-sized files and the reason `RangeAccess` is worth
-building for larger ones.
+metadata, so it is the fallback rather than the default. The workflow this package is built
+around — scan once, [save the manifest](@ref "Saving and loading"), reuse it — amortizes that
+to one transfer per file ever, which is tolerable for granule-sized files and intolerable for
+the large ones [`RangeAccess`](@ref) exists for.
 
 `cachedir` says where the copy goes and `keep=true` leaves it there, so a second scan of the
 same object is local.

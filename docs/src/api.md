@@ -54,6 +54,7 @@ SourceAccess
 AutoAccess
 LocalAccess
 DownloadAccess
+RangeAccess
 ROS3Access
 ```
 
