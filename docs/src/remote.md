@@ -117,7 +117,8 @@ refused by its parser. The host itself need not be an AWS one.
 
 ### It does not currently work
 
-**Opening an object through this driver hangs** with the `HDF5_jll` binaries. libhdf5 waits
+**Opening an object through this driver hangs** with the `HDF5_jll` binaries, which are
+the first to ship it: the driver was compiled out of every release before 2.2.3. libhdf5 waits
 on a condition variable for the S3 request to report completion and nothing ever signals it,
 so the call never returns and there is no timeout to bound it — not from here, and not from
 libhdf5. Reproduced on Linux and macOS against a public object that plain HTTP requests read

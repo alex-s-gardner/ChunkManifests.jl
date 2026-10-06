@@ -62,8 +62,9 @@ bitshuffle, and any nonzero per-chunk `filter_mask`.
 ## Remote scanning
 
 Only [`DownloadAccess`](@ref) and [`LocalAccess`](@ref) are verified end to end.
-[`ROS3Access`](@ref) does not currently work. Opening an object through libhdf5's read-only
-S3 driver hangs: it waits for the S3 request to report completion and nothing signals it, on
+[`ROS3Access`](@ref) does not currently work with the `HDF5_jll` binaries, which are the
+first to ship the driver at all. Opening an object through libhdf5's read-only S3 driver
+hangs: it waits for the S3 request to report completion and nothing signals it, on
 Linux and on macOS alike, against objects that plain HTTP requests read immediately. There is
 no timeout that would turn that into an error. [`AutoAccess`](@ref) therefore never selects
 it and [`DownloadAccess`](@ref) is the mechanism to rely on for a remote object.
