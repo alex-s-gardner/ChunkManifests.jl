@@ -53,6 +53,7 @@ mutable struct _RangeSource
     eoa::UInt64
     blocksize::UInt64
     cachelimit::Int
+    prefix::Vector{UInt8}
     blocks::Dict{UInt64, Vector{UInt8}}
     cached::Int
     requests::Int
@@ -173,6 +174,15 @@ end
 # the object, so `blocksize = 0` turns blocking off and fetches exactly what
 # was asked for.
 function _rangefill!(source::_RangeSource, buffer::Ptr{UInt8}, addr::UInt64, size::UInt64)
+    # The head of the object, read once when it was opened. HDF5's superblock
+    # is here and a file written for cloud access keeps its metadata nearby, so
+    # most of a scan is served without a request at all.
+    if addr + size <= length(source.prefix)
+        GC.@preserve source unsafe_copyto!(
+            buffer, pointer(source.prefix) + addr, size
+        )
+        return nothing
+    end
     if source.blocksize == 0
         bytes = fetchrange(source.transport, source.uri, ByteRange(addr, size))
         length(bytes) == size || error("short read")
@@ -321,10 +331,19 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
         k = _RANGE_NEXTKEY[]
         _RANGE_SOURCES[k] = _RangeSource(
             access.transport, String(uri), UInt64(total), UInt64(0),
-            UInt64(access.blocksize), access.cachelimit,
+            UInt64(access.blocksize), access.cachelimit, UInt8[],
             Dict{UInt64, Vector{UInt8}}(), 0, 0, 0,
         )
         k
+    end
+    if access.initialread > 0
+        source = @lock _RANGE_LOCK _RANGE_SOURCES[key]
+        want = min(UInt64(access.initialread), source.size)
+        if want > 0
+            source.prefix = fetchrange(access.transport, String(uri), ByteRange(0, want))
+            source.requests += 1
+            source.bytes += length(source.prefix)
+        end
     end
     fapl = HDF5.API.h5p_create(HDF5.API.H5P_FILE_ACCESS)
     return try

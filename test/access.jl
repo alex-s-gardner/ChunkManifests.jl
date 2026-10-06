@@ -133,19 +133,24 @@ end
             reference = scan(src, HDF5Driver(); access = LocalAccess())
             refkeys = sort(collect(keys(arraysof(reference))))
 
-            @testset "matches a local scan, at every block size" begin
-                # 0 fetches exactly what libhdf5 asked for; a block larger than
-                # the file collapses to one request. The sizes between exercise
-                # assembling a read that spans blocks, which is where an
-                # off-by-one would show.
-                for blocksize in (0, 512, 4096, 1 << 20)
-                    access = RangeAccess(;
-                        transport = LocalTransport(), blocksize, pagebuffer = 0
-                    )
-                    cm = scan(src, HDF5Driver(); access)
-                    @test sort(collect(keys(arraysof(cm)))) == refkeys
-                    # Assembled bytes must decode, not merely arrive.
-                    @test Array(Zarr.zopen(cm)["data"][:]) == expected
+            @testset "matches a local scan however reads are gathered" begin
+                # `blocksize` 0 fetches exactly what libhdf5 asked for; a block
+                # larger than the file collapses to one request. The sizes
+                # between exercise assembling a read that spans blocks, and the
+                # `initialread` cases exercise one served partly from the
+                # prefetched head and partly not — both places an off-by-one
+                # would show.
+                for initialread in (0, 256, 4096, 1 << 20)
+                    for blocksize in (0, 512, 4096, 1 << 20)
+                        access = RangeAccess(;
+                            transport = LocalTransport(), initialread, blocksize,
+                            pagebuffer = 0,
+                        )
+                        cm = scan(src, HDF5Driver(); access)
+                        @test sort(collect(keys(arraysof(cm)))) == refkeys
+                        # Assembled bytes must decode, not merely arrive.
+                        @test Array(Zarr.zopen(cm)["data"][:]) == expected
+                    end
                 end
             end
 
@@ -157,23 +162,17 @@ end
                 @test tableof(cm)[1].size == UInt64(filesize(src))
             end
 
-            @testset "reads only part of the file" begin
-                counted = Ref(0)
-                access = RangeAccess(;
-                    transport = LocalTransport(), blocksize = 0, pagebuffer = 0
+            @testset "points at the chunks rather than reading them" begin
+                cm = scan(
+                    src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport())
                 )
-                cm = scan(src, HDF5Driver(); access)
-                total = sum(
-                    chunklocation(chunkmapof(arraysof(cm)["data"]), I)[3]
-                    for I in CartesianIndices(chunkgridaxes(chunkmapof(arraysof(cm)["data"])))
-                )
-                # Whatever the scan read, it never needed the chunk payload:
-                # the manifest points at it rather than containing it.
-                @test total > 0
-                @test all(
-                    chunkstate(chunkmapof(arraysof(cm)["data"]), I) == VIRTUAL_CHUNK
-                    for I in CartesianIndices(chunkgridaxes(chunkmapof(arraysof(cm)["data"])))
-                )
+                m = chunkmapof(arraysof(cm)["data"])
+                # Whatever the scan read, it never needed a chunk's payload:
+                # the manifest records where each one is.
+                for I in CartesianIndices(chunkgridaxes(m))
+                    @test chunkstate(m, I) == VIRTUAL_CHUNK
+                    @test chunklocation(m, I)[3] > 0
+                end
             end
 
             # A mechanism that reads in place has no local path to hand over.
@@ -185,6 +184,7 @@ end
         end
 
         @testset "keywords are checked" begin
+            @test_throws "initialread must be nonnegative" RangeAccess(; initialread = -1)
             @test_throws "pagebuffer must be nonnegative" RangeAccess(; pagebuffer = -1)
             @test_throws "blocksize must be nonnegative" RangeAccess(; blocksize = -1)
             @test_throws "cachelimit must be positive" RangeAccess(; cachelimit = 0)

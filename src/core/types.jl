@@ -596,6 +596,13 @@ serves libhdf5 through a virtual file driver backed by `transport`, which means
 every scheme the transports cover — `http://`, `https://`, `s3://` — and the
 `authorize` hook that governs them.
 
+`initialread` is how much of the head of the object to fetch in one request
+when it is opened, which every read inside that span is then served from. HDF5
+puts its superblock there and a file written for cloud access keeps the rest of
+its metadata nearby, so a span covering it turns a scan into one or two
+requests. It is capped at the object's size, so a small file costs one request
+whatever the setting; `0` fetches nothing up front.
+
 `pagebuffer` sizes libhdf5's own page buffer. A file written with paged
 metadata aggregation, as a cloud-optimized product is, then has its metadata
 read in a few large aligned requests rather than many small scattered ones;
@@ -615,6 +622,7 @@ metadata.
 """
 struct RangeAccess <: SourceAccess
     transport::AbstractTransport
+    initialread::Int
     pagebuffer::Int
     blocksize::Int
     cachelimit::Int
@@ -622,15 +630,20 @@ end
 
 function RangeAccess(;
         transport::AbstractTransport = TransportContainers(),
+        initialread::Integer = 4 * 1024 * 1024,
         pagebuffer::Integer = 4 * 1024 * 1024,
         blocksize::Integer = 1024 * 1024,
         cachelimit::Integer = 256 * 1024 * 1024,
     )
+    initialread >= 0 ||
+        throw(ArgumentError("initialread must be nonnegative, got $initialread"))
     pagebuffer >= 0 ||
         throw(ArgumentError("pagebuffer must be nonnegative, got $pagebuffer"))
     blocksize >= 0 || throw(ArgumentError("blocksize must be nonnegative, got $blocksize"))
     cachelimit > 0 || throw(ArgumentError("cachelimit must be positive, got $cachelimit"))
-    return RangeAccess(transport, Int(pagebuffer), Int(blocksize), Int(cachelimit))
+    return RangeAccess(
+        transport, Int(initialread), Int(pagebuffer), Int(blocksize), Int(cachelimit)
+    )
 end
 
 """

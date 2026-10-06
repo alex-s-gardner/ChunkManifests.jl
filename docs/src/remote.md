@@ -50,9 +50,40 @@ transports, so a scan issues byte-range requests and the object is never fetched
 covers every scheme the transports do — `http://`, `https://`, `s3://` — and the `authorize`
 hook that governs them.
 
-Reads are served from aligned blocks: a miss fetches whole blocks, and a run of adjacent
-misses becomes one request. That trades bytes against round trips, which is the trade that
-matters over a network. Scanning a 331 KiB NetCDF4 granule over HTTPS:
+### Minimizing round trips
+
+Two knobs decide how many requests a scan costs, and both trade bytes for round trips —
+which is the trade that matters over a network, where a request costs far more than the bytes
+in it.
+
+`initialread` fetches the head of the object in one request when it is opened, and every read
+inside that span is then served from memory. HDF5's superblock lives there and a file written
+for cloud access keeps the rest of its metadata nearby, so a span covering the metadata turns
+a whole scan into one or two requests. This is the same idea as fsspec's `first` cache. It is
+capped at the object's size, so a small file costs one request whatever the setting, and `0`
+fetches nothing up front.
+
+```julia
+scan(url, HDF5Driver(); access = RangeAccess(; initialread = 8 * 1024^2))
+```
+
+`blocksize` governs everything outside that span: a miss fetches whole aligned blocks, and a
+run of adjacent misses becomes one request.
+
+Scanning a 331 KiB NetCDF4 granule over HTTPS, varying one at a time:
+
+| `initialread` | `blocksize` | requests | bytes read |
+|---|---|---|---|
+| none | none | 83 | 56 833 |
+| 16 KiB | none | 52 | 60 988 |
+| 64 KiB | none | 49 | 102 916 |
+| 4 MiB | none | 1 | 338 824 |
+
+The gain levels off here because this granule's metadata is scattered through it. A product
+written with paged metadata aggregation concentrates it instead, which is what makes a single
+`initialread` cover the whole scan.
+
+Varying `blocksize` alone, with no initial read:
 
 | `blocksize` | requests | bytes read | share of the file |
 |---|---|---|---|
