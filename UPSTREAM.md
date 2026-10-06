@@ -170,34 +170,45 @@ the same as the code path working. `HDF5.has_ros3()` is true on a resolved
 2.2.3, and a region plus a bucket-and-key URL gets past libhdf5's URL parser,
 but no read has completed.
 
-What is known, from pointing the driver at URLs of various shapes:
+HDF5 2.x rewrote this driver on the **AWS SDK for C** (`aws-c-s3`); the old
+hand-rolled curl implementation is gone. `HDF5_ROS3_VFD_DEBUG=1` makes it
+report the parsed URL, the request headers it builds and the reason a request
+failed, which is how the following was established:
 
-- `H5FD__s3comms_parse_url` needs a bucket *and* a key. A single path segment
-  (`https://host/file.h5`) is refused; two (`https://host/bucket/file.h5`) and
-  the virtual-host form (`https://bucket.s3.region.amazonaws.com/file.h5`) are
-  accepted. The host need not be an AWS one, so this is not a check for an
-  S3-style endpoint.
-- Without a region, libhdf5 fails in its own S3 layer rather than reporting
-  what is missing. `HDF5.Drivers.ROS3()` carries none, so `_ros3driver`
-  resolves one before opening.
-- A local HTTP server does not stand in for S3. With a two-segment path it
-  gets past the parser and then fails in `H5FD__s3comms_s3r_getsize`, the HEAD
-  for the object size, even when that server answers HEAD with
-  `Content-Length` and `Accept-Ranges`. Whether libhdf5 requires something
-  further of the response, or HTTPS, or genuine S3 semantics, was not run down.
+- **It negotiates TLS whatever the URL's scheme says.** `tls` appears nowhere
+  in libhdf5's source and `aws_s3_client_config.tls_mode` is never set, so the
+  SDK default applies. A plaintext `http://` server fails with "Channel
+  shutdown due to tls negotiation timeout". There are exactly four
+  `HDF5_ROS3_VFD_*` variables and none disables it. **A local HTTP server
+  therefore cannot verify this driver at all** — not for any reason to do with
+  URL shape, which an earlier note here had wrong.
+- **Addressing is virtual-host style by default**, so a bucket is prepended to
+  the host: `http://127.0.0.1:PORT/bkt/key` is requested as
+  `Host: bkt.127.0.0.1`, which does not resolve.
+  `HDF5_ROS3_VFD_FORCE_PATH_STYLE` switches to path style, and
+  `AWS_ENDPOINT_URL_S3` / `AWS_ENDPOINT_URL` redirect to another endpoint.
+  Both matter to anyone pointing `ROS3Access` at an S3-compatible service.
+- **It resolves the region itself**, from the FAPL, then `AWS_REGION`, then
+  `AWS_DEFAULT_REGION`, then the AWS configuration file and profile
+  (`AWS_CONFIG_FILE`, `AWS_PROFILE`), and reports a missing one as "AWS region
+  wasn't specified". This package passes a region through and resolves none of
+  its own, since anything here would be a narrower copy that pre-empts the
+  configuration file.
+- The URL parser does want a bucket *and* a key: a single path segment
+  (`https://host/file.h5`) is refused, two are accepted, and the host need not
+  be an AWS one.
 - Against a real endpoint it did not fail, but it did not finish either. A
   scan of one GOES-16 NetCDF4 granule in the public `noaa-goes16` bucket, by
   both `s3://` and regional-endpoint form, ran about fourteen minutes without
   completing and was stopped. That is not evidence of a hang: the granule is
   large, ROS3 issues many small ranged GETs with no coalescing of its own, and
-  the run's output was block-buffered so no progress was visible. It does mean
-  a first successful read needs a deliberate attempt — a small object, a
-  timeout, unbuffered logging — rather than being a quick check.
+  the run's output was block-buffered so no progress was visible.
 
-So verifying this needs a real endpoint and a dedicated attempt. Until one read
-succeeds, `AutoAccess` selects `DownloadAccess` for every remote URI, and the
-absence of any timeout control over libhdf5's own requests is a second reason
-not to put it on the default path.
+So verifying this needs a real endpoint over TLS, and a deliberate attempt — a
+small object, a bounded wall clock, `HDF5_ROS3_VFD_DEBUG=1` — rather than a
+quick check. Until one read succeeds, `AutoAccess` selects `DownloadAccess` for
+every remote URI, and the absence of any timeout control over libhdf5's own
+requests is a second reason not to put it on the default path.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 

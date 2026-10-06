@@ -599,16 +599,17 @@ Takes an `https://` endpoint, an `http://` one, or an `s3://` URI. An `s3://`
 URI is turned into the endpoint libhdf5 can address; the manifest records the
 URI as given, so chunks are read back through whichever transport it names.
 
-libhdf5 needs an AWS region before it will open anything, and it is resolved
-from the most specific source available: `region`, then a region the URL names
-in its host, then S3's own answer for the bucket — one `HEAD` returning
-`x-amz-bucket-region`, which works without credentials and on an error
-response, so a bucket that cannot be read still resolves — then `AWS_REGION`,
-then `AWS_DEFAULT_REGION`. Scanning throws naming all of them when none
-answers.
+libhdf5 needs an AWS region before it will open anything, and resolves one
+itself: `region` if given, then `AWS_REGION`, then `AWS_DEFAULT_REGION`, then
+the AWS configuration file and profile. It reports a missing region as its own
+error. So `region` overrides that chain rather than being something this
+package has to supply, and a region in `~/.aws/config` works without it.
 
-A host outside `amazonaws.com` is never asked, since an S3-compatible service
-has its own naming, so one of those needs `region` or the environment.
+An `s3://` URI is the exception, because its endpoint host is built here and
+that needs the region as a value: it takes `region` or the two environment
+variables, and says so when it has neither. The AWS configuration file is out
+of reach without an AWS client. The endpoint form carries its region in the
+host and needs none of this.
 
 A region alone reads unauthenticated, which is what a public bucket wants.
 
