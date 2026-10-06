@@ -197,18 +197,128 @@ failed, which is how the following was established:
 - The URL parser does want a bucket *and* a key: a single path segment
   (`https://host/file.h5`) is refused, two are accepted, and the host need not
   be an AWS one.
-- Against a real endpoint it did not fail, but it did not finish either. A
-  scan of one GOES-16 NetCDF4 granule in the public `noaa-goes16` bucket, by
-  both `s3://` and regional-endpoint form, ran about fourteen minutes without
-  completing and was stopped. That is not evidence of a hang: the granule is
-  large, ROS3 issues many small ranged GETs with no coalescing of its own, and
-  the run's output was block-buffered so no progress was visible.
+- Against a real endpoint it hangs. See the next entry.
 
-So verifying this needs a real endpoint over TLS, and a deliberate attempt — a
-small object, a bounded wall clock, `HDF5_ROS3_VFD_DEBUG=1` — rather than a
-quick check. Until one read succeeds, `AutoAccess` selects `DownloadAccess` for
-every remote URI, and the absence of any timeout control over libhdf5's own
-requests is a second reason not to put it on the default path.
+So `ROS3Access` cannot be exercised at all with these binaries, and the
+absence of any timeout control over libhdf5's own requests means a caller who
+names it waits without an error to act on.
+
+**Nothing waits on this.** `RangeAccess` reads a remote object in place
+through this package's own transports, which is what `AutoAccess` selects, so
+the capability libhdf5's driver would have provided is covered without it —
+over more URL shapes, since libhdf5's parser needs a bucket and a key. The
+entries above are kept as a record of what was established about the driver,
+not as a blocker.
+
+## HDF5_jll 2.2.3 — the ROS3 driver hangs on open
+
+`H5Fopen` through the read-only S3 driver does not come back. Reproduced on
+`ubuntu-latest` and on macOS, against a public object that plain HTTP requests
+read in under a fifth of a second. Not reported upstream.
+
+**This is the first `HDF5_jll` ever built with the driver enabled.** Yggdrasil
+#14998, the entry above, fixed the toggle typo on 2026-10-05 at 16:47, and
+`HDF5_jll` 2.2.3+0 was registered at 17:27 the same day. Every earlier release
+compiled the driver out, so nothing has exercised this code path through a JLL
+before. That is the likeliest reason an apparently total failure in a widely
+used library has gone unremarked, and it is the reason to read what follows as
+a problem with this build rather than with HDF5 as such.
+
+It is not a Julia-side problem: the same hang happens from C, with no Julia in
+the process.
+
+```c
+#include "hdf5.h"
+#include "H5FDros3.h"
+
+/* the URL below, elided for width */
+static const char *URL = "https://its-live-data.s3.us-west-2.amazonaws.com/...P028.nc";
+
+H5FD_ros3_fapl_t fa;
+memset(&fa, 0, sizeof(fa));
+fa.version = 1;
+fa.authenticate = false;                /* public object */
+strncpy(fa.aws_region, "us-west-2", H5FD_ROS3_MAX_REGION_LEN);
+
+hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
+H5Pset_fapl_ros3(fapl, &fa);
+H5Fopen(URL, H5F_ACC_RDONLY, fapl);     /* never returns */
+```
+
+Built against the `HDF5_jll` artifact's own headers and library, it prints the
+parsed URL and the request headers and then sits in `H5Fopen` until a
+self-imposed `SIGALRM` kills it. So HDF5.jl is not involved, and the defect is
+in libhdf5's driver or in the aws-c-* libraries it is linked against.
+
+The equivalent from Julia, which needs only HDF5.jl:
+
+```julia
+import HDF5
+url = "https://its-live-data.s3.us-west-2.amazonaws.com/NSIDC/" *
+    "velocity_image_pair_sample/landsatOLI/v02/N80E010/" *
+    "LC09_L1TP_013243_20230801_20230802_02_T1_X_" *
+    "LC08_L1TP_013243_20240811_20240815_02_T1_G0120V02_P028.nc"
+HDF5.h5open(url, "r"; driver = HDF5.Drivers.ROS3(1, false, "us-west-2", "", ""))
+```
+
+That object is a 0.34 MB NetCDF4 granule in the public ITS_LIVE bucket, which
+is in `us-west-2`. It needs no credentials: an anonymous `HEAD` answers 200 and
+an anonymous `GET` with `Range: bytes=0-7` answers 206 with the HDF5 magic
+number, both in under 0.15 s from the same hosts the call hangs on. So the
+object, its permissions and the network are not involved.
+
+Where it stops, from the backtrace of the killed process:
+
+```
+pthread_cond_wait                   libc
+aws_condition_variable_wait         libaws-c-common
+aws_condition_variable_wait_pred    libaws-c-common
+H5FD__s3comms_s3r_open              libhdf5
+H5FD__ros3_open → H5FD_open → H5F_open → H5Fopen
+```
+
+`s3r_open` waits on a condition variable for the asynchronous S3 request to
+report completion, and nothing ever signals it. `HDF5_ROS3_VFD_LOG_LEVEL=info`
+shows the same thing from the other side: one request handed to the network and
+never finishing, logged every five seconds —
+
+```
+Requests-in-flight(approx/exact):1/1  Requests-preparing:0  Requests-queued:0
+Requests-network(get/put/default/total):0/0/1/1  Requests-streaming-waiting:0
+```
+
+— with no HTTP status, no transport error and no TLS error at any point.
+
+Three candidate causes ruled out:
+
+- **Dependency drift against an unstable ABI.** `libhdf5` links
+  `libaws-c-s3.0unstable.dylib`, a soname that promises nothing, and the recipe
+  declares `Dependency("aws_c_s3_jll"; compat="0.11.2")` while an environment
+  resolves 0.11.5 — so libhdf5 compiled against one minor version runs against
+  another with no way to notice. Pinning `aws_c_s3_jll` to exactly 0.11.2 and
+  re-running the C reproducer **still hangs**, so this is not it.
+
+- **Credentials.** The default chain fails and the anonymous provider succeeds
+  immediately, which is correct for a public object. `AWS_EC2_METADATA_DISABLED=true`
+  changes nothing, so this is not instance-metadata probing.
+- **A missing TLS provider.** `s2n_tls_jll` is installed and loaded, so
+  `aws-c-io` has the TLS backend it needs on Linux.
+
+Versions: HDF5.jl 0.17.4, `HDF5_jll` 2.2.3+0 (libhdf5 reports 2.2.0),
+`aws_c_s3_jll` 0.11.5+0, `aws_c_io_jll` 0.26.3+0, `aws_c_common_jll` 0.12.6+0,
+`s2n_tls_jll` 1.7.11+0.
+
+**The cause is unknown.** Credentials, TLS backend and dependency drift are
+all ruled out above, and the failure is identical from C and from Julia on two
+platforms, so it is neither this package's nor HDF5.jl's. Whether it lies in
+HDF5's driver source or in how this binary is built is unresolved, and that is
+what decides whether it belongs to HDFGroup/hdf5 or to Yggdrasil. Separating
+them needs a libhdf5 built outside the JLL against its own aws-c-s3; the C
+reproducer above is what to run against one.
+
+One assumption worth not making: HDF5 carries a `vfd-ros3.yml` workflow, but
+whether its tests reach a live endpoint or skip for want of one has not been
+checked, so "upstream CI covers this" is unverified.
 
 ## Aqua.jl — `persistent_tasks` throws on a dependency with no Project.toml
 
