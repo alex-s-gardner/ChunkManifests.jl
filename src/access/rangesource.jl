@@ -19,8 +19,9 @@ const _PREFETCH_CONCURRENCY = 16
 # `eoa` is libhdf5's end-of-address and goes unused by the others.
 #
 # The reader calling `_rangefill!` is the only task touching `blocks`,
-# `cached` and `eoa`. Prefetch tasks write `extents`, `pending` and the
-# counters, so those are guarded by `lock`.
+# `cached` and `eoa`. Prefetch tasks also write `spans`, `extents`,
+# `pending`, `followed`, `followers` and the counters, so those are guarded by
+# `lock`.
 mutable struct _RangeSource
     const transport::AbstractTransport
     const uri::String

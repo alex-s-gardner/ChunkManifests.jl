@@ -327,8 +327,8 @@ end
 
 # Records every allocated chunk of `dset` in `s`. H5Dchunk_iter is called with
 # a callback compiled for this state's concrete type: HDF5.jl's own wrapper
-# passes its callback an untyped closure, which costs a dynamic dispatch per
-# chunk and was most of the time a scan of a 250 000-chunk dataset took.
+# passes its callback an untyped closure, and the dynamic dispatch that costs
+# per chunk is many times the work of recording one.
 function _iterchunks!(s::_ChunkIterState{N}, dset, context::AbstractString) where {N}
     callback = @cfunction(
         _chunkiter_callback, Cint,
