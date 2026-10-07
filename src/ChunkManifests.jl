@@ -93,6 +93,8 @@ function __init__()
     _RANGE_DRIVER[] = -1
     # Default transports hold connections, which belong to one process.
     empty!(_SHARED_DEFAULTS)
+    # The workload probes the Zarr.jl it was precompiled against; probe again.
+    _BYTE_FILTER_SUPPORT[] = nothing
     _register_tiff_predictor!()
     # Registration belongs here rather than at top level: DRIVER_REGISTRY is
     # populated at load time, and a top-level push! would be captured during

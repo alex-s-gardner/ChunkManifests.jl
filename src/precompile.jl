@@ -24,6 +24,10 @@ function _precompile_server(bytes::Vector{UInt8})
 end
 
 function _precompile_source(path::AbstractString)
+    # A Zarr.jl without the fix for a trailing bytes filter cannot read a
+    # multi-byte dataset that ends in shuffle, and a scan refuses one; see
+    # `check_last_filter_multibyte`.
+    shuffle = zarr_decodes_byte_filters()
     HDF5.h5open(path, "w") do f
         x = HDF5.create_dataset(f, "x", Float64, (48,); chunk = (16,))
         write(x, collect(1.0:48.0))
@@ -34,7 +38,7 @@ function _precompile_source(path::AbstractString)
         y = HDF5.create_dataset(f, "y", Float64, (40,); chunk = (16,))
         write(y, collect(1.0:40.0))
         v = HDF5.create_dataset(
-            f, "v", Float32, (48, 40); chunk = (16, 8), shuffle = true, deflate = 1
+            f, "v", Float32, (48, 40); chunk = (16, 8), shuffle, deflate = 1
         )
         write(v, Float32.(reshape(1:1920, 48, 40)))
         HDF5.attrs(v)["units"] = "m/yr"
@@ -69,7 +73,7 @@ function _precompile_source(path::AbstractString)
         # contiguous one.
         for T in (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
             g = HDF5.create_dataset(
-                f, "types/grid_$T", T, (12, 10); chunk = (6, 5), shuffle = true, deflate = 1
+                f, "types/grid_$T", T, (12, 10); chunk = (6, 5), shuffle, deflate = 1
             )
             write(g, T.(reshape(1:120, 12, 10)))
             HDF5.attrs(g)["_FillValue"] = T(0)
