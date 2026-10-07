@@ -141,6 +141,26 @@ end
 ChunkManifests.objectsize(t::RecordingTransport, uri::AbstractString) =
     ChunkManifests.objectsize(t.inner, uri)
 
+# Reads local files after a delay, recording the most fetches it has had in
+# flight at once, so a test can tell concurrent fetching from sequential.
+struct OverlapTransport <: AbstractTransport
+    delay::Float64
+    inflight::Threads.Atomic{Int}
+    peak::Threads.Atomic{Int}
+end
+OverlapTransport(delay) = OverlapTransport(delay, Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+
+function ChunkManifests.fetchrange(t::OverlapTransport, uri::AbstractString, r::ByteRange)
+    n = Threads.atomic_add!(t.inflight, 1) + 1
+    Threads.atomic_max!(t.peak, n)
+    try
+        sleep(t.delay)
+        return ChunkManifests.fetchrange(LocalTransport(), uri, r)
+    finally
+        Threads.atomic_sub!(t.inflight, 1)
+    end
+end
+
 # A one-block AffineChunkMap pointing at `uri`, and a ManifestArray over one,
 # for cases that need a chunk grid of a given shape without a file behind it.
 function dummy_chunkmap(shape, chunkshape, uri)

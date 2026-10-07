@@ -15,7 +15,9 @@ maxgap(::AbstractTransport) = 64 * 1024
 
 Largest size, in bytes, a merged byte range may reach before
 [`coalesce_ranges`](@ref) starts a new block instead of extending the current
-one. Defaults to 256 MiB.
+one. Defaults to 256 MiB; [`HTTPTransport`](@ref) and [`S3Transport`](@ref)
+use 16 MiB, so a long run of adjacent chunks is fetched as several requests in
+parallel rather than one.
 """
 maxblock(::AbstractTransport) = 256 * 1024 * 1024
 
@@ -23,10 +25,11 @@ maxblock(::AbstractTransport) = 256 * 1024 * 1024
     concurrency(t::AbstractTransport) -> Integer
 
 Maximum number of [`fetchrange`](@ref) calls the default [`fetchranges`](@ref)
-keeps in flight at once. Defaults to 4: for range reads over a network, the
-transport itself is the bottleneck, not the number of outstanding requests —
-a handful of concurrent requests already saturates it, and adding more
-measurably hurts throughput rather than helping.
+keeps in flight at once. Defaults to 4. [`HTTPTransport`](@ref) and
+[`S3Transport`](@ref) use 32: chunks that are not adjacent in their file each
+cost a request, and those requests wait mostly on the round trip, so reading
+48 scattered chunks of a GOES-16 file over HTTPS took 0.95 s at 4, 0.34 s at
+16 and 0.22 s at 32.
 """
 concurrency(::AbstractTransport) = 4
 

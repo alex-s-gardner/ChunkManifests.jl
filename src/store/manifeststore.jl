@@ -200,7 +200,8 @@ Resolve every chunk index in `i` (a `CartesianIndices` into array `p`'s chunk
 grid) and `put!` each as `index => bytes_or_nothing` onto `c`. Virtual chunks
 backed by the same source file are grouped and fetched with one coalesced
 [`fetchranges`](@ref) call per file, which is the point of overriding this
-method instead of leaving chunks to be read one at a time. A virtual chunk
+method instead of leaving chunks to be read one at a time, and the files are
+fetched concurrently. A virtual chunk
 already in `s.readahead` (left there by an earlier single-chunk readahead
 fetch) is served from the cache instead, and every freshly fetched chunk is
 cached in turn, so the two paths share one cache of chunk bytes.
@@ -245,12 +246,24 @@ function _read_items!(
         end
     end
 
-    for (uri, entries) in byuri
+    # Chunks from different files are fetched concurrently: a read across a
+    # combined series touches one or a few chunks in each of many files, and
+    # each file's requests wait mostly on the round trip.
+    function fetchfile(uri, entries)
         ranges = [entry[2] for entry in entries]
         bytes = fetchranges(transport, uri, ranges)
         for k in eachindex(entries, bytes)
             put!(c, entries[k][1] => bytes[k])
             caching && _cache_put!(readahead, (uri, entries[k][2].offset), bytes[k])
+        end
+        return nothing
+    end
+    if length(byuri) == 1
+        fetchfile(only(byuri)...)
+    else
+        slots = Base.Semaphore(_CONCURRENT_FILES)
+        @sync for (uri, entries) in byuri
+            Threads.@spawn Base.acquire(() -> fetchfile(uri, entries), slots)
         end
     end
     return nothing

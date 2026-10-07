@@ -57,6 +57,10 @@ end
 # once shifted onto that convention.
 _awss3_byterange(r::ChunkManifests.ByteRange) = (r.offset + 1):(r.offset + r.nbytes)
 
+# See `concurrency` and `maxblock` for why these differ from the defaults.
+ChunkManifests.concurrency(::ChunkManifests.S3Transport) = 32
+ChunkManifests.maxblock(::ChunkManifests.S3Transport) = 16 * 1024 * 1024
+
 """
     fetchrange(t::S3Transport, uri, r::ByteRange) -> Vector{UInt8}
 

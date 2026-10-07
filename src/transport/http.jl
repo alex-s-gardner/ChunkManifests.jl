@@ -59,6 +59,10 @@ function HTTPTransport(;
     return HTTPTransport(client, Int(retries))
 end
 
+# See `concurrency` and `maxblock` for why these differ from the defaults.
+concurrency(::HTTPTransport) = 32
+maxblock(::HTTPTransport) = 16 * 1024 * 1024
+
 """
     fetchrange(t::HTTPTransport, uri, r::ByteRange) -> Vector{UInt8}
 
