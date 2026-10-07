@@ -1,0 +1,17 @@
+[project]
+name = "chunkmanifests-compare"
+version = "0"
+description = "The Python side of benchmark/compare"
+requires-python = ">=3.11"
+dependencies = [
+    "virtualizarr[hdf]==2.7.3",
+    "virtual-tiff==0.5.0",
+    "kerchunk==0.2.10",
+    "zarr==3.4.0",
+    "xarray==2026.9.0",
+    "obstore==0.11.1",
+    "fsspec",
+    "aiohttp",
+    "requests",
+    "h5py",
+]

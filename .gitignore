@@ -6,3 +6,4 @@ benchmark/Manifest-v*.toml
 benchmark/last.jls
 benchmark/last_checksums.jls
 docs/build/
+benchmark/compare/.venv/
