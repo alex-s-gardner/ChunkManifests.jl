@@ -29,6 +29,22 @@ function ManifestArray{T}(
     )
 end
 
+# An uncompressed array held entirely in the manifest as one chunk: for values a
+# scan computes or reads itself, which have no byte range in any source file.
+# `bytes` is the chunk exactly as Zarr stores it, in C order.
+function _inlinearray(
+        ::Type{T}, table::PathTable, shape::Tuple, bytes::Vector{UInt8};
+        attrs = Dict{String, Any}(), dimnames,
+    ) where {T}
+    gridsize = map(_ -> 1, shape)
+    manifest = ExplicitChunkMap(
+        table, fill(INLINE_INDEX, gridsize), zeros(UInt64, gridsize),
+        fill(UInt64(length(bytes)), gridsize);
+        inline = Dict(CartesianIndex(gridsize) => bytes),
+    )
+    return ManifestArray{T}(manifest, shape, shape; attrs, dimnames)
+end
+
 """
     chunkmapof(a::ManifestArray) -> AbstractChunkMap
 

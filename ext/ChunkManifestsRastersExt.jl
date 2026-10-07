@@ -22,13 +22,14 @@ module ChunkManifestsRastersExt
 #
 # Internals of Rasters used deliberately, each pinned by a test in
 # test/rasters.jl so that a Rasters upgrade moving one fails loudly rather than
-# degrading quietly: `_dims`, `_metadata`, `_read_missingval_pair`, `_mod`,
-# `_maybe_modify`, `_outer_missingval`, `_raw_check`, and the `nokw` sentinel.
-# They are the set `Rasters._raster` itself calls, so they move only when
-# Rasters' own lazy path moves.
+# degrading quietly: `_dims`, `_layers`, `_metadata`, `_read_missingval_pair`,
+# `_mod`, `_maybe_modify`, `_outer_missingval`, `_raw_check`, and the `nokw`
+# sentinel. They are the set Rasters' own lazy CommonDataModel path calls, so
+# they move only when that path moves.
 
 using ChunkManifests
 import Rasters
+import Zarr
 import ZarrDatasets
 
 const CDM = ZarrDatasets.CDM
@@ -40,12 +41,17 @@ const CDM = ZarrDatasets.CDM
 # the store resolves one.
 const _splitpath = ChunkManifests._splitkey
 
-function _groupof(ds, group::AbstractString)
-    isempty(group) && return ds
-    for part in split(group, '/')
-        ds = CDM.group(ds, part)
+# The dataset over one group of `cm`, `""` being the root. A group is opened as
+# a dataset of its own rather than reached through
+# `CDM.group`: ZarrDatasets 0.1.6 builds a `CDM.group` dataset with an empty
+# dimension table, so it reports no dimensions and Rasters' layer selection,
+# which removes dimension variables by name, fails on it.
+function _groupof(cm::ChunkManifest, group::AbstractString)
+    zg = Zarr.zopen(cm)
+    isempty(group) || for part in split(group, '/')
+        zg = zg[String(part)]
     end
-    return ds
+    return ZarrDatasets.ZarrDataset(zg)
 end
 
 # Array keys of `cm` lying directly under `group`, with their leaf names.
@@ -84,17 +90,25 @@ function _nolayers(cm::ChunkManifest, group::AbstractString)
     )
 end
 
+_epsg(s::AbstractString) = startswith(s, "EPSG:") ? Rasters.EPSG(s) : Rasters.nokw
+_epsg(_) = Rasters.nokw
+
 # Build one lazy Raster over `var`, the raw CommonDataModel variable, following
 # the order `Rasters._raster` uses: read the attributes, settle the inner and
 # outer missing values from them, derive the scaling/masking modification, and
 # wrap the variable in it. `_maybe_modify` returns a lazy ModifiedDiskArray, so
 # no chunk is read for the data; `_dims` does read the coordinate variables,
 # because a Sampled or Projected lookup is those coordinate values.
+#
+# The one step Rasters does not take itself is the CRS: GeoTIFFDriver records
+# a page's CRS as a `"crs" => "EPSG:<code>"` attribute, which Rasters' CF
+# handling does not read, so that form is turned into the default `crs` here.
 function _raster(
         var, name; crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
     )
     scaled1, missingval1 = Rasters._raw_check(raw, scaled, missingval, verbose)
     metadata = Rasters._metadata(var)
+    crs === Rasters.nokw && (crs = _epsg(get(metadata, "crs", nothing)))
     mvpair = Rasters._read_missingval_pair(var, metadata, missingval1)
     mod = Rasters._mod(eltype(var), metadata, mvpair; scaled = scaled1, coerce)
     return Rasters.Raster(
@@ -149,7 +163,7 @@ function Rasters.Raster(
         )
     )
     group, leaf = _splitpath(key)
-    ds = _groupof(ZarrDatasets.ZarrDataset(cm), group)
+    ds = _groupof(cm, group)
     return _raster(
         CDM.variable(ds, leaf), leaf;
         crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
@@ -186,6 +200,10 @@ manifest root by default, or those directly under `group`. A manifest whose
 arrays all sit in groups — an HDF5 granule, or a merge of several files —
 reports the groups available rather than flattening paths into layer names.
 
+Layers are the arrays Rasters itself makes layers of a dataset: dimension
+(coordinate) variables, their bounds and `grid_mapping` variables are left out,
+since they describe the layers rather than being data.
+
 `name` overrides the layer names, which default to each array's own leaf name.
 Each layer is built as in [`Rasters.Raster`](@extref)`(cm, name)` and accepts
 the same keywords.
@@ -207,26 +225,34 @@ function Rasters.RasterStack(
     leaves = _leaves(cm, g)
     isempty(leaves) && _nolayers(cm, g)
 
+    ds = _groupof(cm, g)
+    layernames = sort!(String.(Rasters._layers(ds).names))
+    isempty(layernames) && throw(
+        ArgumentError(
+            "RasterStack: every array $(_describe(g)) — $(last.(leaves)) — is a dimension, " *
+                "bounds or grid-mapping variable, so none is a layer",
+        )
+    )
+
     names = if name === nothing
-        Symbol[Symbol(leaf) for (_, leaf) in leaves]
+        Symbol.(layernames)
     else
         ns = Symbol[Symbol(string(n)) for n in name]
-        length(ns) == length(leaves) || throw(
+        length(ns) == length(layernames) || throw(
             ArgumentError(
-                "RasterStack: name has $(length(ns)) entries but $(length(leaves)) arrays " *
-                    "lie $(_describe(g))",
+                "RasterStack: name has $(length(ns)) entries but $(length(layernames)) " *
+                    "layers lie $(_describe(g)): $(layernames)",
             )
         )
         ns
     end
 
-    ds = _groupof(ZarrDatasets.ZarrDataset(cm), g)
     layers = [
         _raster(
             CDM.variable(ds, leaf), leaf;
             crs, mappedcrs, missingval, scaled, coerce, raw, verbose,
         )
-            for (_, leaf) in leaves
+            for leaf in layernames
     ]
 
     return Rasters.RasterStack(

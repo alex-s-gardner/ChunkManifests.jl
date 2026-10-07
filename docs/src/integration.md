@@ -42,7 +42,12 @@ YAXArrays.open_dataset(Zarr.zopen(cm)) # the zopen step is required
 ```
 
 `ZarrDataset` takes the store itself. `open_dataset` takes a Zarr group, so the `zopen` step
-is not optional there.
+is not optional there. It opens the arrays directly in that group, so a manifest whose arrays
+sit in groups — a GeoTIFF's levels, or a merge of several files — opens one group at a time:
+
+```julia
+YAXArrays.open_dataset(Zarr.zopen(cm)["0"])  # a GeoTIFF's full-resolution level
+```
 
 ## Rasters.jl
 
@@ -62,7 +67,18 @@ window covers.
 
 Rasters' usual `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce` and `raw` keywords all
 apply and mean what they mean elsewhere, because dimensions, CRS, CF scaling and fill-value
-masking are done by Rasters' own CommonDataModel machinery.
+masking are done by Rasters' own CommonDataModel machinery. A stack's layers are the ones
+Rasters makes of a dataset, so dimension and `grid_mapping` variables are not layers.
+
+A GeoTIFF level is a raster with its coordinates and the file's CRS, which `GeoTIFFDriver`
+records as an EPSG code; an explicit `crs` keyword overrides it:
+
+```julia
+using TiffImages
+cm = scan("https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif", GeoTIFFDriver())
+Raster(cm, "0/data")    # full resolution, EPSG:32701
+Raster(cm, "2/data")    # the second overview
+```
 
 Constructing a raster does read the *coordinate* variables, since a `Sampled` or `Projected`
 lookup is those coordinate values. It reads none of the data variable.

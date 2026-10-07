@@ -151,6 +151,19 @@ already-open lazy array, so no reopen happens. They are listed because an
 upstream change letting the lazy path retain an opened source would make that
 extension a thin shim.
 
+## ZarrDatasets.jl — a subgroup reports no dimensions
+
+`CDM.group(ds, name)` (`src/dataset.jl:53`, 0.1.6 and `main`) builds the
+subgroup's `ZarrDataset` with a fresh, empty dimension table instead of running
+the `ZarrDataset(::ZGroup)` constructor that records one entry per
+`_ARRAY_DIMENSIONS` name. So `CDM.dimnames` of any subgroup is `()`, and
+Rasters' `_layers` throws a `TypeError` on one: `collect(())` is a
+`Vector{Union{}}`, which fails its `::Vector{String}` assertion.
+
+`ext/ChunkManifestsRastersExt.jl` opens a group's `ZGroup` as a dataset of its
+own rather than through `CDM.group`, which needs no change here when this is
+fixed. Not reported; no existing issue covers it.
+
 ## Yggdrasil #14998 — ROS3 virtual file driver, merged, registration pending
 
 [JuliaPackaging/Yggdrasil#14998](https://github.com/JuliaPackaging/Yggdrasil/pull/14998),

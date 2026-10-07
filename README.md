@@ -7,6 +7,8 @@
 Virtual Zarr for Julia: read existing HDF5, NetCDF4 and GeoTIFF/COG files as Zarr arrays
 without copying or converting them.
 
+## How it works
+
 Scanning a source file records where each chunk's *compressed* bytes already live — which
 file, which byte offset, how many bytes — in a **chunk manifest**. That manifest is itself a
 `Zarr.AbstractStore`, so handing it to Zarr.jl gives lazy, chunked, codec-decoded access to
@@ -15,6 +17,24 @@ the original file in place.
 This package never decodes array data. It returns the source files' bytes untouched and lets
 Zarr.jl's codec pipeline decode them, so the result is byte-for-byte identical to reading the
 original file.
+
+## Installation
+
+The package is not registered, and it needs a patched Zarr.jl to read arrays whose last
+filter operates on raw bytes — shuffle or fletcher32 — with an element type wider than one
+byte ([Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), merged but not yet in a
+release). A `[sources]` entry applies only to the project that declares it, so the patched
+branch has to be added to your own environment too:
+
+```julia
+using Pkg
+Pkg.add(url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-filter-fix")
+Pkg.add(url = "https://github.com/alex-s-gardner/ChunkManifests.jl")
+```
+
+Without the patched Zarr everything else works; only that one filter combination fails.
+
+Julia 1.10 or later.
 
 ## Example
 
@@ -54,33 +74,17 @@ Released Rasters does not yet turn a CF `grid_mapping` into a CRS
 ([Rasters.jl#936](https://github.com/rafaqz/Rasters.jl/pull/936)), so the raster has
 coordinates but `crs` is `nothing` unless you pass one.
 
-A cloud-optimized GeoTIFF is scanned the same way, with one array per resolution level, `"0"`
-being full resolution:
+A cloud-optimized GeoTIFF is scanned the same way. Each resolution level is a group, `"0"`
+being full resolution, holding the pixels as `"data"` and their `"x"`/`"y"` coordinates; a
+TIFF's EPSG code becomes the raster's CRS:
 
 ```julia
 using TiffImages
 cog = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif"
-cm = scan(cog, GeoTIFFDriver())
-Zarr.zopen(cm)["0"][1:100, 1:100]
+cm = scan(cog, GeoTIFFDriver())          # or level = 2 for one overview alone
+Zarr.zopen(cm)["0"]["data"][1:100, 1:100]
+Raster(cm, "0/data")                     # EPSG:32701
 ```
-
-## Installation
-
-The package is not registered, and it needs a patched Zarr.jl to read arrays whose last
-filter operates on raw bytes — shuffle or fletcher32 — with an element type wider than one
-byte ([Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), merged but not yet in a
-release). A `[sources]` entry applies only to the project that declares it, so the patched
-branch has to be added to your own environment too:
-
-```julia
-using Pkg
-Pkg.add(url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-filter-fix")
-Pkg.add(url = "https://github.com/alex-s-gardner/ChunkManifests.jl")
-```
-
-Without the patched Zarr everything else works; only that one filter combination fails.
-
-Julia 1.10 or later.
 
 ## What it does
 
