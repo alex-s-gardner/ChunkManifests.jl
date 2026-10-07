@@ -13,30 +13,49 @@ function _httpuri(uri::AbstractString)
     return uri
 end
 
+const _HTTP_IDLE_PER_HOST = 64
+
 """
-    HTTPTransport(; retries=3, headers=Pair{String,String}[], kwargs...)
+    HTTPTransport(; retries=3, headers=Pair{String,String}[], connect_timeout=10,
+                  read_idle_timeout=60, kwargs...)
 
 Reads byte ranges from an HTTP(S) server with ranged GET requests. Every
 [`fetchrange`](@ref) call made through one `HTTPTransport` shares the same
 underlying `HTTP.Client`, so TCP/TLS connections to a given host are reused
-across calls instead of being re-established per request.
+across calls instead of being re-established per request. Up to
+$(_HTTP_IDLE_PER_HOST) idle connections per host are kept for reuse, since a
+scan or a read issues many requests at once and a new TLS connection costs
+several round trips.
 
 `retries` bounds how many times a transiently failing request (a 5xx
 response, a request timeout, or a dropped connection) is retried, with
 exponential backoff, before giving up; a 4xx response is never retried.
 `headers` are attached to every request issued through this transport (for
-example an `Authorization` header for a private archive). Remaining keyword
-arguments are forwarded to `HTTP.Client` (`connect_timeout`,
-`request_timeout`, and so on).
+example an `Authorization` header for a private archive).
+
+`connect_timeout` bounds, in seconds, establishing a connection including its
+TLS handshake, and `read_idle_timeout` how long a response may stall; a
+handshake a server never answers would otherwise wait forever. `0` turns
+either off. Remaining keyword arguments are forwarded to `HTTP.Client`
+(`request_timeout`, `transport`, and so on).
 """
 struct HTTPTransport <: AbstractTransport
     client::HTTP.Client
     retries::Int
 end
 
-function HTTPTransport(; retries::Integer = 3, headers = Pair{String, String}[], kwargs...)
+function HTTPTransport(;
+        retries::Integer = 3, headers = Pair{String, String}[],
+        connect_timeout::Real = 10, read_idle_timeout::Real = 60,
+        transport = HTTP.Transport(;
+            proxy = HTTP.ProxyFromEnvironment(), max_idle_per_host = _HTTP_IDLE_PER_HOST,
+        ),
+        kwargs...,
+    )
     retries >= 0 || throw(ArgumentError("retries must be nonnegative, got $retries"))
-    client = HTTP.Client(; default_headers = headers, kwargs...)
+    client = HTTP.Client(;
+        default_headers = headers, connect_timeout, read_idle_timeout, transport, kwargs...,
+    )
     return HTTPTransport(client, Int(retries))
 end
 
