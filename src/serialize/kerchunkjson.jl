@@ -120,13 +120,16 @@ function _chunkkeyparser(shape::NTuple{N, Int}, chunkshape::NTuple{N, Int}) wher
     return ManifestArray{UInt8}(manifest, shape, chunkshape)
 end
 
+# Returned for the bytes of a reference that has none, and never stored.
+const _NOBYTES = UInt8[]
+
 # One ref value, decoded into one of the schema's four shapes and returned
 # as a uniform 5-tuple `(kind, url, offset, nbytes, bytes)` — fields unused
 # by `kind` are left at their zero value. Throws a bare ArgumentError on a
 # shape mismatch; the caller attaches the offending file and key.
 function _resolveref(raw, templates::AbstractDict)
     noturl = ""
-    nobytes = UInt8[]
+    nobytes = _NOBYTES
     if raw isa AbstractVector
         n = length(raw)
         if n == 3
@@ -142,7 +145,7 @@ function _resolveref(raw, templates::AbstractDict)
                         "$(typeof(offset)) and $(typeof(nbytes))",
                 )
             )
-            return (:range, _substitutetemplates(url, templates), UInt64(offset), UInt64(nbytes), nobytes)
+            return (:range, String(_substitutetemplates(url, templates)), UInt64(offset), UInt64(nbytes), nobytes)
         elseif n == 1
             url = raw[1]
             url isa AbstractString || throw(
@@ -150,7 +153,7 @@ function _resolveref(raw, templates::AbstractDict)
                     "a 1-element (whole-object) reference's element must be a URL string, got $(typeof(url))"
                 )
             )
-            return (:whole, _substitutetemplates(url, templates), UInt64(0), UInt64(0), nobytes)
+            return (:whole, String(_substitutetemplates(url, templates)), UInt64(0), UInt64(0), nobytes)
         else
             throw(
                 ArgumentError(
@@ -209,27 +212,34 @@ function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, 
     inline = Dict{CartesianIndex{N}, Vector{UInt8}}()
 
     keyparser = _chunkkeyparser(shape, chunkshape)
+    # Most chunks name the same file as the one before, so its table index is
+    # kept rather than looked up again.
+    lasturl, lastindex = "", MISSING_INDEX
     for (leaf, raw) in chunkleaves
-        fullkey = "$arraypath/$leaf"
         I = parse_chunkkey(keyparser, leaf)
         I === nothing && throw(
             ArgumentError(
-                "$path: chunk key \"$fullkey\" does not parse for array \"$arraypath\" " *
-                    "with chunk grid $gridsize",
+                "$path: chunk key \"$arraypath/$leaf\" does not parse for array " *
+                    "\"$arraypath\" with chunk grid $gridsize",
             )
         )
         kind, url, off, nb, bytes = try
-            _resolveref(raw, templates)
+            # A [url, offset, length] array is by far the commonest shape, and
+            # naming its type lets this call compile to a direct one.
+            raw isa Vector{Any} ? _resolveref(raw, templates) : _resolveref(raw, templates)
         catch e
             e isa ArgumentError || rethrow()
-            throw(ArgumentError("$path: refs[\"$fullkey\"]: $(e.msg)"))
+            throw(ArgumentError("$path: refs[\"$arraypath/$leaf\"]: $(e.msg)"))
+        end
+        if kind != :inline && url != lasturl
+            lasturl, lastindex = url, push_uri!(table, url)
         end
         if kind == :range
-            index[I] = push_uri!(table, url)
+            index[I] = lastindex
             offset[I] = off
             nbytes[I] = nb
         elseif kind == :whole
-            index[I] = push_uri!(table, url)
+            index[I] = lastindex
             offset[I] = 0
             nbytes[I] = _WHOLE_OBJECT_NBYTES
         else
@@ -375,6 +385,42 @@ function ChunkManifest(store::Zarr.AbstractStore, key::AbstractString, fmt::Kerc
     return _load_kerchunkjson(store, key, key, fmt)
 end
 
+# Sorts a reference set's entries by the array they belong to: each array's
+# `.zarray` and `.zattrs` documents and its chunk references, keyed by array
+# path, and the root group's attributes. A function of its own so that the
+# loop is compiled for the concrete type `refs` was parsed into.
+function _gatherrefs(refs, label)
+    rootattrs = Dict{String, Any}()
+    zarraydocs = Dict{String, Any}()
+    zattrsdocs = Dict{String, Any}()
+    chunkleaves = Dict{String, Vector{Pair{SubString{String}, Any}}}()
+
+    # A reference set lists an array's chunks together, so the array the last
+    # one belonged to is kept rather than looked up again for every chunk.
+    havelast = false
+    lastprefix = SubString("")
+    lastleaves = Pair{SubString{String}, Any}[]
+    for (refkey, value) in refs
+        prefix, leaf = _splitkey(refkey)
+        if leaf == ".zarray"
+            zarraydocs[prefix] = _parsejsonstring(value, label, refkey)
+        elseif leaf == ".zattrs"
+            if prefix == ""
+                rootattrs = Dict{String, Any}(_parsejsonstring(value, label, refkey))
+            else
+                zattrsdocs[prefix] = _parsejsonstring(value, label, refkey)
+            end
+        elseif leaf != ".zgroup"
+            if !havelast || prefix != lastprefix
+                lastleaves = get!(() -> Pair{SubString{String}, Any}[], chunkleaves, prefix)
+                lastprefix, havelast = prefix, true
+            end
+            push!(lastleaves, leaf => value)
+        end
+    end
+    return rootattrs, zarraydocs, zattrsdocs, chunkleaves
+end
+
 function _load_kerchunkjson(store::Zarr.AbstractStore, key::AbstractString, label::AbstractString, ::KerchunkJSON)
     bytes = store[key]
     bytes === nothing && throw(ArgumentError("load: \"$label\" does not exist"))
@@ -401,32 +447,12 @@ function _load_kerchunkjson(store::Zarr.AbstractStore, key::AbstractString, labe
     refs = doc["refs"]
     templates = get(doc, "templates", Dict{String, Any}())
 
-    rootattrs = Dict{String, Any}()
-    zarraydocs = Dict{String, Any}()
-    zattrsdocs = Dict{String, Any}()
-    chunkleaves = Dict{String, Vector{Pair{String, Any}}}()
-
-    for (refkey, value) in refs
-        prefix, leaf = _splitkey(refkey)
-        if leaf == ".zarray"
-            zarraydocs[prefix] = _parsejsonstring(value, label, refkey)
-        elseif leaf == ".zattrs"
-            if prefix == ""
-                rootattrs = Dict{String, Any}(_parsejsonstring(value, label, refkey))
-            else
-                zattrsdocs[prefix] = _parsejsonstring(value, label, refkey)
-            end
-        elseif leaf == ".zgroup"
-            continue
-        else
-            push!(get!(() -> Pair{String, Any}[], chunkleaves, prefix), leaf => value)
-        end
-    end
+    rootattrs, zarraydocs, zattrsdocs, chunkleaves = _gatherrefs(refs, label)
 
     table = PathTable()
     arrays = Dict{String, ManifestArray}()
     for (arraypath, zarraydoc) in zarraydocs
-        leaves = get(chunkleaves, arraypath, Pair{String, Any}[])
+        leaves = get(chunkleaves, arraypath, Pair{SubString{String}, Any}[])
         zattrsdoc = get(zattrsdocs, arraypath, nothing)
         arrays[arraypath] = _buildarray(label, arraypath, zarraydoc, zattrsdoc, leaves, table, templates)
     end
