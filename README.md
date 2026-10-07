@@ -54,14 +54,16 @@ Released Rasters does not yet turn a CF `grid_mapping` into a CRS
 ([Rasters.jl#936](https://github.com/rafaqz/Rasters.jl/pull/936)), so the raster has
 coordinates but `crs` is `nothing` unless you pass one.
 
-A cloud-optimized GeoTIFF is scanned the same way, with one array per resolution level, `"0"`
-being full resolution:
+A cloud-optimized GeoTIFF is scanned the same way. Each resolution level is a group, `"0"`
+being full resolution, holding the pixels as `"data"` and their `"x"`/`"y"` coordinates; a
+TIFF's EPSG code becomes the raster's CRS:
 
 ```julia
 using TiffImages
 cog = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif"
-cm = scan(cog, GeoTIFFDriver())
-Zarr.zopen(cm)["0"][1:100, 1:100]
+cm = scan(cog, GeoTIFFDriver())          # or level = 2 for one overview alone
+Zarr.zopen(cm)["0"]["data"][1:100, 1:100]
+Raster(cm, "0/data")                     # EPSG:32701
 ```
 
 ## Installation
