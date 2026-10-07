@@ -90,6 +90,8 @@ function __init__()
     # that process, and the id it got is saved with the package; a new process
     # registers it afresh.
     _RANGE_DRIVER[] = -1
+    # Default transports hold connections, which belong to one process.
+    empty!(_SHARED_DEFAULTS)
     _register_tiff_predictor!()
     # Registration belongs here rather than at top level: DRIVER_REGISTRY is
     # populated at load time, and a top-level push! would be captured during
