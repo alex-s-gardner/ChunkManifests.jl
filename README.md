@@ -7,6 +7,31 @@
 Virtual Zarr for Julia: read existing HDF5, NetCDF4 and GeoTIFF/COG files as Zarr arrays
 without copying or converting them.
 
+## What is a chunk manifest?
+
+Many scientific file formats — HDF5, NetCDF4, GeoTIFF and cloud-optimized GeoTIFF among
+them — do not store a large array as one long run of numbers. They cut it into tiles, called
+chunks, and compress each one separately. A program that wants a small window of the array
+then reads and decompresses only the chunks that window touches, rather than the whole file.
+
+A chunk manifest is a table of where those chunks are: for every chunk, which file holds it,
+where in that file it starts, and how many bytes it takes. ChunkManifests.jl builds that
+table by reading a file's metadata, and presents it to [Zarr.jl](https://github.com/JuliaIO/Zarr.jl)
+as if it were a Zarr store. You can then select data by dimension — a range of rows and
+columns, a time slice — and Zarr.jl fetches and decompresses just the chunks it needs,
+straight from the original file, wherever it lives: on disk, on a web server or in S3.
+
+Knowing where every chunk is also lifts limits that a format's own reader places on parallel
+access. libhdf5, the library behind HDF5 and NetCDF4, is not thread-safe, so every read of a
+file goes through it one at a time. Through a manifest a chunk is just a byte range, read
+without that library: many chunks are fetched at once, and a file can be read from several
+threads or processes simultaneously.
+
+Because a manifest only points at chunks, many files can be combined into one: a stack of
+daily granules becomes a single array with a time dimension, a set of files holding different
+variables becomes one dataset, and none of the original bytes are copied or rewritten. This
+idea is often called *virtual Zarr*.
+
 ## How it works
 
 Scanning a source file records where each chunk's *compressed* bytes already live — which
