@@ -67,6 +67,11 @@ _pokeu64(off, v::UInt64) = unsafe_store!(Ptr{UInt64}(pointer(_RANGE_CLASS) + off
 _rangekey(file::Ptr{Nothing}) = unsafe_load(Ptr{Int64}(file + _H5FD_T_SIZE))
 _rangelookup(file::Ptr{Nothing}) = @lock _RANGE_LOCK _RANGE_SOURCES[_rangekey(file)]
 
+# libhdf5 is not thread-safe, and HDF5.jl serializes every call into it with
+# `HDF5.API.liblock`, which its finalizers also take before closing anything.
+# A call made here directly, rather than through HDF5.jl, takes that lock too:
+# otherwise a finalizer on another thread can enter libhdf5 alongside it.
+#
 # Every callback below is called from C and must return a value rather than
 # throw: an exception crossing that boundary takes the process down. Each
 # converts a failure into the error code libhdf5 expects and lets libhdf5
@@ -199,7 +204,7 @@ function _rangedriver()
         _pokeptr(
             _CLS_TRUNCATE, @cfunction(_range_truncate, Cint, (Ptr{Nothing}, Int64, Bool))
         )
-        id = ccall(
+        id = @lock HDF5.API.liblock ccall(
             (:H5FDregister, HDF5.API.libhdf5), Int64, (Ptr{Nothing},),
             pointer(_RANGE_CLASS)
         )
@@ -239,7 +244,7 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
     end
     fapl = HDF5.API.h5p_create(HDF5.API.H5P_FILE_ACCESS)
     return try
-        status = ccall(
+        status = @lock HDF5.API.liblock ccall(
             (:H5Pset_driver, HDF5.API.libhdf5), Cint, (Int64, Int64, Ptr{Nothing}),
             fapl, driver, C_NULL
         )
@@ -247,7 +252,7 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
         if access.pagebuffer > 0
             # Metadata written in aggregated pages then arrives in a few large
             # aligned reads instead of many small scattered ones.
-            ccall(
+            @lock HDF5.API.liblock ccall(
                 (:H5Pset_page_buffer_size, HDF5.API.libhdf5), Cint,
                 (Int64, Csize_t, Cuint, Cuint),
                 fapl, Csize_t(access.pagebuffer), Cuint(0), Cuint(0)

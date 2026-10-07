@@ -711,7 +711,9 @@ end
 function _prefetchscanroot(f, group::AbstractString)
     group == "/" && return _prefetchmembers(f)
     link = Ref{HDF5.API.H5L_info_t}()
-    status = ccall(
+    # Under HDF5.jl's lock, as every call into libhdf5 must be; see
+    # src/access/hdf5vfd.jl.
+    status = @lock HDF5.API.liblock ccall(
         (:H5Lget_info1, HDF5.API.libhdf5), HDF5.API.herr_t,
         (HDF5.API.hid_t, Cstring, Ptr{HDF5.API.H5L_info_t}, HDF5.API.hid_t),
         f, group, link, HDF5.API.H5P_DEFAULT,
