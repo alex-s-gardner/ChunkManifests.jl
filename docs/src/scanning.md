@@ -83,6 +83,23 @@ julia> sort(collect(keys(arraysof(scan(path, HDF5Driver(); group = "/grounded", 
 With no `group`, the scan covers the file from the root down, which for this file is the same
 four arrays.
 
+## GeoTIFF and COG
+
+A TIFF's resolution levels become one Zarr group each: `"0"` is the full-resolution image,
+`"1"` its first overview, and so on by decreasing size. A level's group holds `"data"`, a
+`"mask"` when the file carries a transparency mask of that size, and `"x"` and `"y"`
+pixel-center coordinates when the image is georeferenced:
+
+```
+0/data  0/x  0/y
+1/data  1/x  1/y
+…
+```
+
+Each level has its own coordinates because a dimension name has one length within a group,
+which is what lets Rasters and xarray open any level directly. A TIFF holding several
+separate full-resolution images adds the image index in front, as `"<image>/<level>/data"`.
+
 ## Keywords
 
 `scan(path, HDF5Driver(); group, siblings, access)`:
@@ -91,6 +108,11 @@ four arrays.
   root.
 - `siblings` — whether to pull in the variables the named one depends on. Defaults to `true`.
 - `access` — how the file's metadata bytes are reached. See [Remote sources](@ref).
+
+`scan(path, GeoTIFFDriver(); level, access)`:
+
+- `level` — keep one resolution level, `0` being full resolution. Defaults to every level.
+- `access` — as above.
 
 `ChunkManifest(path; access, transport, readahead)` additionally takes the two things that
 govern reading chunks afterwards rather than scanning now: `transport` resolves the URIs the

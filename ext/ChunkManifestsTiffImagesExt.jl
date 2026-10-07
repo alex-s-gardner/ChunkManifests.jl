@@ -229,9 +229,10 @@ end
 # `_gt_scanifd`): used only when this page has no geo tags of its own. Own
 # tags, when present, always take precedence over `inherit`.
 #
-# Returns `(attrs, owngeo)`, where `owngeo` is this page's own (uninherited)
-# `(; pixelscale, tiepoint, crs, rastertype)` — what a later page would cache
-# if this page turns out to be a full-resolution primary.
+# Returns `(attrs, owngeo, coords)`. `owngeo` is this page's own (uninherited)
+# `(; pixelscale, tiepoint, crs, rastertype)`, which its overviews inherit when
+# this page is a full-resolution primary. `coords` is `(; x, y)`, the pixel-center
+# coordinates along each axis, or `nothing` when no geotransform is known.
 function _gt_geoattrs(ifd, shape, context::AbstractString; inherit = nothing)
     pixelscale = TiffImages.MODELPIXELSCALE in ifd ? _gt_asvector(ifd[TiffImages.MODELPIXELSCALE].data) : nothing
     tiepoint = TiffImages.MODELTIEPOINT in ifd ? _gt_asvector(ifd[TiffImages.MODELTIEPOINT].data) : nothing
@@ -277,17 +278,17 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit = nothing)
     else
         nothing, ownrastertype
     end
+    coords = nothing
     if gt !== nothing
         attrs["GeoTransform"] = collect(gt.matrix)
         x, y = ChunkManifests.pixel_coordinates(gt, width, height; rastertype)
-        attrs["x"] = x
-        attrs["y"] = y
+        coords = (; x, y)
     end
 
     gdalmetadata !== nothing && (attrs["GDALMetadata"] = gdalmetadata)
 
     owngeo = (; pixelscale, tiepoint, crs = owncrs, rastertype = ownrastertype)
-    return attrs, owngeo
+    return attrs, owngeo, coords
 end
 
 function _gt_scantiled(
@@ -487,17 +488,10 @@ function _gt_scanplanar(
     return manifest, (chunkxy..., 1), compressor, filters
 end
 
-function _gt_scanifd(
-        driver::ChunkManifests.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
-        sft::Integer, parentkey::Union{Nothing, AbstractString}, primarygeo::Dict{String, Any}, ismain::Bool,
-    )
-    context = "$path: page \"$key\""
+_gt_width(ifd) = Int(ifd[TiffImages.IMAGEWIDTH].data)
+_gt_height(ifd) = Int(ifd[TiffImages.IMAGELENGTH].data)
 
-    width = Int(ifd[TiffImages.IMAGEWIDTH].data)
-    height = Int(ifd[TiffImages.IMAGELENGTH].data)
-    nsp = TiffImages.nsamples(ifd)
-    planar = TiffImages.isplanar(ifd)
-
+function _gt_eltype(ifd, nsp::Integer, context::AbstractString)
     bits = _gt_checkuniform(_gt_asvector(ifd[TiffImages.BITSPERSAMPLE].data), nsp, "BITSPERSAMPLE", context)
     sfvalues = TiffImages.SAMPLEFORMAT in ifd ? _gt_asvector(ifd[TiffImages.SAMPLEFORMAT].data) : UInt16[1]
     sampleformat = _gt_checkuniform(sfvalues, nsp, "SAMPLEFORMAT", context)
@@ -508,6 +502,37 @@ function _gt_scanifd(
                 "widths cannot be referenced without unpacking, which this package never does"
         )
     )
+    return T
+end
+
+# What an overview or mask inherits from the full-resolution page it belongs to.
+_gt_record(owngeo, width, height, fillvalue) = (;
+    owngeo.pixelscale, owngeo.tiepoint, owngeo.crs, owngeo.rastertype, width, height, fillvalue,
+)
+
+# The record for a primary that a `level` selection leaves unbuilt; a built
+# primary's comes from `_gt_scanifd`.
+function _gt_inheritance(ifd, path::AbstractString, key::AbstractString)
+    context = "$path: page \"$key\""
+    width, height = _gt_width(ifd), _gt_height(ifd)
+    T = _gt_eltype(ifd, TiffImages.nsamples(ifd), context)
+    _, owngeo, _ = _gt_geoattrs(ifd, (width, height), context)
+    return _gt_record(owngeo, width, height, _gt_fillvalue(T, ifd))
+end
+
+# One page as one array. Returns the array, its pixel-center coordinates
+# (`nothing` when the page has no geotransform, own or inherited), and the
+# record its overviews inherit should it be a primary.
+function _gt_scanifd(
+        driver::ChunkManifests.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
+        sft::Integer, inherit,
+    )
+    context = "$path: page \"$key\""
+
+    width, height = _gt_width(ifd), _gt_height(ifd)
+    nsp = TiffImages.nsamples(ifd)
+    planar = TiffImages.isplanar(ifd)
+    T = _gt_eltype(ifd, nsp, context)
 
     compression_id = Int(TiffImages.getdata(ifd, TiffImages.COMPRESSION, 1))
     predictor_id = TiffImages.predictor(ifd)
@@ -536,8 +561,7 @@ function _gt_scanifd(
         ((width, height), chunkshape2, manifest2, compressor, filters, ["x", "y"])
     end
 
-    inherit = parentkey === nothing ? nothing : primarygeo[parentkey]
-    attrs, owngeo = _gt_geoattrs(ifd, (width, height), context; inherit)
+    attrs, owngeo, coords = _gt_geoattrs(ifd, (width, height), context; inherit)
 
     # NewSubfileType (254): a bit field. Bit 0 marks a reduced-resolution
     # overview, bit 1 one page of an otherwise-ordinary multi-page image, bit
@@ -549,7 +573,7 @@ function _gt_scanifd(
     attrs["reduced_resolution"] = reduced
     attrs["mask"] = mask
     attrs["multipage"] = (sft & 0x02) != 0
-    parentkey !== nothing && (attrs["parent"] = parentkey)
+    attrs["tiff_page"] = key
 
     fillvalue = _gt_fillvalue(T, ifd)
     if fillvalue === nothing && inherit !== nothing && inherit.fillvalue !== nothing
@@ -560,37 +584,141 @@ function _gt_scanifd(
         manifest, shape, chunkshape;
         fillvalue, compressor, filters, attrs, dimnames,
     )
+    return va, coords, _gt_record(owngeo, width, height, fillvalue)
+end
 
-    # Only a full-resolution primary is ever referenced as a parent (a
-    # reduced-resolution or mask page always derives from one, never from
-    # another overview), so only primaries are worth caching here.
-    if ismain && !reduced && !mask
-        primarygeo[key] = (;
-            owngeo.pixelscale, owngeo.tiepoint, owngeo.crs, owngeo.rastertype, width, height, fillvalue,
-        )
+# Assigns every page to an image and a resolution level within it.
+#
+# An image starts at each full-resolution main-chain page (a *primary*). Every
+# other page belongs to one: a SubIFD child to the page owning its SubIFDs tag,
+# any other reduced-resolution or mask page to the most recent primary. A
+# non-mask page belonging to an image is one of its overviews, whatever its
+# NewSubfileType says, since a SubIFD is subordinate to its owner by definition.
+#
+# Level 0 is the primary; its overviews are levels 1, 2, … by decreasing size,
+# not by page order, and must each be strictly smaller than the level above. A
+# mask joins the level of the same size. Pages that cannot be placed this way
+# are refused by name rather than guessed at.
+function _gt_layout(pages, path::AbstractString)
+    entries = []
+    members = Dict{String, Vector{Any}}()  # each image's pages, its primary first
+    primaries = String[]
+    lastfull = nothing
+    for (key, ifd, forcedparent) in pages
+        sft = Int(TiffImages.getdata(ifd, TiffImages.SUBFILETYPE, 0))
+        reduced = (sft & 0x01) != 0
+        mask = (sft & 0x04) != 0
+        if !occursin('.', key) && !reduced && !mask
+            push!(primaries, key)
+            lastfull = key
+            parent = nothing
+        else
+            parent = something(forcedparent, Some(lastfull))
+            parent === nothing && throw(
+                ArgumentError(
+                    "$path: page \"$key\" is a reduced-resolution or mask page with no " *
+                        "full-resolution page before it to belong to",
+                )
+            )
+            haskey(members, parent) || throw(
+                ArgumentError(
+                    "$path: SubIFD page \"$key\" belongs to page \"$parent\", which is not a " *
+                        "full-resolution image",
+                )
+            )
+        end
+        entry = (; key, ifd, sft, parent, mask, width = _gt_width(ifd), height = _gt_height(ifd))
+        push!(entries, entry)
+        push!(get!(() -> [], members, something(parent, key)), entry)
     end
 
-    return va
+    levelof = Dict{String, Int}(k => 0 for k in primaries)
+    nlevels = Dict{String, Int}()
+    for pk in primaries
+        primary, others = Iterators.peel(members[pk])
+        overviews = sort!([e for e in others if !e.mask]; by = e -> e.width, rev = true)
+        above = primary
+        for (i, e) in pairs(overviews)
+            smaller = e.width <= above.width && e.height <= above.height &&
+                (e.width, e.height) != (above.width, above.height)
+            smaller || throw(
+                ArgumentError(
+                    "$path: overview page \"$(e.key)\" ($(e.width)×$(e.height)) is not smaller " *
+                        "than page \"$(above.key)\" ($(above.width)×$(above.height)), so the " *
+                        "pages of image \"$pk\" do not form one resolution pyramid",
+                )
+            )
+            levelof[e.key] = i
+            above = e
+        end
+        nlevels[pk] = length(overviews) + 1
+
+        levels = [primary; overviews]
+        masked = Dict{Int, String}()
+        for e in others
+            e.mask || continue
+            match = findfirst(l -> (l.width, l.height) == (e.width, e.height), levels)
+            match === nothing && throw(
+                ArgumentError(
+                    "$path: mask page \"$(e.key)\" ($(e.width)×$(e.height)) matches the size of " *
+                        "no level of image \"$pk\"",
+                )
+            )
+            lvl = levelof[levels[match].key]
+            haskey(masked, lvl) && throw(
+                ArgumentError(
+                    "$path: mask pages \"$(masked[lvl])\" and \"$(e.key)\" both belong to level " *
+                        "$lvl of image \"$pk\"",
+                )
+            )
+            masked[lvl] = e.key
+            levelof[e.key] = lvl
+        end
+    end
+
+    imageof = Dict(k => i - 1 for (i, k) in pairs(primaries))
+    placed = [
+        (; e..., image = imageof[something(e.parent, e.key)], level = levelof[e.key])
+            for e in entries
+    ]
+    return placed, primaries, nlevels
 end
 
 """
-    scan(path::AbstractString, driver::GeoTIFFDriver) -> ChunkManifest
+    scan(path::AbstractString, driver::GeoTIFFDriver;
+         level::Union{Nothing, Integer}=nothing, access::SourceAccess=AutoAccess()) -> ChunkManifest
 
-Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each main-chain image file
-directory (page) becomes one array, keyed by its 0-based page index as a
-string ("0", "1", ...). A page's `SubIFDs` tag (330), when present, is
-followed one level deep and each child becomes its own array keyed
-`"<parentkey>.sub<i>"`. No strip or tile is read or decoded to do any of this.
+Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each resolution level becomes
+one Zarr group: `"0"` is the full-resolution image, `"1"` its first overview, and
+so on by decreasing size. A level's group holds
 
-A page's `NewSubfileType` tag (254) is recorded in its array attributes as
-`"NewSubfileType"` (the raw value), `"reduced_resolution"`, `"mask"`, and
-`"multipage"` (its three bit flags), and, for a reduced-resolution or mask
-page, `"parent"` names the key of the full-resolution array it belongs to —
-the most recent main-chain page without either flag set, or the main-chain
-page owning its `SubIFDs` tag. Such a page inherits its parent's CRS and
-nodata fill value, and — unless it carries its own `ModelPixelScale` /
-`ModelTiepoint` — a pixel scale derived from the parent's extent (not an
-assumed resolution factor) and the parent's tiepoint unchanged.
+- `"data"`, its pixels;
+- `"mask"`, when the file carries a transparency mask of that size;
+- `"x"` and `"y"`, the pixel-center coordinates, when the image is georeferenced.
+
+A TIFF holding several separate full-resolution images keys each under its
+0-based image index, as `"<image>/<level>/data"`. No strip or tile is read or
+decoded to do any of this.
+
+Every level is scanned by default. `level = k` keeps level `k` of each image and
+nothing else, and is an error when an image has no such level.
+
+Pages are placed from the `NewSubfileType` tag (254) and the `SubIFDs` tag
+(330), which is followed one level deep. Each full-resolution main-chain page
+starts an image; a reduced-resolution or mask page belongs to the most recent
+one, and a `SubIFDs` child to the page owning the tag. Overviews are ordered by
+size rather than by page order, and a mask joins the level of its own size. An
+overview or mask inherits its image's CRS and nodata fill value and — unless it
+carries its own `ModelPixelScale` / `ModelTiepoint` — a pixel scale derived from
+the image's extent (not an assumed resolution factor) and the image's tiepoint.
+
+Each array's attributes record the page it came from as `"tiff_page"` (the
+main-chain index, or `"<owner>.sub<i>"` for a `SubIFDs` child), the raw
+`"NewSubfileType"`, and its three bit flags as `"reduced_resolution"`, `"mask"`
+and `"multipage"`.
+
+`access` decides how the tag directories are reached; the default reads a
+remote object in place through [`RangeAccess`](@ref).
 
 Supported layouts: any `SAMPLESPERPIXEL`, both `PLANARCONFIG` values, and
 byte-aligned sample widths. A single band keeps a 2-D `(x, y)` array; multiple
@@ -601,14 +729,18 @@ or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
 `PREDICTOR` values, a striped layout whose final strip is shorter than
 `ROWSPERSTRIP` when that layout cannot be re-chunked around the gap (see
 `GeoTIFFDriver`'s docstring for the uncompressed case, which can), a `SubIFDs`
-entry nesting deeper than one level, and any IFD offset — main chain or
-`SubIFDs` — revisited while scanning, which would otherwise loop forever.
+entry nesting deeper than one level, any IFD offset — main chain or `SubIFDs` —
+revisited while scanning, and pages that do not form a pyramid: an overview no
+smaller than the level above it, a mask matching no level's size, or two masks
+at one level.
 """
 function ChunkManifests.scan(
         path::AbstractString, driver::ChunkManifests.GeoTIFFDriver;
+        level::Union{Nothing, Integer} = nothing,
         access::ChunkManifests.SourceAccess = ChunkManifests.AutoAccess(),
     )
-    return _gt_scan(driver, path, ChunkManifests.resolve_access(access, driver, path))
+    level === nothing || level >= 0 || throw(ArgumentError("level must be nonnegative, got $level"))
+    return _gt_scan(driver, path, ChunkManifests.resolve_access(access, driver, path); level)
 end
 
 # A remote object is read in place: a COG keeps its tag directories and tile
@@ -617,7 +749,7 @@ end
 # involved, so unlike the HDF5 driver there is no struct layout to verify.
 function _gt_scan(
         driver::ChunkManifests.GeoTIFFDriver, uri::AbstractString,
-        access::ChunkManifests.RangeAccess,
+        access::ChunkManifests.RangeAccess; level,
     )
     total = ChunkManifests.objectsize(access.transport, uri)
     total === nothing && throw(
@@ -630,7 +762,7 @@ function _gt_scan(
     io = ChunkManifests.RangeIO(access, uri, total)
     return _gt_build(
         driver, String(uri), total, _gt_readpages(io, uri),
-        ChunkManifests._scantransport(access),
+        ChunkManifests._scantransport(access); level,
     )
 end
 
@@ -639,38 +771,64 @@ end
 # built from a cached copy is valid for a reader that never saw the cache.
 function _gt_scan(
         driver::ChunkManifests.GeoTIFFDriver, uri::AbstractString,
-        access::ChunkManifests.SourceAccess,
+        access::ChunkManifests.SourceAccess; level,
     )
     return ChunkManifests.withsourcepath(access, uri) do localpath
         recorded = ChunkManifests._isremote(uri) ? String(uri) : abspath(localpath)
         _gt_build(
             driver, recorded, filesize(localpath), _gt_readpages(localpath),
-            ChunkManifests._scantransport(access),
+            ChunkManifests._scantransport(access); level,
         )
     end
 end
 
+# Coordinates have no byte range in the file, so they are held in the manifest.
+function _gt_coordinate(table, values::AbstractVector, name::String)
+    bytes = Vector{UInt8}(undef, sizeof(Float64) * length(values))
+    copyto!(reinterpret(Float64, bytes), values)
+    return ChunkManifests._inlinearray(Float64, table, (length(values),), bytes; dimnames = [name])
+end
+
 function _gt_build(
         driver::ChunkManifests.GeoTIFFDriver, path::AbstractString, filebytes, pages,
-        transport::ChunkManifests.AbstractTransport,
+        transport::ChunkManifests.AbstractTransport; level,
     )
     table = ChunkManifests.PathTable()
     fileindex = ChunkManifests.push_uri!(table, path; size = filebytes)
 
+    placed, primaries, nlevels = _gt_layout(pages, path)
+    multi = length(primaries) > 1
+    if level !== nothing
+        for (i, pk) in pairs(primaries)
+            n = nlevels[pk]
+            level < n || throw(
+                ArgumentError(
+                    "scan: $path has no level $level" * (multi ? " in image $(i - 1)" : "") *
+                        "; it has levels 0 to $(n - 1)",
+                )
+            )
+        end
+    end
+
+    # Pages arrive with each primary ahead of the pages belonging to it, so its
+    # record is in place before an overview or mask needs it.
+    inheritance = Dict{String, Any}()
     arrays = Dict{String, ChunkManifests.ManifestArray}()
-    primarygeo = Dict{String, Any}()
-    lastfull = nothing
-    for (key, ifd, forcedparent) in pages
-        sft = Int(TiffImages.getdata(ifd, TiffImages.SUBFILETYPE, 0))
-        reduced = (sft & 0x01) != 0
-        mask = (sft & 0x04) != 0
-        ismain = !occursin('.', key)
-
-        parentkey = forcedparent !== nothing ? forcedparent : ((reduced || mask) ? lastfull : nothing)
-
-        arrays[key] = _gt_scanifd(driver, table, fileindex, ifd, path, key; sft, parentkey, primarygeo, ismain)
-
-        ismain && !reduced && !mask && (lastfull = key)
+    for p in placed
+        primary = p.parent === nothing
+        if !(level === nothing || p.level == level)
+            primary && (inheritance[p.key] = _gt_inheritance(p.ifd, path, p.key))
+            continue
+        end
+        inherit = primary ? nothing : inheritance[p.parent]
+        va, coords, record = _gt_scanifd(driver, table, fileindex, p.ifd, path, p.key; p.sft, inherit)
+        primary && (inheritance[p.key] = record)
+        group = multi ? "$(p.image)/$(p.level)" : string(p.level)
+        arrays["$group/$(p.mask ? "mask" : "data")"] = va
+        if !p.mask && coords !== nothing
+            arrays["$group/x"] = _gt_coordinate(table, coords.x, "x")
+            arrays["$group/y"] = _gt_coordinate(table, coords.y, "y")
+        end
     end
 
     provenance = Dict{String, Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
