@@ -294,61 +294,109 @@ end
 # directly where it exists, with the same fallback behind it.
 const _HAS_CHUNK_ITER = hasmethod(HDF5.API.h5d_chunk_iter, Tuple{Any, Any})
 
-# Calls `f(element_offset, filter_mask, addr, size)` once per allocated chunk,
-# with `element_offset` in Julia dimension order so it lines up with
-# `HDF5.get_chunk`. The iterator hands over a pointer to the offset in HDF5's
-# own storage order, the reverse, which is why it is loaded and flipped here —
-# the same thing `HDF5._get_chunk_info_all_by_iter` does before building its
-# `ChunkInfo`.
-function _eachchunkinfo(f, dset)
-    if _HAS_CHUNK_ITER
-        N = ndims(HDF5.dataspace(dset))
-        HDF5.API.h5d_chunk_iter(dset) do offset, filter_mask, addr, size
-            eloffset = reverse(unsafe_load(Ptr{NTuple{N, HDF5.API.hsize_t}}(offset)))
-            f(eloffset, filter_mask, addr, size)
-            return HDF5.API.H5_ITER_CONT
-        end
-    else
-        for ci in HDF5.get_chunk_info_all(dset)
-            f(ci.offset, ci.filter_mask, ci.addr, ci.size)
-        end
+# What the chunk iterator's callback fills in, one chunk at a time. The
+# callback is called from C and must not throw, so a chunk it cannot record
+# stops the iteration and is described here for the caller to raise.
+mutable struct _ChunkIterState{N}
+    const index::Array{UInt32, N}
+    const offset::Array{UInt64, N}
+    const nbytes::Array{UInt64, N}
+    const chunkshape::NTuple{N, Int}
+    const fileindex::UInt32
+    stopped::Bool
+    badoffset::NTuple{N, Int}
+    badmask::UInt32
+end
+
+function _chunkiter_callback(
+        offset::Ptr{HDF5.API.hsize_t}, filter_mask::Cuint, addr::HDF5.API.haddr_t,
+        size::HDF5.API.hsize_t, s::_ChunkIterState{N},
+    )::Cint where {N}
+    # The offset is in HDF5's storage order, the reverse of Julia's.
+    eloffset = ntuple(d -> Int(unsafe_load(offset, N + 1 - d)), Val(N))
+    I = CartesianIndex(map((o, c) -> o ÷ c + 1, eloffset, s.chunkshape))
+    if filter_mask != 0 || !checkbounds(Bool, s.index, I)
+        s.stopped, s.badoffset, s.badmask = true, eloffset, filter_mask
+        return Cint(-1)
     end
+    s.index[I] = s.fileindex
+    s.offset[I] = addr
+    s.nbytes[I] = size
+    return Cint(0)
+end
+
+# Records every allocated chunk of `dset` in `s`. H5Dchunk_iter is called with
+# a callback compiled for this state's concrete type: HDF5.jl's own wrapper
+# passes its callback an untyped closure, which costs a dynamic dispatch per
+# chunk and was most of the time a scan of a 250 000-chunk dataset took.
+function _iterchunks!(s::_ChunkIterState{N}, dset, context::AbstractString) where {N}
+    callback = @cfunction(
+        _chunkiter_callback, Cint,
+        (Ptr{HDF5.API.hsize_t}, Cuint, HDF5.API.haddr_t, HDF5.API.hsize_t, Ref{_ChunkIterState{N}}),
+    )
+    status = @lock HDF5.API.liblock ccall(
+        (:H5Dchunk_iter, HDF5.API.libhdf5), HDF5.API.herr_t,
+        (HDF5.API.hid_t, HDF5.API.hid_t, Ptr{Cvoid}, Ref{_ChunkIterState{N}}),
+        dset, HDF5.API.H5P_DEFAULT, callback, s,
+    )
+    if s.stopped
+        s.badmask == 0 && throw(
+            ArgumentError(
+                "$context: libhdf5 reports a chunk at element offset $(s.badoffset), " *
+                    "outside the dataset's chunk grid $(size(s.index))"
+            )
+        )
+        throw(_filtermaskerror(context, s.badoffset, s.badmask))
+    end
+    status < 0 && error("$context: H5Dchunk_iter failed")
     return nothing
 end
 
+_filtermaskerror(context, eloffset, filter_mask) = ArgumentError(
+    "$context: chunk at element offset $(eloffset) has filter_mask " *
+        "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
+        "a single Zarr v2 codec pipeline cannot express"
+)
+
 function _scanchunked(table, fileindex, dset, ::Type{T}, itemsize, context::AbstractString) where {T}
     chunkshape = HDF5.get_chunk(dset)
-    N = length(chunkshape)
-    shape = size(dset)
-    gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
-
-    index = fill(MISSING_INDEX, gridsize)
-    offset = zeros(UInt64, gridsize)
-    nbytes = zeros(UInt64, gridsize)
-
-    if HDF5.get_num_chunks(dset) > 0
-        _eachchunkinfo(dset) do eloffset, filter_mask, addr, size
-            filter_mask == 0 || throw(
-                ArgumentError(
-                    "$context: chunk at element offset $(eloffset) has filter_mask " *
-                        "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
-                        "a single Zarr v2 codec pipeline cannot express"
-                )
-            )
-            I = CartesianIndex(ntuple(d -> eloffset[d] ÷ chunkshape[d] + 1, N))
-            index[I] = fileindex
-            offset[I] = UInt64(addr)
-            nbytes[I] = UInt64(size)
-            return nothing
-        end
-    end
+    manifest = _chunkmap(table, fileindex, dset, chunkshape, size(dset), context)
 
     pipeline = _filterpipeline(dset)
     compressor, filters = build_codecs(HDF5Driver, pipeline, itemsize; context)
     check_last_filter_multibyte(filters, T, context)
 
-    manifest = ExplicitChunkMap(table, index, offset, nbytes)
     return manifest, chunkshape, compressor, filters
+end
+
+# A function of its own so the chunk grid's dimension count is a type
+# parameter: the chunk shape comes from libhdf5 as a tuple of whatever length.
+function _chunkmap(
+        table, fileindex, dset, chunkshape::NTuple{N, Int}, shape::NTuple{N, Int}, context
+    ) where {N}
+    gridsize = map(cld, shape, chunkshape)
+    index = fill(MISSING_INDEX, gridsize)
+    offset = zeros(UInt64, gridsize)
+    nbytes = zeros(UInt64, gridsize)
+
+    if HDF5.get_num_chunks(dset) > 0
+        if _HAS_CHUNK_ITER
+            state = _ChunkIterState{N}(
+                index, offset, nbytes, chunkshape, fileindex, false, ntuple(_ -> 0, N),
+                UInt32(0),
+            )
+            _iterchunks!(state, dset, context)
+        else
+            for ci in HDF5.get_chunk_info_all(dset)
+                ci.filter_mask == 0 || throw(_filtermaskerror(context, ci.offset, ci.filter_mask))
+                I = CartesianIndex(map((o, c) -> o ÷ c + 1, ci.offset, chunkshape))
+                index[I] = fileindex
+                offset[I] = UInt64(ci.addr)
+                nbytes[I] = UInt64(ci.size)
+            end
+        end
+    end
+    return ExplicitChunkMap(table, index, offset, nbytes)
 end
 
 # A contiguous HDF5 dataset is one unbroken, uncompressed, unfiltered block,
