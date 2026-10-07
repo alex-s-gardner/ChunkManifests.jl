@@ -46,6 +46,9 @@ const _RANGE_VFD_SCHEME = "chunkmanifests_range://"
 # libhdf5 is handed an integer key, never a pointer to a Julia object, so
 # nothing it holds can dangle or keep a Julia value alive.
 const _RANGE_SOURCES = Dict{Int64, _RangeSource}()
+# The source behind each file open through the driver, by the file's id, for
+# the scan to hand prefetching hints to.
+const _RANGE_FILES = Dict{HDF5.API.hid_t, _RangeSource}()
 const _RANGE_LOCK = ReentrantLock()
 const _RANGE_NEXTKEY = Ref{Int64}(0)
 const _RANGE_DRIVER = Ref{Int64}(-1)
@@ -257,9 +260,11 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
             _RANGE_VFD_SCHEME * string(key), HDF5.API.H5F_ACC_RDONLY, fapl
         )
         file = HDF5.File(fid, uri)
+        @lock _RANGE_LOCK _RANGE_FILES[fid] = source
         try
             f(file)
         finally
+            @lock _RANGE_LOCK delete!(_RANGE_FILES, fid)
             close(file)
         end
     finally

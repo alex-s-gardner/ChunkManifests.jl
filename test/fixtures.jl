@@ -123,6 +123,24 @@ end
 ChunkManifests.objectsize(t::FetchCountingTransport, uri::AbstractString) =
     ChunkManifests.objectsize(t.inner, uri)
 
+# Records the offset and bytes of every range fetched through it, in the order
+# the fetches completed, so a test can see what a reader asked for and what was
+# fetched ahead of it.
+struct RecordingTransport{T <: AbstractTransport} <: AbstractTransport
+    inner::T
+    log::Vector{Tuple{UInt64, Vector{UInt8}}}
+    lock::ReentrantLock
+end
+
+function ChunkManifests.fetchrange(t::RecordingTransport, uri::AbstractString, r::ByteRange)
+    bytes = ChunkManifests.fetchrange(t.inner, uri, r)
+    @lock t.lock push!(t.log, (r.offset, bytes))
+    return bytes
+end
+
+ChunkManifests.objectsize(t::RecordingTransport, uri::AbstractString) =
+    ChunkManifests.objectsize(t.inner, uri)
+
 # A one-block AffineChunkMap pointing at `uri`, and a ManifestArray over one,
 # for cases that need a chunk grid of a given shape without a file behind it.
 function dummy_chunkmap(shape, chunkshape, uri)

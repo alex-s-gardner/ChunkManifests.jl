@@ -483,7 +483,24 @@ function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractStri
     return nothing
 end
 
+# Over the range driver, the headers of a group's members are fetched
+# together before the walk opens them one at a time; see
+# src/access/h5prefetch.jl. Only hard links name a header in this file.
+function _prefetchmembers(group)
+    fileid = HDF5.file(group).id
+    (@lock _RANGE_LOCK haskey(_RANGE_FILES, fileid)) || return nothing
+    addrs = UInt64[]
+    HDF5.API.h5l_iterate(group, HDF5.API.H5_INDEX_NAME, HDF5.API.H5_ITER_INC) do _, _, info
+        link = unsafe_load(info)
+        link.linktype == 0 && push!(addrs, link.u)
+        return HDF5.API.herr_t(0)
+    end
+    _h5prefetchobjects(fileid, addrs)
+    return nothing
+end
+
 function _walk!(arrays, table, fileindex, f, group, prefix::AbstractString, filepath)
+    _prefetchmembers(group)
     for k in keys(group)
         obj = group[k]
         childpath = isempty(prefix) ? k : prefix * "/" * k

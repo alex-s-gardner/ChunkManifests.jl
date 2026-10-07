@@ -586,7 +586,7 @@ end
 
 """
     RangeAccess(; transport=TransportContainers(), initialread=4 * 1024 * 1024,
-                tailread=1024 * 1024, blocksize=1024 * 1024, pagebuffer=4 * 1024 * 1024,
+                tailread=1024 * 1024, blocksize=256 * 1024, pagebuffer=4 * 1024 * 1024,
                 cachelimit=256 * 1024 * 1024)
 
 Read the object in place through byte-range requests, so only the metadata a
@@ -641,7 +641,7 @@ function RangeAccess(;
         initialread::Integer = 4 * 1024 * 1024,
         tailread::Integer = 1024 * 1024,
         pagebuffer::Integer = 4 * 1024 * 1024,
-        blocksize::Integer = 1024 * 1024,
+        blocksize::Integer = 256 * 1024,
         cachelimit::Integer = 256 * 1024 * 1024,
     )
     initialread >= 0 ||

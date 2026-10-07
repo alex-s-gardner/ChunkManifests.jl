@@ -33,14 +33,22 @@ mutable struct _RangeSource
     const tailstart::UInt64
     const blocks::Dict{UInt64, Vector{UInt8}}
     cached::Int
+    # Prefetched ranges, as (start, length) sorted by start, with the bytes of
+    # those that have arrived and the task fetching each, keyed by start.
+    const spans::Vector{Tuple{UInt64, UInt64}}
     const extents::Dict{UInt64, Vector{UInt8}}
     const pending::Dict{UInt64, Task}
+    # Addresses whose structure has been handed to an `onfetch`, so none is
+    # parsed twice, and the tasks waiting to hand over one that lies inside a
+    # range still in flight.
+    const followed::Set{UInt64}
+    const followers::Vector{Task}
     const lock::ReentrantLock
     const slots::Base.Semaphore
-    # Sizes of an address and of a length in the HDF5 file being read, which
-    # parsing its metadata for prefetching needs, or `nothing` for an object
-    # nothing is prefetched for.
-    h5sizes::Union{Nothing, Tuple{Int, Int}}
+    # What parsing an HDF5 file's metadata for prefetching needs from its
+    # superblock (see `_h5sizes`), or `nothing` for an object nothing is
+    # prefetched for.
+    h5sizes::Union{Nothing, Tuple{Int, Int, Int}}
     requests::Int
     bytes::Int
     prefetched::Int
@@ -55,7 +63,8 @@ function _rangesource(access::RangeAccess, uri::AbstractString)
         access.transport, String(uri), UInt64(total), UInt64(0),
         UInt64(access.blocksize), access.cachelimit, head, tail,
         UInt64(total) - UInt64(length(tail)), Dict{UInt64, Vector{UInt8}}(), 0,
-        Dict{UInt64, Vector{UInt8}}(), Dict{UInt64, Task}(), ReentrantLock(),
+        Tuple{UInt64, UInt64}[], Dict{UInt64, Vector{UInt8}}(), Dict{UInt64, Task}(),
+        Set{UInt64}(), Task[], ReentrantLock(),
         Base.Semaphore(_PREFETCH_CONCURRENCY), nothing,
         nrequests, length(head) + length(tail), 0,
     )
@@ -86,7 +95,8 @@ function _rangecopy!(source::_RangeSource, buffer::Ptr{UInt8}, addr::UInt64, siz
 
     extent = _extent(source, addr, size)
     if extent !== nothing
-        GC.@preserve extent unsafe_copyto!(buffer, pointer(extent), size)
+        bytes, at = extent
+        GC.@preserve bytes unsafe_copyto!(buffer, pointer(bytes) + at, size)
         return nothing
     end
 
@@ -166,37 +176,80 @@ function _rangefetchblocks!(source::_RangeSource, from::UInt64, to::UInt64)
     return nothing
 end
 
-# Prefetched bytes starting at `addr` and covering at least `size` of them,
-# waiting for a prefetch of `addr` still in flight, or `nothing`. A failed
-# prefetch is not an error here: nothing had asked for those bytes yet, and
-# the read that does ask fetches them itself, raising whatever is wrong.
+# The start of the prefetched range covering [addr, addr + n), or `nothing`.
+# Caller holds `source.lock`.
+function _spanstart(source::_RangeSource, addr::UInt64, n::UInt64)
+    i = searchsortedlast(source.spans, (addr, typemax(UInt64)))
+    i == 0 && return nothing
+    start, len = source.spans[i]
+    return addr + n <= start + len ? start : nothing
+end
+
+# Prefetched bytes covering [addr, addr + size), as the fetched vector and the
+# offset of `addr` within it, waiting for a prefetch still in flight, or
+# `nothing`. A failed prefetch is not an error here: nothing had asked for
+# those bytes yet, and the read that does ask fetches them itself, raising
+# whatever is wrong.
 function _extent(source::_RangeSource, addr::UInt64, size::UInt64)
-    task = @lock source.lock begin
-        bytes = get(source.extents, addr, nothing)
-        bytes !== nothing && length(bytes) >= size && return bytes
-        get(source.pending, addr, nothing)
+    start, task = @lock source.lock begin
+        s = _spanstart(source, addr, size)
+        s === nothing && return nothing
+        bytes = get(source.extents, s, nothing)
+        bytes === nothing || return bytes, Int(addr - s)
+        s, source.pending[s]
     end
-    task === nothing && return nothing
     try
         wait(task)
     catch
         return nothing
     end
-    bytes = @lock source.lock get(source.extents, addr, nothing)
-    return bytes !== nothing && length(bytes) >= size ? bytes : nothing
+    bytes = @lock source.lock get(source.extents, start, nothing)
+    return bytes === nothing ? nothing : (bytes, Int(addr - start))
 end
 
 # Fetches `n` bytes at `addr` in the background, unless they are already held
-# or on their way. `onfetch(source, addr, bytes)` runs once they arrive, which
-# is how one prefetched structure leads to the next.
+# or on their way, and runs `onfetch(source, addr, bytes)` on them once they
+# are here, which is how one prefetched structure leads to the next. Each
+# address is handed to an `onfetch` once. Bytes inside the ends fetched on
+# opening, or inside a range already held, need no request and are handed
+# over at once; bytes inside a range still in flight are handed over when it
+# lands.
 function _prefetch!(onfetch, source::_RangeSource, addr::UInt64, n::UInt64)
     addr < source.size || return nothing
     n = min(n, source.size - addr)
-    (n == 0 || _inends(source, addr, n)) && return nothing
+    n == 0 && return nothing
+    held = nothing
     @lock source.lock begin
-        (haskey(source.extents, addr) || haskey(source.pending, addr)) && return nothing
-        source.pending[addr] = Threads.@spawn _prefetchtask(onfetch, source, addr, n)
+        addr in source.followed && return nothing
+        push!(source.followed, addr)
+        start = _spanstart(source, addr, n)
+        if start !== nothing
+            bytes = get(source.extents, start, nothing)
+            if bytes === nothing
+                task = source.pending[start]
+                push!(source.followers, Threads.@spawn _follow(onfetch, source, task, start, addr, n))
+            else
+                held = bytes[(addr - start + 1):(addr - start + n)]
+            end
+        elseif _inends(source, addr, n)
+            held = Vector{UInt8}(undef, n)
+            GC.@preserve held _rangecopy!(source, pointer(held), addr, n)
+        else
+            i = searchsortedfirst(source.spans, (addr, n))
+            insert!(source.spans, i, (addr, n))
+            source.pending[addr] = Threads.@spawn _prefetchtask(onfetch, source, addr, n)
+        end
     end
+    held === nothing || onfetch(source, addr, held)
+    return nothing
+end
+
+# Hands over the bytes at `addr` once the prefetch of the range holding them,
+# starting at `start`, has landed.
+function _follow(onfetch, source::_RangeSource, task::Task, start::UInt64, addr::UInt64, n::UInt64)
+    wait(task)
+    bytes = @lock source.lock source.extents[start]
+    onfetch(source, addr, bytes[(addr - start + 1):(addr - start + n)])
     return nothing
 end
 
@@ -212,17 +265,19 @@ end
 
 # Waits out every prefetch still in flight, so none outlives the scan that
 # started it. Their failures are dropped for the reason `_extent` gives.
-# `pending` only grows, and a prefetch adds any it leads to before finishing,
-# so once every task seen has finished and none has been added, none is left.
+# Tasks are only ever added, and a prefetch adds any it leads to before
+# finishing, so once every task seen has finished and none has been added,
+# none is left.
 function _drainprefetches!(source::_RangeSource)
     while true
-        tasks = @lock source.lock collect(values(source.pending))
+        tasks = @lock source.lock [collect(values(source.pending)); source.followers]
         for t in tasks
             try
                 wait(t)
             catch
             end
         end
-        @lock source.lock length(source.pending) == length(tasks) && return nothing
+        done = @lock source.lock length(source.pending) + length(source.followers) == length(tasks)
+        done && return nothing
     end
 end
