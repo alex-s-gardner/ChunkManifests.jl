@@ -9,6 +9,7 @@ CRC32c = "8bf52ea8-c179-5cab-976a-9e18b702a9bc"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
 
 [weakdeps]
@@ -21,16 +22,11 @@ TiffImages = "731e570b-9d59-4bfa-96dc-6df516fadf69"
 ZarrDatasets = "519a4cdf-1362-424a-9ea1-b1d782dbb24b"
 
 [sources]
-# v0.10.2 plus a fix for reading arrays whose last filter works on raw bytes
-# (shuffle, fletcher32) with an element type wider than one byte, which Zarr.jl
-# cannot currently do: https://github.com/JuliaIO/Zarr.jl/pull/354
-Zarr = {url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-filter-fix"}
+Zarr = {rev = "v0.10.2-bytes-filter-fix", url = "https://github.com/alex-s-gardner/Zarr.jl"}
 
 [extensions]
 ChunkManifestsAWSS3Ext = ["AWSS3", "AWS"]
 ChunkManifestsParquet2Ext = ["Parquet2", "PooledArrays"]
-# ZarrDatasets as well as Rasters: a manifest reaches Rasters as a
-# CommonDataModel dataset, and ZarrDatasets is what builds one over the store.
 ChunkManifestsRastersExt = ["Rasters", "ZarrDatasets"]
 ChunkManifestsTiffImagesExt = "TiffImages"
 
@@ -46,6 +42,7 @@ HTTP = "2.8"
 JSON = "0.21, 1"
 Parquet2 = "0.2"
 PooledArrays = "1"
+PrecompileTools = "1.2"
 Random = "1.10, 1.11"
 Rasters = "0.15"
 Sockets = "1.10, 1.11"

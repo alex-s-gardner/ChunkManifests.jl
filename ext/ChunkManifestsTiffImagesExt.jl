@@ -861,4 +861,98 @@ function __init__()
     return nothing
 end
 
+# A workload run while the extension precompiles, so the first GeoTIFF scan
+# and read in a session run compiled code: a tiled, georeferenced TIFF with
+# one overview, as a COG is laid out, scanned locally and over a local HTTP
+# server and read through Zarr.jl. It touches no network.
+
+# Writes a little-endian TIFF of UInt16 zeros: a 32 x 32 primary and a
+# 16 x 16 overview, in 16 x 16 tiles with horizontal-differencing prediction,
+# the primary carrying a UTM zone 1N georeference.
+function _precompile_geotiff(path::AbstractString)
+    SHORT, LONG, DOUBLE = UInt16(3), UInt16(4), UInt16(12)
+    tile = zeros(UInt8, 16 * 16 * sizeof(UInt16))
+    io = IOBuffer()
+    write(io, b"II", UInt16(42), UInt32(0))
+    levels = ((32, UInt32(0)), (16, UInt32(1)))
+    tileoffsets = map(levels) do (n, _)
+        [(write(io, tile); UInt32(position(io) - length(tile))) for _ in 1:((n ÷ 16)^2)]
+    end
+    ifdoffsets = UInt32[]
+    nextfields = Int[]
+    for (level, (n, subfile)) in enumerate(levels)
+        offsets = tileoffsets[level]
+        entries = Any[
+            (254, LONG, [subfile]), (256, SHORT, [UInt16(n)]), (257, SHORT, [UInt16(n)]),
+            (258, SHORT, [UInt16(16)]), (259, SHORT, [UInt16(1)]), (262, SHORT, [UInt16(1)]),
+            (277, SHORT, [UInt16(1)]), (284, SHORT, [UInt16(1)]), (317, SHORT, [UInt16(2)]),
+            (322, SHORT, [UInt16(16)]), (323, SHORT, [UInt16(16)]), (324, LONG, offsets),
+            (325, LONG, fill(UInt32(length(tile)), length(offsets))), (339, SHORT, [UInt16(1)]),
+        ]
+        if level == 1
+            append!(entries, [
+                (33550, DOUBLE, [60.0, 60.0, 0.0]),
+                (33922, DOUBLE, [0.0, 0.0, 0.0, 300000.0, 7000000.0, 0.0]),
+                (34735, SHORT, UInt16[1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 32601]),
+            ])
+        end
+        # Values longer than four bytes go out of line, before the directory.
+        payload = Dict{Int, UInt32}()
+        for (i, (_, _, values)) in enumerate(entries)
+            sizeof(values) > 4 || continue
+            isodd(position(io)) && write(io, UInt8(0))
+            payload[i] = UInt32(position(io))
+            write(io, values)
+        end
+        isodd(position(io)) && write(io, UInt8(0))
+        push!(ifdoffsets, UInt32(position(io)))
+        write(io, UInt16(length(entries)))
+        for (i, (tag, type, values)) in enumerate(entries)
+            write(io, UInt16(tag), type, UInt32(length(values)))
+            if haskey(payload, i)
+                write(io, payload[i])
+            else
+                field = zeros(UInt8, 4)
+                bytes = reinterpret(UInt8, values)
+                field[1:length(bytes)] = bytes
+                write(io, field)
+            end
+        end
+        push!(nextfields, position(io))
+        write(io, UInt32(0))
+    end
+    bytes = take!(io)
+    patch!(at, value) = (bytes[(at + 1):(at + 4)] = reinterpret(UInt8, [UInt32(value)]))
+    patch!(4, ifdoffsets[1])
+    patch!(nextfields[1], ifdoffsets[2])
+    write(path, bytes)
+    return path
+end
+
+ChunkManifests.PrecompileTools.@setup_workload begin
+    ChunkManifests.PrecompileTools.@compile_workload begin
+        mktempdir() do dir
+            path = _precompile_geotiff(joinpath(dir, "cog.tif"))
+            driver = ChunkManifests.GeoTIFFDriver()
+            cm = ChunkManifests.scan(path, driver)
+            z = ChunkManifests.Zarr.zopen(cm)
+            z["0"]["data"][:, :]
+            z["0"]["x"][:]
+            ChunkManifests.scan(path, driver; level = 1)
+
+            http = ChunkManifests.HTTPTransport()
+            server = ChunkManifests._precompile_server(read(path))
+            try
+                url = "http://127.0.0.1:$(ChunkManifests.HTTP.port(server))/cog.tif"
+                transport = ChunkManifests.TransportContainers(["http://127.0.0.1" => http])
+                remote = ChunkManifests.scan(url, driver; access = ChunkManifests.RangeAccess(; transport))
+                ChunkManifests.Zarr.zopen(ChunkManifests.ChunkManifest(remote; transport))["0"]["data"][:, :]
+            finally
+                close(server)
+                ChunkManifests.HTTP.close_idle_connections!(http.client)
+            end
+        end
+    end
+end
+
 end # module ChunkManifestsTiffImagesExt
