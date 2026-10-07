@@ -105,9 +105,9 @@ end
             end
 
             @testset "lazy reload: columns are Zarr.ZArray, not materialized, with correct values" begin
-                @test manifest2.index isa Zarr.ZArray{UInt32}
-                @test manifest2.offset isa Zarr.ZArray{UInt64}
-                @test manifest2.nbytes isa Zarr.ZArray{UInt64}
+                @test parent(manifest2.index) isa Zarr.ZArray{UInt32}
+                @test parent(manifest2.offset) isa Zarr.ZArray{UInt64}
+                @test parent(manifest2.nbytes) isa Zarr.ZArray{UInt64}
                 for I in CartesianIndices(gridsize)
                     @test manifest2.index[I] == manifest.index[I]
                     @test manifest2.offset[I] == manifest.offset[I]
@@ -244,6 +244,28 @@ end
                 I == I_update && continue
                 @test chunklocation(manifest2, I) == chunklocation(manifest, I)
             end
+        end
+    end
+
+    @testset "a loaded manifest reads every chunk correctly past its column cache" begin
+        mktempdir() do dir
+            n = 200
+            va, _ = _contig_zarr_va(dir, n)
+            group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
+            # 25 Zarr chunks per column: more than a column keeps decoded.
+            fmt = ZarrManifest(; chunkcells = 8)
+            outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
+            loaded = chunkmapof(arraysof(ChunkManifest(outdir, fmt))["a"])
+            for pass in 1:2, I in CartesianIndices((n,))
+                @test chunklocation(loaded, I) == chunklocation(chunkmapof(va), I)
+            end
+            # Backwards too, so every lookup after the first few is an eviction.
+            for I in reverse(CartesianIndices((n,)))
+                @test chunklocation(loaded, I) == chunklocation(chunkmapof(va), I)
+            end
+            @test_throws "does not support in-place mutation" setchunk!(
+                loaded, CartesianIndex(1), "elsewhere.bin", 0, 8
+            )
         end
     end
 

@@ -5,7 +5,8 @@
 # ordinary Zarr v2 arrays, with everything else as JSON, is what makes a
 # single reference editable by rewriting one small Zarr chunk rather than a
 # whole document, and what lets a manifest larger than memory be read back
-# through Zarr.jl's own lazy `ZArray` rather than a materialized `Array`.
+# through Zarr.jl's own lazy `ZArray` rather than a materialized `Array`
+# (wrapped in a `_ZarrColumn`, which keeps decoded chunks).
 #
 # On-disk layout, where `path` is the directory given to save/load:
 #
@@ -287,13 +288,77 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
     return nothing
 end
 
+# Decoded Zarr chunks a `_ZarrColumn` keeps. Three columns are consulted per
+# chunk served, and a read that walks a chunk grid in order stays within one
+# Zarr chunk of each for long runs, so a handful covers it.
+const _ZARR_COLUMN_BLOCKS = 16
+
+"""
+    _ZarrColumn{T,N} <: AbstractArray{T,N}
+
+One column of a loaded [`ZarrManifest`](@ref): a `Zarr.ZArray` read lazily, one
+Zarr chunk at a time, with the most recently decoded chunks kept in memory.
+
+Indexing a `ZArray` element by element decodes the whole Zarr chunk holding the
+element on every call, and the store looks up three columns for every chunk it
+serves, which costs milliseconds per chunk on a column of the default chunk
+size. Here an element read is an array lookup once its chunk is decoded.
+
+The column is opened read-only and has no `setindex!`, so [`setchunk!`](@ref)
+on a loaded manifest refuses by name.
+"""
+struct _ZarrColumn{T, N, A <: Zarr.ZArray{T, N}} <: AbstractArray{T, N}
+    za::A
+    blocks::Dict{NTuple{N, Int}, Array{T, N}}
+    order::Vector{NTuple{N, Int}}
+    lock::ReentrantLock
+end
+
+_ZarrColumn(za::Zarr.ZArray{T, N}) where {T, N} =
+    _ZarrColumn(za, Dict{NTuple{N, Int}, Array{T, N}}(), NTuple{N, Int}[], ReentrantLock())
+
+Base.size(c::_ZarrColumn) = size(c.za)
+Base.parent(c::_ZarrColumn) = c.za
+Base.IndexStyle(::Type{<:_ZarrColumn}) = IndexCartesian()
+
+# The Zarr chunk holding element `I`, and `I`'s position within it.
+function _columnblock(c::_ZarrColumn{T, N}, I::NTuple{N, Int}) where {T, N}
+    cs = c.za.metadata.chunks
+    b = map((i, s) -> (i - 1) ÷ s + 1, I, cs)
+    return b, map((i, bi, s) -> i - (bi - 1) * s, I, b, cs)
+end
+
+# Caller holds `c.lock`.
+function _loadblock!(c::_ZarrColumn{T, N}, b::NTuple{N, Int}) where {T, N}
+    block = get(c.blocks, b, nothing)
+    block === nothing || return block
+    cs = c.za.metadata.chunks
+    sz = size(c.za)
+    ranges = map((bi, s, n) -> ((bi - 1) * s + 1):min(bi * s, n), b, cs, sz)
+    data = c.za[ranges...]
+    # A zero-dimensional ZArray indexes to its one element, not an array.
+    block = data isa AbstractArray ? Array{T, N}(data) : fill(T(data))
+    if length(c.order) >= _ZARR_COLUMN_BLOCKS
+        delete!(c.blocks, popfirst!(c.order))
+    end
+    c.blocks[b] = block
+    push!(c.order, b)
+    return block
+end
+
+function Base.getindex(c::_ZarrColumn{T, N}, I::Vararg{Int, N}) where {T, N}
+    @boundscheck checkbounds(c, I...)
+    b, J = _columnblock(c, I)
+    return @lock c.lock _loadblock!(c, b)[J...]
+end
+
 function _load_chunkmanifest(
         store::Zarr.AbstractStore, arrayprefix::AbstractString, table::PathTable, gridsize::NTuple{N, Int},
         mdoc, label::AbstractString,
     ) where {N}
-    index = Zarr.zopen(store; path = _joinkey(arrayprefix, "index"))
-    offset = Zarr.zopen(store; path = _joinkey(arrayprefix, "offset"))
-    nbytes = Zarr.zopen(store; path = _joinkey(arrayprefix, "nbytes"))
+    index = _ZarrColumn(Zarr.zopen(store; path = _joinkey(arrayprefix, "index")))
+    offset = _ZarrColumn(Zarr.zopen(store; path = _joinkey(arrayprefix, "offset")))
+    nbytes = _ZarrColumn(Zarr.zopen(store; path = _joinkey(arrayprefix, "nbytes")))
 
     for (name, column) in (("index", index), ("offset", offset), ("nbytes", nbytes))
         size(column) == gridsize || throw(
@@ -349,8 +414,9 @@ Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
 `path`. `path` is resolved to a store through `Zarr.storefromstring`, the
 same way `save` resolves it, so a manifest saved to object storage reads
 back by this same method. A `ExplicitChunkMap`'s columns are opened as
-`Zarr.ZArray`s rather than materialized, so a manifest larger than memory can
-be read back lazily.
+`Zarr.ZArray`s and decoded one Zarr chunk at a time as they are consulted,
+keeping the most recent few in memory, so a manifest larger than memory can be
+read back lazily.
 """
 function ChunkManifest(path::AbstractString, fmt::ZarrManifest)
     store, prefix = _resolvestore(path, false)
