@@ -270,6 +270,35 @@ end
                 )
             end
 
+            @testset "many remote scans at once agree with a local one" begin
+                # Small spans so every scan waits on the server inside libhdf5
+                # many times, while others are under way. With several threads
+                # a waiting scan task that resumed on another thread would
+                # crash libhdf5, which keeps per-thread state for the call.
+                many = joinpath(dir, "concurrent.h5")
+                HDF5.h5open(many, "w") do f
+                    for k in 1:6
+                        d = HDF5.create_dataset(f, "v$k", Float32, (600,); chunk = (4,))
+                        write(d, rand(Float32, 600))
+                    end
+                end
+                local_ = scan(many, HDF5Driver(); access = LocalAccess())
+                _acc_withserver(read(many), "concurrent.h5") do url
+                    access = RangeAccess(; initialread = 1024, tailread = 0, blocksize = 1024)
+                    for _ in 1:3
+                        cms = scan(fill(url, 12), HDF5Driver(); access)
+                        @test all(cms) do cm
+                            all(
+                                chunklocation(chunkmapof(arraysof(cm)[k]), I)[2:3] ==
+                                    chunklocation(chunkmapof(arraysof(local_)[k]), I)[2:3]
+                                    for k in keys(arraysof(local_))
+                                    for I in CartesianIndices(chunkgridaxes(chunkmapof(arraysof(local_)[k])))
+                            )
+                        end
+                    end
+                end
+            end
+
             # A mechanism that reads in place has no local path to hand over.
             @test_throws "does not resolve" ChunkManifests.withsourcepath(
                 identity, RangeAccess(), "https://h/b/k.h5"

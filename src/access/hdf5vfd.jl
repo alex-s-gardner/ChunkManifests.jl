@@ -242,6 +242,14 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
         _RANGE_SOURCES[k] = source
         k
     end
+    # libhdf5 keeps the state of the call in progress per OS thread, and a read
+    # through this driver waits on the network, inside that call, as a task
+    # that yields. Resumed on another thread, libhdf5 would find another
+    # thread's state and crash, so the task is pinned to its thread until the
+    # file is closed.
+    task = current_task()
+    wassticky = task.sticky
+    task.sticky = true
     fapl = HDF5.API.h5p_create(HDF5.API.H5P_FILE_ACCESS)
     return try
         status = @lock HDF5.API.liblock ccall(
@@ -276,5 +284,6 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
     finally
         HDF5.API.h5p_close(fapl)
         @lock _RANGE_LOCK delete!(_RANGE_SOURCES, key)
+        task.sticky = wassticky
     end
 end

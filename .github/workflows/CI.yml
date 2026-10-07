@@ -44,6 +44,10 @@ jobs:
           # them: without this the real-data cases skip and a green run says
           # nothing about them.
           CHUNKMANIFESTS_REQUIRE_FIXTURES: all
+          # Scans run concurrently, and a scan task that moved between threads
+          # inside libhdf5 would crash it; only with several threads can a
+          # test catch that.
+          JULIA_NUM_THREADS: 4
       - uses: julia-actions/julia-processcoverage@v1
       # One upload, from the job whose coverage is representative. Every job
       # instruments, but nine uploads of the same figure tell Codecov nothing
