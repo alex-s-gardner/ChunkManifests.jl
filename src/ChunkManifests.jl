@@ -32,6 +32,7 @@ import Base64
 import HDF5
 import HTTP
 import JSON
+import Logging
 import PrecompileTools
 import Zarr
 

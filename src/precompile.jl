@@ -27,6 +27,10 @@ function _precompile_source(path::AbstractString)
     HDF5.h5open(path, "w") do f
         x = HDF5.create_dataset(f, "x", Float64, (48,); chunk = (16,))
         write(x, collect(1.0:48.0))
+        # NetCDF4 coordinate variables carry `_FillValue = NaN`, which a scan
+        # drops with a warning, and variable-length string attributes.
+        HDF5.attrs(x)["_FillValue"] = NaN
+        HDF5.attrs(x)["flag_meanings"] = ["low", "high"]
         y = HDF5.create_dataset(f, "y", Float64, (40,); chunk = (16,))
         write(y, collect(1.0:40.0))
         v = HDF5.create_dataset(
@@ -60,10 +64,17 @@ function _precompile_source(path::AbstractString)
         HDF5.attrs(mapping)["spatial_epsg"] = Int64(3413)
         HDF5.attrs(mapping)["GeoTransform"] = "-2.0e6 120.0 0 2.0e6 0 -120.0"
         f["notes"] = "written for precompilation"
+        # Every common numeric dtype as NetCDF4 lays it out: a 2-D grid with
+        # shuffle and deflate, a 1-D variable with deflate alone, and a
+        # contiguous one.
         for T in (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
+            g = HDF5.create_dataset(
+                f, "types/grid_$T", T, (12, 10); chunk = (6, 5), shuffle = true, deflate = 1
+            )
+            write(g, T.(reshape(1:120, 12, 10)))
+            HDF5.attrs(g)["_FillValue"] = T(0)
             d = HDF5.create_dataset(f, "types/chunked_$T", T, (20,); chunk = (8,), deflate = 1)
             write(d, T.(1:20))
-            HDF5.attrs(d)["_FillValue"] = T(0)
             HDF5.attrs(d)["valid_range"] = T[1, 20]
             c = HDF5.create_dataset(f, "types/contiguous_$T", T, (10,))
             write(c, T.(1:10))
@@ -74,39 +85,48 @@ function _precompile_source(path::AbstractString)
     return path
 end
 
+# What the workload does, in `dir`.
+function _precompile_run(dir)
+    path = _precompile_source(joinpath(dir, "source.h5"))
+    cm = scan(path, HDF5Driver())
+    z = Zarr.zopen(cm)
+    for key in ("v", "packed", "mask", "x")
+        z[key][:]
+    end
+    for (_, a) in Zarr.zopen(cm)["types"].arrays
+        a[1:4]
+        ndims(a) == 2 && a[:, :]
+    end
+    scan(path, HDF5Driver(); group = "v")
+
+    native = save(joinpath(dir, "native"), cm, ZarrManifest())
+    Zarr.zopen(ChunkManifest(native))["v"][:, :]
+    json = joinpath(dir, "manifest.json")
+    save(json, cm, KerchunkJSON())
+    Zarr.zopen(ChunkManifest(json))["v"][1:16, 1:8]
+
+    _rangevfdsupported() || return nothing
+    http = HTTPTransport()
+    server = _precompile_server(read(path))
+    try
+        url = "http://127.0.0.1:$(HTTP.port(server))/source.h5"
+        transport = TransportContainers(["http://127.0.0.1" => http])
+        remote = scan(url, HDF5Driver(); access = RangeAccess(; transport))
+        Zarr.zopen(ChunkManifest(remote; transport))["v"][:, :]
+    finally
+        close(server)
+        HTTP.close_idle_connections!(http.client)
+    end
+    return nothing
+end
+
 PrecompileTools.@setup_workload begin
     PrecompileTools.@compile_workload begin
-        mktempdir() do dir
-            path = _precompile_source(joinpath(dir, "source.h5"))
-            cm = scan(path, HDF5Driver())
-            z = Zarr.zopen(cm)
-            for key in ("v", "packed", "mask", "x")
-                z[key][:]
-            end
-            for (_, a) in Zarr.zopen(cm)["types"].arrays
-                a[1:4]
-            end
-            scan(path, HDF5Driver(); group = "v")
-
-            native = save(joinpath(dir, "native"), cm, ZarrManifest())
-            Zarr.zopen(ChunkManifest(native))["v"][:, :]
-            json = joinpath(dir, "manifest.json")
-            save(json, cm, KerchunkJSON())
-            Zarr.zopen(ChunkManifest(json))["v"][1:16, 1:8]
-
-            if _rangevfdsupported()
-                http = HTTPTransport()
-                server = _precompile_server(read(path))
-                try
-                    url = "http://127.0.0.1:$(HTTP.port(server))/source.h5"
-                    transport = TransportContainers(["http://127.0.0.1" => http])
-                    remote = scan(url, HDF5Driver(); access = RangeAccess(; transport))
-                    Zarr.zopen(ChunkManifest(remote; transport))["v"][:, :]
-                finally
-                    close(server)
-                    HTTP.close_idle_connections!(http.client)
-                end
-            end
+        # The source's `_FillValue = NaN` makes every scan of it warn. A
+        # session's logger is a ConsoleLogger, so the warning is compiled for
+        # one, and sent nowhere.
+        Logging.with_logger(Logging.ConsoleLogger(devnull)) do
+            mktempdir(_precompile_run)
         end
     end
 end
