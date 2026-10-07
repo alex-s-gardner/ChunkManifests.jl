@@ -16,7 +16,9 @@
 # scan hands over the header addresses of a group's members before walking
 # it (`_h5prefetchobjects`); each header is fetched at once and parsed here
 # for the continuation of the header and the root of the chunk index, which
-# are fetched in turn.
+# are fetched in turn. A remote scan does this for the group or dataset it
+# starts from in a first pass, and waits for what it leads to without holding
+# `HDF5_IO` (see `_scan_hdf5`), so scans of several files overlap there.
 #
 # A prefetch is only a guess at what libhdf5 will read next. What it fetches
 # is the file's own bytes at the address it names, so a wrong guess costs a
@@ -250,3 +252,4 @@ function _h5prefetchlayout(source, bytes, data, sa, istorek)
     _prefetch!(_h5onprefetch, source, root, UInt64(nodesize))
     return nothing
 end
+

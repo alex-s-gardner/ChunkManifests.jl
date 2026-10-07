@@ -29,6 +29,25 @@ function scan(path, driver::AbstractDriver; kwargs...)
 end
 
 """
+    scan(paths::AbstractVector{<:AbstractString}, driver::AbstractDriver; kwargs...)
+        -> Vector{ChunkManifest}
+
+Scan every path in `paths` with `driver`, passing `kwargs` to each scan, and
+return the manifests in the order of `paths`.
+
+Several are scanned at once, so the requests of remote scans overlap. The
+result is what [`ManifestSeries`](@ref) and the merging
+[`ChunkManifest`](@ref) constructor take:
+
+```julia
+ManifestSeries(scan(urls, HDF5Driver()), :time)
+```
+"""
+function scan(paths::AbstractVector{<:AbstractString}, driver::AbstractDriver; kwargs...)
+    return ChunkManifest[m for m in _concurrentmap(p -> scan(p, driver; kwargs...), paths)]
+end
+
+"""
     candrive(driver::AbstractDriver, path) -> Bool
 
 Best-effort test for whether `driver` can [`scan`](@ref) `path`, used only by

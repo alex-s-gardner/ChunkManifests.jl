@@ -177,6 +177,6 @@ function ChunkManifest(
     # Names are checked before anything is read: scanning is the expensive
     # step, and a name collision is settled from the paths alone.
     names = _checknames(collect(String, map(string, name)), length(paths))
-    members = ChunkManifest[_frompath(p, access) for p in paths]
+    members = _frompaths(paths, access)
     return _mergemanifests(members, names, attrs, transport, readahead)
 end

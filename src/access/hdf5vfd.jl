@@ -214,8 +214,9 @@ end
 
 Opens `source` through the range driver and hands the open `HDF5.File` to
 `f`, keeping the source registered for exactly as long as libhdf5 holds it.
-B-tree nodes are prefetched while it is open (see src/access/h5prefetch.jl),
-and every prefetch has finished by the time this returns.
+Metadata is prefetched while it is open (see src/access/h5prefetch.jl), and
+prefetches may still be in flight when this returns; `_drainprefetches!`
+waits for them.
 """
 function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
     uri = source.uri
@@ -229,7 +230,7 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
         )
     )
     driver = _rangedriver()
-    source.h5sizes = _h5sizes(source)
+    source.h5sizes === nothing && (source.h5sizes = _h5sizes(source))
     key = @lock _RANGE_LOCK begin
         _RANGE_NEXTKEY[] += 1
         k = _RANGE_NEXTKEY[]
@@ -270,6 +271,5 @@ function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
     finally
         HDF5.API.h5p_close(fapl)
         @lock _RANGE_LOCK delete!(_RANGE_SOURCES, key)
-        _drainprefetches!(source)
     end
 end

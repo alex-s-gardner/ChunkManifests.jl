@@ -91,6 +91,25 @@ function _frompath(path::AbstractString, access::SourceAccess)
     return _scansource(path, access)
 end
 
+# Files scanned or loaded at once by the methods taking several paths.
+const _CONCURRENT_FILES = 16
+
+# `map(f, items)`, with up to `_CONCURRENT_FILES` calls in flight and results
+# in input order. Scanning a remote file is mostly waiting on requests, and
+# loading a saved one mostly parsing, so files are worked on together; libhdf5
+# still serves one scan at a time (see `HDF5_IO`), and what it waits on for
+# one file overlaps the requests and parsing of the others. A failure is
+# raised as the first failing item's `TaskFailedException`, which carries its
+# own error and backtrace.
+function _concurrentmap(f, items)
+    slots = Base.Semaphore(_CONCURRENT_FILES)
+    tasks = [Threads.@spawn(Base.acquire(() -> f(x), slots)) for x in items]
+    return [fetch(t) for t in tasks]
+end
+
+_frompaths(paths, access::SourceAccess) =
+    ChunkManifest[m for m in _concurrentmap(p -> _frompath(p, access), paths)]
+
 """
     ChunkManifest(path; transport=TransportContainers(), readahead=ReadaheadCache(), access=AutoAccess())
 

@@ -616,9 +616,14 @@ end
 
 # Reads the object in place through byte-range requests, so nothing moves but
 # the metadata libhdf5 asks for. Opening the source fetches both ends of the
-# object and learns its size, which is recorded. That happens before
-# `HDF5_IO` is taken, so scans of several objects make those requests
-# concurrently while libhdf5 serves one at a time.
+# object and learns its size, which is recorded.
+#
+# libhdf5 serves one scan at a time (see `HDF5_IO`), so the scan runs in two
+# passes. The first opens the file only to find the group or dataset the scan
+# starts from and start prefetching what it leads to (see
+# src/access/h5prefetch.jl). Those prefetches are waited for without the lock,
+# so other scans proceed meanwhile, and the second pass walks the file with
+# most of what it reads already here.
 function _scan_hdf5(
         driver::HDF5Driver, uri::AbstractString, access::RangeAccess;
         group::AbstractString, siblings::Bool,
@@ -627,17 +632,52 @@ function _scan_hdf5(
     table = PathTable()
     arrays = Dict{String, ManifestArray}()
     groupattrs = Dict{String, Any}()
-    lock(HDF5_IO) do
-        withrangefile(access, source) do f
-            _scan_hdf5_walk!(
-                arrays, table, groupattrs, f, String(uri), source.size; group, siblings
-            )
+    try
+        lock(HDF5_IO) do
+            withrangefile(f -> _prefetchscanroot(f, group), access, source)
         end
+        _drainprefetches!(source)
+        lock(HDF5_IO) do
+            withrangefile(access, source) do f
+                _scan_hdf5_walk!(
+                    arrays, table, groupattrs, f, String(uri), source.size; group, siblings
+                )
+            end
+        end
+    finally
+        _drainprefetches!(source)
     end
     provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
     return ChunkManifest(
         ; arrays, attrs = groupattrs, provenance, transport = _scantransport(access)
     )
+end
+
+# Starts prefetching what a scan of `group` reads first: the headers of its
+# members, or the header of the dataset it names, found from its link so that
+# nothing is read to open it.
+#
+# `H5Lget_info1` is called directly because HDF5.jl's `h5l_get_info` binds
+# `H5Lget_info`, which libhdf5 2 no longer exports; `h5l_iterate` reports the
+# same `H5L_info_t` through `H5Literate1`.
+function _prefetchscanroot(f, group::AbstractString)
+    group == "/" && return _prefetchmembers(f)
+    link = Ref{HDF5.API.H5L_info_t}()
+    status = ccall(
+        (:H5Lget_info1, HDF5.API.libhdf5), HDF5.API.herr_t,
+        (HDF5.API.hid_t, Cstring, Ptr{HDF5.API.H5L_info_t}, HDF5.API.hid_t),
+        f, group, link, HDF5.API.H5P_DEFAULT,
+    )
+    # A path that names nothing is the walk's to report, by name.
+    (status >= 0 && link[].linktype == 0) || return nothing
+    _h5prefetchobjects(f.id, (link[].u,))
+    obj = f[group]
+    try
+        obj isa HDF5.Group && _prefetchmembers(obj)
+    finally
+        close(obj)
+    end
+    return nothing
 end
 
 # Walks an already-open file. Separate from opening it because RangeAccess
