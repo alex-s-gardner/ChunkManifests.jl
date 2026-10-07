@@ -140,3 +140,6 @@ end
 
 dummy_manifestarray(shape, chunkshape, uri; kwargs...) =
     dummy_manifestarray(Float64, shape, chunkshape, uri; kwargs...)
+
+# Writers for hand-built TIFF fixtures, shared by the GeoTIFF and Rasters tests.
+include("tiffwriter.jl")

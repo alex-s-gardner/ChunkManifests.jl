@@ -178,8 +178,7 @@ _ra_decode(hv) = Union{Missing, Float64}[
         @test eltype(st[:h]) == Union{Missing, Float64}
 
         # Counted on a manifest with readahead off, because readahead fetches a
-        # run of byte-adjacent chunks on a miss by design, which is what makes
-        # the construction count above 4 rather than 8.
+        # run of byte-adjacent chunks on a miss by design.
         exact = ChunkManifest(
             path; transport = FetchCountingTransport(; coalesce = false), readahead = ReadaheadCache(; maxbytes = 0)
         )
@@ -247,6 +246,42 @@ _ra_decode(hv) = Union{Missing, Float64}[
         st = Rasters.RasterStack(cm; group = "0")
         @test keys(st) == (:data,)
         @test Rasters.crs(st[:data]) == Rasters.crs(r)
+    end
+
+    @testset "GeoTIFF: a multi-band level is one raster with a band dimension" begin
+        # Both band layouts, whose Julia dimension order differs: chunky
+        # (band-interleaved) is (band, x, y), planar is (x, y, band).
+        width, height, nsp = 5, 4, 3
+        geotags = [
+            _gt_entry(33550, _GT_DOUBLE, [30.0, 30.0, 0.0]),                                 # ModelPixelScale
+            _gt_entry(33922, _GT_DOUBLE, [0.0, 0.0, 0.0, 500000.0, 4000000.0, 0.0]),          # ModelTiepoint
+            _gt_entry(34735, _GT_SHORT, UInt16[1, 1, 0, 1, 3072, 0, 1, 32610]),               # EPSG:32610
+        ]
+        for (planar, dims) in ((false, (:Band, :X, :Y)), (true, (:X, :Y, :Band)))
+            bandvalues = [UInt16(1000b + 10y + x) for b in 1:nsp, x in 1:width, y in 1:height]
+            data = planar ? permutedims(bandvalues, (2, 3, 1)) : bandvalues
+            tifpath = joinpath(dir, planar ? "planar_geo.tif" : "chunky_geo.tif")
+            _gt_striped(
+                tifpath; width, height, rowsperstrip = height, bits = 16, samplesperpixel = nsp,
+                planarconfig = planar ? 2 : 1, extratags = geotags,
+                payload = planar ? _gt_planarpayload(data, height) : [Vector{UInt8}(reinterpret(UInt8, vec(data)))],
+            )
+            cm = ChunkManifests.scan(tifpath, GeoTIFFDriver())
+            @test sort(collect(keys(arraysof(cm)))) == ["0/data", "0/x", "0/y"]
+
+            r = Rasters.Raster(cm, "0/data")
+            @test map(Rasters.name, Rasters.dims(r)) == dims
+            @test size(r, Rasters.Band) == nsp
+            @test collect(Rasters.lookup(r, Rasters.X)) == 500015.0:30.0:500135.0
+            @test collect(Rasters.lookup(r, Rasters.Y)) == 3999985.0:-30.0:3999895.0
+            @test Rasters.crs(r) == Rasters.EPSG(32610)
+            @test Array(r) == data
+            # Bands select by dimension, whichever position the layout gives it.
+            @test Array(r[Rasters.Band(2)]) == (planar ? data[:, :, 2] : data[2, :, :])
+
+            st = Rasters.RasterStack(cm; group = "0")
+            @test keys(st) == (:data,)
+        end
     end
 
     @testset "Raster(cm) needs exactly one array" begin

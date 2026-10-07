@@ -42,7 +42,12 @@ YAXArrays.open_dataset(Zarr.zopen(cm)) # the zopen step is required
 ```
 
 `ZarrDataset` takes the store itself. `open_dataset` takes a Zarr group, so the `zopen` step
-is not optional there.
+is not optional there. It opens the arrays directly in that group, so a manifest whose arrays
+sit in groups — a GeoTIFF's levels, or a merge of several files — opens one group at a time:
+
+```julia
+YAXArrays.open_dataset(Zarr.zopen(cm)["0"])  # a GeoTIFF's full-resolution level
+```
 
 ## Rasters.jl
 
