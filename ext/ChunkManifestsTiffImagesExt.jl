@@ -940,17 +940,9 @@ ChunkManifests.PrecompileTools.@setup_workload begin
             z["0"]["x"][:]
             ChunkManifests.scan(path, driver; level = 1)
 
-            http = ChunkManifests.HTTPTransport()
-            server = ChunkManifests._precompile_server(read(path))
-            try
-                url = "http://127.0.0.1:$(ChunkManifests.HTTP.port(server))/cog.tif"
-                transport = ChunkManifests.TransportContainers(["http://127.0.0.1" => http])
-                remote = ChunkManifests.scan(url, driver; access = ChunkManifests.RangeAccess(; transport))
-                ChunkManifests.Zarr.zopen(ChunkManifests.ChunkManifest(remote; transport))["0"]["data"][:, :]
-            finally
-                close(server)
-                ChunkManifests.HTTP.close_idle_connections!(http.client)
-            end
+            ChunkManifests._precompile_remote(
+                z -> z["0"]["data"][:, :], read(path), "cog.tif", driver
+            )
         end
     end
 end

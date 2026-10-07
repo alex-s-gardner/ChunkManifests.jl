@@ -489,11 +489,12 @@ function _load_chunkmaps(store::Zarr.AbstractStore, prefix::AbstractString, doc,
     arraydocs = doc["arrays"]
     explicit = any(a -> a["manifest"]["kind"] == "chunk", arraydocs)
     columns = if explicit
+        # Opened together: from object storage each open is a few requests.
         colprefix = _joinkey(prefix, _ZARR_MANIFEST_COLUMNS_DIR)
-        Tuple(
+        index, offset, nbytes = _concurrentmap(("index", "offset", "nbytes")) do name
             _ZarrColumn(Zarr.zopen(store; path = _joinkey(colprefix, name)))
-                for name in ("index", "offset", "nbytes")
-        )
+        end
+        (index, offset, nbytes)
     else
         nothing
     end

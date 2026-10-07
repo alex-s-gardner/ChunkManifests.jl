@@ -131,46 +131,34 @@ function _s3clipped(t::ChunkManifests.S3Transport, uri::AbstractString, rangehea
         error("failed to read $rangeheader from s3://$bucket/$key: $e")
     end
     contentrange = ChunkManifests.HTTP.header(r.response, "Content-Range", "")
-    m = match(r"^bytes\s+(\d+)-\d+/(\d+)$", contentrange)
-    m === nothing && error(
-        "reading $rangeheader from s3://$bucket/$key: response carried no usable " *
-            "Content-Range: $(repr(contentrange))",
-    )
-    return Vector{UInt8}(r.body), parse(UInt64, m[1]), parse(UInt64, m[2])
+    start, total = ChunkManifests._contentrange(contentrange, rangeheader, uri)
+    return Vector{UInt8}(r.body), start, total
 end
 
-function _s3span(body, start::UInt64, from::UInt64, n::UInt64, uri)
-    (from >= start && from + n <= start + length(body)) || error(
-        "response from $(repr(uri)) covers bytes [$start, $(start + length(body))), " *
-            "not the requested [$from, $(from + n))",
-    )
-    lo = Int(from - start) + 1
-    return body[lo:(lo + Int(n) - 1)]
-end
-
-# Both ends in one round trip: the head request and a suffix request for the
-# tail run concurrently and each states the object's size, so none is spent
-# sizing it. On an object shorter than both together the two overlap, and the
-# tail returned is only what the head does not hold.
+# Both ends without a request spent sizing the object: the head request and a
+# suffix request for the tail run concurrently and each states the object's
+# size. On an object shorter than both together the two overlap, and the tail
+# returned is only what the head does not hold.
 function ChunkManifests._fetchends(
         t::ChunkManifests.S3Transport, uri::AbstractString, head::Integer, tail::Integer
     )
-    (head > 0 && tail > 0) || return invoke(
+    (head > 0 || tail > 0) || return invoke(
         ChunkManifests._fetchends,
         Tuple{ChunkManifests.AbstractTransport, AbstractString, Integer, Integer},
         t, uri, head, tail,
     )
-    tailtask = Threads.@spawn _s3clipped(t, uri, "bytes=-$tail")
-    hbody, hstart, total = _s3clipped(t, uri, "bytes=0-$(head - 1)")
-    tbody, tstart, ttotal = fetch(tailtask)
-    ttotal == total || error(
-        "$(repr(uri)) reported sizes $total and $ttotal in two responses; it changed " *
-            "while being read",
+    tailtask = tail > 0 ? Threads.@spawn(_s3clipped(t, uri, "bytes=-$tail")) : nothing
+    headpart = head > 0 ? _s3clipped(t, uri, "bytes=0-$(head - 1)") : nothing
+    tailpart = tailtask === nothing ? nothing : fetch(tailtask)
+    total = something(headpart, tailpart)[3]
+    (headpart === nothing || tailpart === nothing || tailpart[3] == total) || error(
+        "$(repr(uri)) reported sizes $total and $(tailpart[3]) in two responses; it " *
+            "changed while being read",
     )
     h = min(UInt64(head), total)
     tl = min(UInt64(tail), total - h)
-    return _s3span(hbody, hstart, UInt64(0), h, uri),
-        _s3span(tbody, tstart, total - tl, tl, uri), total
+    span(part, from, n) = n == 0 ? UInt8[] : ChunkManifests._bodyspan(part[1], part[2], from, n, uri)
+    return span(headpart, UInt64(0), h), span(tailpart, total - tl, tl), total
 end
 
 end # module ChunkManifestsAWSS3Ext

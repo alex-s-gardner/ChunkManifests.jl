@@ -224,8 +224,10 @@ function _buildarray(path, arraypath, zarraydoc, zattrsdoc, chunkleaves, table, 
             )
         )
         kind, url, off, nb, bytes = try
-            # A [url, offset, length] array is by far the commonest shape, and
-            # naming its type lets this call compile to a direct one.
+            # The two branches make the same call on purpose: inside the first
+            # `raw` is known to be a Vector{Any}, the [url, offset, length]
+            # shape nearly every reference has, so that call is compiled to a
+            # direct one rather than dispatched on an untyped value.
             raw isa Vector{Any} ? _resolveref(raw, templates) : _resolveref(raw, templates)
         catch e
             e isa ArgumentError || rethrow()

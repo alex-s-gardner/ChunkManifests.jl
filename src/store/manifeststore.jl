@@ -261,10 +261,7 @@ function _read_items!(
     if length(byuri) == 1
         fetchfile(only(byuri)...)
     else
-        slots = Base.Semaphore(_CONCURRENT_FILES)
-        @sync for (uri, entries) in byuri
-            Threads.@spawn Base.acquire(() -> fetchfile(uri, entries), slots)
-        end
+        _concurrentmap(((uri, entries),) -> fetchfile(uri, entries), collect(byuri))
     end
     return nothing
 end

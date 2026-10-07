@@ -105,14 +105,21 @@ function _precompile_run(dir)
     save(json, cm, KerchunkJSON())
     Zarr.zopen(ChunkManifest(json))["v"][1:16, 1:8]
 
-    _rangevfdsupported() || return nothing
+    _rangevfdsupported() && _precompile_remote(z -> z["v"][:, :], read(path), "source.h5", HDF5Driver())
+    return nothing
+end
+
+# Scans `bytes` with `driver` as an object on a local HTTP server, through the
+# range driver and transports a remote scan uses, and calls `readwith` on the
+# Zarr group of the result.
+function _precompile_remote(readwith, bytes::Vector{UInt8}, name::AbstractString, driver)
     http = HTTPTransport()
-    server = _precompile_server(read(path))
+    server = _precompile_server(bytes)
     try
-        url = "http://127.0.0.1:$(HTTP.port(server))/source.h5"
+        url = "http://127.0.0.1:$(HTTP.port(server))/$name"
         transport = TransportContainers(["http://127.0.0.1" => http])
-        remote = scan(url, HDF5Driver(); access = RangeAccess(; transport))
-        Zarr.zopen(ChunkManifest(remote; transport))["v"][:, :]
+        remote = scan(url, driver; access = RangeAccess(; transport))
+        readwith(Zarr.zopen(ChunkManifest(remote; transport)))
     finally
         close(server)
         HTTP.close_idle_connections!(http.client)

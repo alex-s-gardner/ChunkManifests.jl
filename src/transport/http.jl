@@ -187,12 +187,7 @@ function _httpclipped(
             status = resp.status
             contentrange = HTTP.header(resp, "Content-Range", "")
             if status == 206
-                m = match(r"^bytes\s+(\d+)-\d+/(\d+)$", contentrange)
-                m === nothing && error(
-                    "HTTP 206 for $rangeheader from $(repr(uri)) carried no usable " *
-                        "Content-Range: $(repr(contentrange))",
-                )
-                start, total = parse(UInt64, m[1]), parse(UInt64, m[2])
+                start, total = _contentrange(contentrange, rangeheader, uri)
                 onsize(total)
             elseif status == 416
                 m = match(r"^bytes\s+\*/(\d+)$", contentrange)
@@ -215,16 +210,6 @@ function _httpclipped(
     status == 200 && return body, UInt64(0), UInt64(length(body))
     status == 416 && return UInt8[], UInt64(0), total
     return body, start, total
-end
-
-# The bytes [from, from + n) out of a body that starts at offset `start`.
-function _bodyspan(body::Vector{UInt8}, start::UInt64, from::UInt64, n::UInt64, uri)
-    (from >= start && from + n <= start + length(body)) || error(
-        "response from $(repr(uri)) covers bytes [$start, $(start + length(body))), " *
-            "not the requested [$from, $(from + n))",
-    )
-    lo = Int(from - start) + 1
-    return lo == 1 && n == length(body) ? body : body[lo:(lo + Int(n) - 1)]
 end
 
 """
