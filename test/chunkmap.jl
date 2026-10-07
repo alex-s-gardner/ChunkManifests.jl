@@ -58,6 +58,14 @@
         @test occursin("axes", sprint(showerror, err))
     end
 
+    @testset "a zero-dimensional AffineChunkMap, as a scalar dataset scans to" begin
+        t = PathTable()
+        push_uri!(t, "scalar.h5")
+        m = AffineChunkMap(t, (), UInt64(2048), (), UInt32(4))
+        @test chunkgridsize(m) == ()
+        @test chunklocation(m, CartesianIndex()) == ("scalar.h5", UInt64(2048), UInt64(4))
+    end
+
     @testset "AffineChunkMap offsets on a distinct 3-D grid" begin
         t = PathTable()
         push_uri!(t, "data.bin")

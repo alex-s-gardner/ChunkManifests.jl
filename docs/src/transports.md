@@ -46,9 +46,10 @@ A URI matching no binding is read through `fallback`, which defaults to
 [`LocalTransport`](@ref) — except that `http://`, `https://` and `s3://` have defaults even
 with no configuration at all. The two HTTP schemes share one [`HTTPTransport`](@ref), so its
 connections pool across both, and each distinct `s3://<bucket>/` gets its own
-[`S3Transport`](@ref). Each is built the first time a URI needs it, so a manifest
-referencing only local files never constructs an HTTP client. Binding a prefix explicitly
-overrides these defaults.
+[`S3Transport`](@ref). Each is built the first time a URI needs it and shared by every
+`TransportContainers` in the session, so a manifest referencing only local files never
+constructs an HTTP client, and the connections a scan opens are reused by the reads of its
+manifest and by the next scan. Binding a prefix explicitly overrides these defaults.
 
 Pass one when constructing a manifest:
 
@@ -95,6 +96,23 @@ cm = ChunkManifest("untrusted.json"; transport = TransportContainers(; authorize
 
 It defaults to allowing everything. The hook is permissive by default so that tightening
 that default is a behavior change rather than a signature change.
+
+## Requests in flight
+
+A windowed read coalesces the chunks it needs from one file into as few ranges as their
+layout allows, merging ranges separated by at most [`maxgap`](@ref) bytes (64 KiB) into
+blocks of at most [`maxblock`](@ref) bytes, and fetches those blocks concurrently, up to
+[`concurrency`](@ref) at once. Chunks in different files — a read across a
+[combined series](@ref "Several files at once") touches one or a few in each of many — are
+fetched concurrently too, up to 16 files at a time.
+
+[`HTTPTransport`](@ref) and [`S3Transport`](@ref) keep 32 requests in flight and cap a
+block at 16 MiB, so a long run of adjacent chunks becomes several parallel requests rather
+than one: a request over a network waits mostly on the round trip, and chunks that are not
+adjacent in their file cost one each. Reading 48 scattered chunks of a GOES-16 file over
+HTTPS took 0.95 s with 4 in flight, 0.34 s with 16 and 0.22 s with 32. Other transports
+default to 4 in flight and 256 MiB blocks; a transport sets its own by adding methods to
+`concurrency`, `maxblock` and `maxgap`.
 
 ## Readahead
 

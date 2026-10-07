@@ -46,6 +46,9 @@ const _RANGE_VFD_SCHEME = "chunkmanifests_range://"
 # libhdf5 is handed an integer key, never a pointer to a Julia object, so
 # nothing it holds can dangle or keep a Julia value alive.
 const _RANGE_SOURCES = Dict{Int64, _RangeSource}()
+# The source behind each file open through the driver, by the file's id, for
+# the scan to hand prefetching hints to.
+const _RANGE_FILES = Dict{HDF5.API.hid_t, _RangeSource}()
 const _RANGE_LOCK = ReentrantLock()
 const _RANGE_NEXTKEY = Ref{Int64}(0)
 const _RANGE_DRIVER = Ref{Int64}(-1)
@@ -64,6 +67,11 @@ _pokeu64(off, v::UInt64) = unsafe_store!(Ptr{UInt64}(pointer(_RANGE_CLASS) + off
 _rangekey(file::Ptr{Nothing}) = unsafe_load(Ptr{Int64}(file + _H5FD_T_SIZE))
 _rangelookup(file::Ptr{Nothing}) = @lock _RANGE_LOCK _RANGE_SOURCES[_rangekey(file)]
 
+# libhdf5 is not thread-safe, and HDF5.jl serializes every call into it with
+# `HDF5.API.liblock`, which its finalizers also take before closing anything.
+# A call made here directly, rather than through HDF5.jl, takes that lock too:
+# otherwise a finalizer on another thread can enter libhdf5 alongside it.
+#
 # Every callback below is called from C and must return a value rather than
 # throw: an exception crossing that boundary takes the process down. Each
 # converts a failure into the error code libhdf5 expects and lets libhdf5
@@ -196,7 +204,7 @@ function _rangedriver()
         _pokeptr(
             _CLS_TRUNCATE, @cfunction(_range_truncate, Cint, (Ptr{Nothing}, Int64, Bool))
         )
-        id = ccall(
+        id = @lock HDF5.API.liblock ccall(
             (:H5FDregister, HDF5.API.libhdf5), Int64, (Ptr{Nothing},),
             pointer(_RANGE_CLASS)
         )
@@ -207,12 +215,16 @@ function _rangedriver()
 end
 
 """
-    withrangefile(f, access::RangeAccess, uri, size)
+    withrangefile(f, access::RangeAccess, source::_RangeSource)
 
-Opens `uri` through the range driver and hands the open `HDF5.File` to `f`,
-keeping the source registered for exactly as long as libhdf5 holds it.
+Opens `source` through the range driver and hands the open `HDF5.File` to
+`f`, keeping the source registered for exactly as long as libhdf5 holds it.
+Metadata is prefetched while it is open (see src/access/h5prefetch.jl), and
+prefetches may still be in flight when this returns; `_drainprefetches!`
+waits for them.
 """
-function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, total::Integer)
+function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
+    uri = source.uri
     _rangevfdsupported() || throw(
         ArgumentError(
             "RangeAccess cannot scan $(repr(uri)): it drives libhdf5 through a virtual " *
@@ -223,15 +235,24 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
         )
     )
     driver = _rangedriver()
+    source.h5sizes === nothing && (source.h5sizes = _h5sizes(source))
     key = @lock _RANGE_LOCK begin
         _RANGE_NEXTKEY[] += 1
         k = _RANGE_NEXTKEY[]
-        _RANGE_SOURCES[k] = _rangesource(access, uri, total)
+        _RANGE_SOURCES[k] = source
         k
     end
+    # libhdf5 keeps the state of the call in progress per OS thread, and a read
+    # through this driver waits on the network, inside that call, as a task
+    # that yields. Resumed on another thread, libhdf5 would find another
+    # thread's state and crash, so the task is pinned to its thread until the
+    # file is closed.
+    task = current_task()
+    wassticky = task.sticky
+    task.sticky = true
     fapl = HDF5.API.h5p_create(HDF5.API.H5P_FILE_ACCESS)
     return try
-        status = ccall(
+        status = @lock HDF5.API.liblock ccall(
             (:H5Pset_driver, HDF5.API.libhdf5), Cint, (Int64, Int64, Ptr{Nothing}),
             fapl, driver, C_NULL
         )
@@ -239,7 +260,7 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
         if access.pagebuffer > 0
             # Metadata written in aggregated pages then arrives in a few large
             # aligned reads instead of many small scattered ones.
-            ccall(
+            @lock HDF5.API.liblock ccall(
                 (:H5Pset_page_buffer_size, HDF5.API.libhdf5), Cint,
                 (Int64, Csize_t, Cuint, Cuint),
                 fapl, Csize_t(access.pagebuffer), Cuint(0), Cuint(0)
@@ -252,14 +273,17 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
         fid = HDF5.API.h5f_open(
             _RANGE_VFD_SCHEME * string(key), HDF5.API.H5F_ACC_RDONLY, fapl
         )
-        file = HDF5.File(fid, String(uri))
+        file = HDF5.File(fid, uri)
+        @lock _RANGE_LOCK _RANGE_FILES[fid] = source
         try
             f(file)
         finally
+            @lock _RANGE_LOCK delete!(_RANGE_FILES, fid)
             close(file)
         end
     finally
         HDF5.API.h5p_close(fapl)
         @lock _RANGE_LOCK delete!(_RANGE_SOURCES, key)
+        task.sticky = wassticky
     end
 end

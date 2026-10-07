@@ -11,7 +11,7 @@
 
 Build a series from `paths`, each resolved the way
 [`ChunkManifest`](@ref)`(path)` resolves it — a saved manifest is loaded, a
-source file is scanned.
+source file is scanned. Several are worked on at once.
 
 The paths stay in the order given. Nothing reorders them by coordinate value,
 so a series assembled from a directory listing is in whatever order the
@@ -23,7 +23,7 @@ function ManifestSeries(
         access::SourceAccess = AutoAccess(),
     )
     isempty(paths) && throw(ArgumentError("ManifestSeries: no paths given"))
-    return ManifestSeries(ChunkManifest[_frompath(p, access) for p in paths], dim)
+    return ManifestSeries(_frompaths(paths, access), dim)
 end
 
 """

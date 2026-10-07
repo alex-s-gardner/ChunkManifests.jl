@@ -1,0 +1,1 @@
+{"chunks":[3,3],"compressor":{"id":"zstd","level":0},"dimension_separator":".","dtype":"<u8","fill_value":null,"filters":[{"astype":"<u8","dtype":"<u8","id":"delta"}],"node_type":"array","order":"C","shape":[4,3],"zarr_format":2}

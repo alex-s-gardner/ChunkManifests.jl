@@ -294,61 +294,109 @@ end
 # directly where it exists, with the same fallback behind it.
 const _HAS_CHUNK_ITER = hasmethod(HDF5.API.h5d_chunk_iter, Tuple{Any, Any})
 
-# Calls `f(element_offset, filter_mask, addr, size)` once per allocated chunk,
-# with `element_offset` in Julia dimension order so it lines up with
-# `HDF5.get_chunk`. The iterator hands over a pointer to the offset in HDF5's
-# own storage order, the reverse, which is why it is loaded and flipped here —
-# the same thing `HDF5._get_chunk_info_all_by_iter` does before building its
-# `ChunkInfo`.
-function _eachchunkinfo(f, dset)
-    if _HAS_CHUNK_ITER
-        N = ndims(HDF5.dataspace(dset))
-        HDF5.API.h5d_chunk_iter(dset) do offset, filter_mask, addr, size
-            eloffset = reverse(unsafe_load(Ptr{NTuple{N, HDF5.API.hsize_t}}(offset)))
-            f(eloffset, filter_mask, addr, size)
-            return HDF5.API.H5_ITER_CONT
-        end
-    else
-        for ci in HDF5.get_chunk_info_all(dset)
-            f(ci.offset, ci.filter_mask, ci.addr, ci.size)
-        end
+# What the chunk iterator's callback fills in, one chunk at a time. The
+# callback is called from C and must not throw, so a chunk it cannot record
+# stops the iteration and is described here for the caller to raise.
+mutable struct _ChunkIterState{N}
+    const index::Array{UInt32, N}
+    const offset::Array{UInt64, N}
+    const nbytes::Array{UInt64, N}
+    const chunkshape::NTuple{N, Int}
+    const fileindex::UInt32
+    stopped::Bool
+    badoffset::NTuple{N, Int}
+    badmask::UInt32
+end
+
+function _chunkiter_callback(
+        offset::Ptr{HDF5.API.hsize_t}, filter_mask::Cuint, addr::HDF5.API.haddr_t,
+        size::HDF5.API.hsize_t, s::_ChunkIterState{N},
+    )::Cint where {N}
+    # The offset is in HDF5's storage order, the reverse of Julia's.
+    eloffset = ntuple(d -> Int(unsafe_load(offset, N + 1 - d)), Val(N))
+    I = CartesianIndex(map((o, c) -> o ÷ c + 1, eloffset, s.chunkshape))
+    if filter_mask != 0 || !checkbounds(Bool, s.index, I)
+        s.stopped, s.badoffset, s.badmask = true, eloffset, filter_mask
+        return Cint(-1)
     end
+    s.index[I] = s.fileindex
+    s.offset[I] = addr
+    s.nbytes[I] = size
+    return Cint(0)
+end
+
+# Records every allocated chunk of `dset` in `s`. H5Dchunk_iter is called with
+# a callback compiled for this state's concrete type: HDF5.jl's own wrapper
+# passes its callback an untyped closure, and the dynamic dispatch that costs
+# per chunk is many times the work of recording one.
+function _iterchunks!(s::_ChunkIterState{N}, dset, context::AbstractString) where {N}
+    callback = @cfunction(
+        _chunkiter_callback, Cint,
+        (Ptr{HDF5.API.hsize_t}, Cuint, HDF5.API.haddr_t, HDF5.API.hsize_t, Ref{_ChunkIterState{N}}),
+    )
+    status = @lock HDF5.API.liblock ccall(
+        (:H5Dchunk_iter, HDF5.API.libhdf5), HDF5.API.herr_t,
+        (HDF5.API.hid_t, HDF5.API.hid_t, Ptr{Cvoid}, Ref{_ChunkIterState{N}}),
+        dset, HDF5.API.H5P_DEFAULT, callback, s,
+    )
+    if s.stopped
+        s.badmask == 0 && throw(
+            ArgumentError(
+                "$context: libhdf5 reports a chunk at element offset $(s.badoffset), " *
+                    "outside the dataset's chunk grid $(size(s.index))"
+            )
+        )
+        throw(_filtermaskerror(context, s.badoffset, s.badmask))
+    end
+    status < 0 && error("$context: H5Dchunk_iter failed")
     return nothing
 end
 
+_filtermaskerror(context, eloffset, filter_mask) = ArgumentError(
+    "$context: chunk at element offset $(eloffset) has filter_mask " *
+        "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
+        "a single Zarr v2 codec pipeline cannot express"
+)
+
 function _scanchunked(table, fileindex, dset, ::Type{T}, itemsize, context::AbstractString) where {T}
     chunkshape = HDF5.get_chunk(dset)
-    N = length(chunkshape)
-    shape = size(dset)
-    gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
-
-    index = fill(MISSING_INDEX, gridsize)
-    offset = zeros(UInt64, gridsize)
-    nbytes = zeros(UInt64, gridsize)
-
-    if HDF5.get_num_chunks(dset) > 0
-        _eachchunkinfo(dset) do eloffset, filter_mask, addr, size
-            filter_mask == 0 || throw(
-                ArgumentError(
-                    "$context: chunk at element offset $(eloffset) has filter_mask " *
-                        "$(filter_mask); HDF5 skipped some filters for this chunk, which " *
-                        "a single Zarr v2 codec pipeline cannot express"
-                )
-            )
-            I = CartesianIndex(ntuple(d -> eloffset[d] ÷ chunkshape[d] + 1, N))
-            index[I] = fileindex
-            offset[I] = UInt64(addr)
-            nbytes[I] = UInt64(size)
-            return nothing
-        end
-    end
+    manifest = _chunkmap(table, fileindex, dset, chunkshape, size(dset), context)
 
     pipeline = _filterpipeline(dset)
     compressor, filters = build_codecs(HDF5Driver, pipeline, itemsize; context)
     check_last_filter_multibyte(filters, T, context)
 
-    manifest = ExplicitChunkMap(table, index, offset, nbytes)
     return manifest, chunkshape, compressor, filters
+end
+
+# A function of its own so the chunk grid's dimension count is a type
+# parameter: the chunk shape comes from libhdf5 as a tuple of whatever length.
+function _chunkmap(
+        table, fileindex, dset, chunkshape::NTuple{N, Int}, shape::NTuple{N, Int}, context
+    ) where {N}
+    gridsize = map(cld, shape, chunkshape)
+    index = fill(MISSING_INDEX, gridsize)
+    offset = zeros(UInt64, gridsize)
+    nbytes = zeros(UInt64, gridsize)
+
+    if HDF5.get_num_chunks(dset) > 0
+        if _HAS_CHUNK_ITER
+            state = _ChunkIterState{N}(
+                index, offset, nbytes, chunkshape, fileindex, false, ntuple(_ -> 0, N),
+                UInt32(0),
+            )
+            _iterchunks!(state, dset, context)
+        else
+            for ci in HDF5.get_chunk_info_all(dset)
+                ci.filter_mask == 0 || throw(_filtermaskerror(context, ci.offset, ci.filter_mask))
+                I = CartesianIndex(map((o, c) -> o ÷ c + 1, ci.offset, chunkshape))
+                index[I] = fileindex
+                offset[I] = UInt64(ci.addr)
+                nbytes[I] = UInt64(ci.size)
+            end
+        end
+    end
+    return ExplicitChunkMap(table, index, offset, nbytes)
 end
 
 # A contiguous HDF5 dataset is one unbroken, uncompressed, unfiltered block,
@@ -483,7 +531,24 @@ function _scandataset!(arrays, table, fileindex, f, dset, dsetpath::AbstractStri
     return nothing
 end
 
+# Over the range driver, the headers of a group's members are fetched
+# together before the walk opens them one at a time; see
+# src/access/h5prefetch.jl. Only hard links name a header in this file.
+function _prefetchmembers(group)
+    fileid = HDF5.file(group).id
+    (@lock _RANGE_LOCK haskey(_RANGE_FILES, fileid)) || return nothing
+    addrs = UInt64[]
+    HDF5.API.h5l_iterate(group, HDF5.API.H5_INDEX_NAME, HDF5.API.H5_ITER_INC) do _, _, info
+        link = unsafe_load(info)
+        link.linktype == 0 && push!(addrs, link.u)
+        return HDF5.API.herr_t(0)
+    end
+    _h5prefetchobjects(fileid, addrs)
+    return nothing
+end
+
 function _walk!(arrays, table, fileindex, f, group, prefix::AbstractString, filepath)
+    _prefetchmembers(group)
     for k in keys(group)
         obj = group[k]
         childpath = isempty(prefix) ? k : prefix * "/" * k
@@ -598,34 +663,71 @@ function _scan_hdf5_open(
 end
 
 # Reads the object in place through byte-range requests, so nothing moves but
-# the metadata libhdf5 asks for. There is no local copy to take a size from,
-# but one was needed to address the object at all, so it is recorded.
+# the metadata libhdf5 asks for. Opening the source fetches both ends of the
+# object and learns its size, which is recorded.
+#
+# libhdf5 serves one scan at a time (see `HDF5_IO`), so the scan runs in two
+# passes. The first opens the file only to find the group or dataset the scan
+# starts from and start prefetching what it leads to (see
+# src/access/h5prefetch.jl). Those prefetches are waited for without the lock,
+# so other scans proceed meanwhile, and the second pass walks the file with
+# most of what it reads already here.
 function _scan_hdf5(
         driver::HDF5Driver, uri::AbstractString, access::RangeAccess;
         group::AbstractString, siblings::Bool,
     )
-    total = objectsize(access.transport, uri)
-    total === nothing && throw(
-        ArgumentError(
-            "RangeAccess cannot scan $(repr(uri)): its size is not known, and libhdf5 " *
-                "needs one to address the object. Scan with DownloadAccess(), which " *
-                "fetches the object once and works anywhere",
-        )
-    )
+    source = _rangesource(access, uri)
     table = PathTable()
     arrays = Dict{String, ManifestArray}()
     groupattrs = Dict{String, Any}()
-    lock(HDF5_IO) do
-        withrangefile(access, uri, total) do f
-            _scan_hdf5_walk!(
-                arrays, table, groupattrs, f, String(uri), total; group, siblings
-            )
+    try
+        lock(HDF5_IO) do
+            withrangefile(f -> _prefetchscanroot(f, group), access, source)
         end
+        _drainprefetches!(source)
+        lock(HDF5_IO) do
+            withrangefile(access, source) do f
+                _scan_hdf5_walk!(
+                    arrays, table, groupattrs, f, String(uri), source.size; group, siblings
+                )
+            end
+        end
+    finally
+        _drainprefetches!(source)
     end
     provenance = Dict{String, Any}("driver" => "HDF5Driver", "scanned_at" => time())
     return ChunkManifest(
         ; arrays, attrs = groupattrs, provenance, transport = _scantransport(access)
     )
+end
+
+# Starts prefetching what a scan of `group` reads first: the headers of its
+# members, or the header of the dataset it names, found from its link so that
+# nothing is read to open it.
+#
+# `H5Lget_info1` is called directly because HDF5.jl's `h5l_get_info` binds
+# `H5Lget_info`, which libhdf5 2 no longer exports; `h5l_iterate` reports the
+# same `H5L_info_t` through `H5Literate1`.
+function _prefetchscanroot(f, group::AbstractString)
+    group == "/" && return _prefetchmembers(f)
+    link = Ref{HDF5.API.H5L_info_t}()
+    # Under HDF5.jl's lock, as every call into libhdf5 must be; see
+    # src/access/hdf5vfd.jl.
+    status = @lock HDF5.API.liblock ccall(
+        (:H5Lget_info1, HDF5.API.libhdf5), HDF5.API.herr_t,
+        (HDF5.API.hid_t, Cstring, Ptr{HDF5.API.H5L_info_t}, HDF5.API.hid_t),
+        f, group, link, HDF5.API.H5P_DEFAULT,
+    )
+    # A path that names nothing is the walk's to report, by name.
+    (status >= 0 && link[].linktype == 0) || return nothing
+    _h5prefetchobjects(f.id, (link[].u,))
+    obj = f[group]
+    try
+        obj isa HDF5.Group && _prefetchmembers(obj)
+    finally
+        close(obj)
+    end
+    return nothing
 end
 
 # Walks an already-open file. Separate from opening it because RangeAccess

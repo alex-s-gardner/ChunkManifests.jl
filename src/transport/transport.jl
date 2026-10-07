@@ -15,7 +15,9 @@ maxgap(::AbstractTransport) = 64 * 1024
 
 Largest size, in bytes, a merged byte range may reach before
 [`coalesce_ranges`](@ref) starts a new block instead of extending the current
-one. Defaults to 256 MiB.
+one. Defaults to 256 MiB; [`HTTPTransport`](@ref) and [`S3Transport`](@ref)
+use 16 MiB, so a long run of adjacent chunks is fetched as several requests in
+parallel rather than one.
 """
 maxblock(::AbstractTransport) = 256 * 1024 * 1024
 
@@ -23,10 +25,11 @@ maxblock(::AbstractTransport) = 256 * 1024 * 1024
     concurrency(t::AbstractTransport) -> Integer
 
 Maximum number of [`fetchrange`](@ref) calls the default [`fetchranges`](@ref)
-keeps in flight at once. Defaults to 4: for range reads over a network, the
-transport itself is the bottleneck, not the number of outstanding requests —
-a handful of concurrent requests already saturates it, and adding more
-measurably hurts throughput rather than helping.
+keeps in flight at once. Defaults to 4. [`HTTPTransport`](@ref) and
+[`S3Transport`](@ref) use 32: chunks that are not adjacent in their file each
+cost a request, and those requests wait mostly on the round trip, so reading
+48 scattered chunks of a GOES-16 file over HTTPS took 0.95 s at 4, 0.34 s at
+16 and 0.22 s at 32.
 """
 concurrency(::AbstractTransport) = 4
 
@@ -176,4 +179,54 @@ function fetchranges(t::AbstractTransport, uri, ranges::AbstractVector{ByteRange
     end
 
     return _assemble(ranges, mapping, blocks)
+end
+
+"""
+    _fetchends(t::AbstractTransport, uri, head::Integer, tail::Integer)
+        -> (headbytes, tailbytes, size)
+
+The first `head` bytes of `uri`, capped at its size, the last `tail` bytes it
+does not already hold, and the size itself. Opening an object for a remote
+scan starts here, and a round trip there is paid once per file scanned.
+
+This default asks [`objectsize`](@ref) first and then fetches both ends
+concurrently, two round trips in all. A transport whose ranged responses state
+the object's size overrides it to need no request for the size.
+"""
+function _fetchends(t::AbstractTransport, uri::AbstractString, head::Integer, tail::Integer)
+    total = objectsize(t, uri)
+    total === nothing && throw(
+        ArgumentError(
+            "the size of $(repr(uri)) is not known, and reading it in place needs one; " *
+                "fetch the object instead with DownloadAccess()",
+        )
+    )
+    total = UInt64(total)
+    h = min(UInt64(head), total)
+    tl = min(UInt64(tail), total - h)
+    headtask = Threads.@spawn h == 0 ? UInt8[] : fetchrange(t, uri, ByteRange(0, h))
+    tailbytes = tl == 0 ? UInt8[] : fetchrange(t, uri, ByteRange(total - tl, tl))
+    return fetch(headtask), tailbytes, total
+end
+
+# The offset of a ranged response's first byte and the object's size, from its
+# `Content-Range` header.
+function _contentrange(header::AbstractString, rangeheader, uri)
+    m = match(r"^bytes\s+(\d+)-\d+/(\d+)$", header)
+    m === nothing && error(
+        "response to $rangeheader from $(repr(uri)) carried no usable Content-Range: " *
+            repr(header),
+    )
+    return parse(UInt64, m[1]), parse(UInt64, m[2])
+end
+
+# The bytes [from, from + n) out of a response body that starts at offset
+# `start`, as `_fetchends` methods cut both ends from what came back.
+function _bodyspan(body::Vector{UInt8}, start::UInt64, from::UInt64, n::UInt64, uri)
+    (from >= start && from + n <= start + length(body)) || error(
+        "response from $(repr(uri)) covers bytes [$start, $(start + length(body))), " *
+            "not the requested [$from, $(from + n))",
+    )
+    lo = Int(from - start) + 1
+    return lo == 1 && n == length(body) ? body : body[lo:(lo + Int(n) - 1)]
 end

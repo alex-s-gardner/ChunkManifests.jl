@@ -123,6 +123,44 @@ end
 ChunkManifests.objectsize(t::FetchCountingTransport, uri::AbstractString) =
     ChunkManifests.objectsize(t.inner, uri)
 
+# Records the offset and bytes of every range fetched through it, in the order
+# the fetches completed, so a test can see what a reader asked for and what was
+# fetched ahead of it.
+struct RecordingTransport{T <: AbstractTransport} <: AbstractTransport
+    inner::T
+    log::Vector{Tuple{UInt64, Vector{UInt8}}}
+    lock::ReentrantLock
+end
+
+function ChunkManifests.fetchrange(t::RecordingTransport, uri::AbstractString, r::ByteRange)
+    bytes = ChunkManifests.fetchrange(t.inner, uri, r)
+    @lock t.lock push!(t.log, (r.offset, bytes))
+    return bytes
+end
+
+ChunkManifests.objectsize(t::RecordingTransport, uri::AbstractString) =
+    ChunkManifests.objectsize(t.inner, uri)
+
+# Reads local files after a delay, recording the most fetches it has had in
+# flight at once, so a test can tell concurrent fetching from sequential.
+struct OverlapTransport <: AbstractTransport
+    delay::Float64
+    inflight::Threads.Atomic{Int}
+    peak::Threads.Atomic{Int}
+end
+OverlapTransport(delay) = OverlapTransport(delay, Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+
+function ChunkManifests.fetchrange(t::OverlapTransport, uri::AbstractString, r::ByteRange)
+    n = Threads.atomic_add!(t.inflight, 1) + 1
+    Threads.atomic_max!(t.peak, n)
+    try
+        sleep(t.delay)
+        return ChunkManifests.fetchrange(LocalTransport(), uri, r)
+    finally
+        Threads.atomic_sub!(t.inflight, 1)
+    end
+end
+
 # A one-block AffineChunkMap pointing at `uri`, and a ManifestArray over one,
 # for cases that need a chunk grid of a given shape without a file behind it.
 function dummy_chunkmap(shape, chunkshape, uri)

@@ -92,7 +92,9 @@ Raster(cm, "0/data")                     # EPSG:32701
   one variable (`group = "v"`) also pulls in the dimension scales, `coordinates` and
   `grid_mapping` variables needed to interpret it.
 - **Reads remote sources in place**: a scan of an `http(s)://` or `s3://` object fetches only
-  the byte ranges holding its metadata. A 16 GiB NISAR granule scans in one 8 MB request.
+  the byte ranges holding its metadata, fetching chunk indexes ahead of libhdf5. A 453 MiB
+  NetCDF4 mosaic scans over HTTPS from 5.6 MB in 24 requests, and `scan(urls, driver)`
+  scans many files at once.
 - **Saves** manifests in its own Zarr-based format or as kerchunk JSON/Parquet, to a local
   directory or to object storage.
 - **Fetches** chunk bytes from local paths, `http(s)://` and `s3://` (with `using AWSS3`),

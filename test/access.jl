@@ -159,13 +159,13 @@ end
                 # `blocksize` 0 fetches exactly what libhdf5 asked for; a block
                 # larger than the file collapses to one request. The sizes
                 # between exercise assembling a read that spans blocks, and the
-                # `initialread` cases exercise one served partly from the
-                # prefetched head and partly not — both places an off-by-one
-                # would show.
-                for initialread in (0, 256, 4096, 1 << 20)
+                # `initialread` and `tailread` cases exercise one served partly
+                # from the ends fetched on opening and partly not — both places
+                # an off-by-one would show.
+                for initialread in (0, 256, 4096, 1 << 20), tailread in (0, 512)
                     for blocksize in (0, 512, 4096, 1 << 20)
                         access = RangeAccess(;
-                            transport = LocalTransport(), initialread, blocksize,
+                            transport = LocalTransport(), initialread, tailread, blocksize,
                             pagebuffer = 0,
                         )
                         cm = scan(src, HDF5Driver(); access)
@@ -194,6 +194,108 @@ end
                 for I in CartesianIndices(chunkgridaxes(m))
                     @test chunkstate(m, I) == VIRTUAL_CHUNK
                     @test chunklocation(m, I)[3] > 0
+                end
+            end
+
+            @testset "chunk indexes and member headers are fetched ahead of libhdf5" begin
+                # Several datasets, each with enough chunks for a B-tree index
+                # of more than one level, and of different ranks, since a
+                # node's key size depends on the rank.
+                many = joinpath(dir, "many.h5")
+                HDF5.h5open(many, "w") do f
+                    for (name, n, rank) in (("a", 3000, 1), ("b", 2000, 2), ("c", 500, 3))
+                        shape = rank == 1 ? (n,) : rank == 2 ? (n, 2) : (n, 2, 2)
+                        chunk = ntuple(d -> d == 1 ? 1 : 2, rank)
+                        d = HDF5.create_dataset(f, name, Float32, shape; chunk)
+                        write(d, rand(Float32, shape))
+                    end
+                end
+                reference = scan(many, HDF5Driver(); access = LocalAccess())
+                memberheaders = HDF5.h5open(many) do f
+                    addrs = UInt64[]
+                    HDF5.API.h5l_iterate(f, HDF5.API.H5_INDEX_NAME, HDF5.API.H5_ITER_INC) do _, _, info
+                        push!(addrs, unsafe_load(info).u)
+                        return HDF5.API.herr_t(0)
+                    end
+                    addrs
+                end
+
+                # Every read is a request of exactly what was asked, so the
+                # log shows what was fetched ahead and what libhdf5 asked for.
+                log = Tuple{UInt64, Vector{UInt8}}[]
+                loglock = ReentrantLock()
+                recording = RecordingTransport(LocalTransport(), log, loglock)
+                access = RangeAccess(;
+                    transport = recording, initialread = 0, tailread = 0, blocksize = 0,
+                    pagebuffer = 0,
+                )
+                cm = scan(many, HDF5Driver(); access)
+
+                for key in ("a", "b", "c")
+                    a, b = chunkmapof(arraysof(reference)[key]), chunkmapof(arraysof(cm)[key])
+                    @test all(
+                        chunklocation(a, I) == chunklocation(b, I)
+                            for I in CartesianIndices(chunkgridaxes(a))
+                    )
+                end
+
+                # A root may arrive inside a range fetched for something else,
+                # such as its dataset's header, so the internal nodes are found
+                # in the file itself: wherever a node signature opens a node of
+                # a dataset's rank. A node of rank r is 536 + 65 (16 + 8r)
+                # bytes at libhdf5's default K of 32.
+                bytes = read(many)
+                fetched = Set(first.(log))
+                internal = 0
+                for at in 1:(length(bytes) - 8)
+                    (bytes[at:(at + 3)] == b"TREE" && bytes[at + 5] > 0) || continue
+                    for rank in 1:3
+                        node = bytes[at:min(end, at + 536 + 65 * (16 + 8rank) - 1)]
+                        children = ChunkManifests._h5btree1children(node, 8, 8, UInt64(length(bytes)))
+                        isempty(children) && continue
+                        internal += 1
+                        @test all(in(fetched), children)
+                    end
+                end
+                @test internal == 3
+                # A leaf's children are chunks, which a scan never reads.
+                leaf = first(b for (_, b) in log if length(b) >= 8 && b[1:4] == b"TREE")
+                @test leaf[6] == 0
+                @test isempty(ChunkManifests._h5btree1children(leaf, 8, 8, UInt64(length(bytes))))
+                # Each member's header was fetched whole, ahead of its walk.
+                header = ChunkManifests._H5_HEADER_PREFETCH
+                @test all(
+                    any(at == h && length(bytes) == header for (at, bytes) in log)
+                        for h in memberheaders
+                )
+            end
+
+            @testset "many remote scans at once agree with a local one" begin
+                # Small spans so every scan waits on the server inside libhdf5
+                # many times, while others are under way. With several threads
+                # a waiting scan task that resumed on another thread would
+                # crash libhdf5, which keeps per-thread state for the call.
+                many = joinpath(dir, "concurrent.h5")
+                HDF5.h5open(many, "w") do f
+                    for k in 1:6
+                        d = HDF5.create_dataset(f, "v$k", Float32, (600,); chunk = (4,))
+                        write(d, rand(Float32, 600))
+                    end
+                end
+                local_ = scan(many, HDF5Driver(); access = LocalAccess())
+                _acc_withserver(read(many), "concurrent.h5") do url
+                    access = RangeAccess(; initialread = 1024, tailread = 0, blocksize = 1024)
+                    for _ in 1:3
+                        cms = scan(fill(url, 12), HDF5Driver(); access)
+                        @test all(cms) do cm
+                            all(
+                                chunklocation(chunkmapof(arraysof(cm)[k]), I)[2:3] ==
+                                    chunklocation(chunkmapof(arraysof(local_)[k]), I)[2:3]
+                                    for k in keys(arraysof(local_))
+                                    for I in CartesianIndices(chunkgridaxes(chunkmapof(arraysof(local_)[k])))
+                            )
+                        end
+                    end
                 end
             end
 

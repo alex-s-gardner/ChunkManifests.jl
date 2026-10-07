@@ -214,6 +214,30 @@ end
         end
     end
 
+    @testset "chunks in different files are fetched concurrently" begin
+        mktempdir() do dir
+            nfiles = 8
+            table = PathTable()
+            index = UInt32[]
+            for k in 1:nfiles
+                path = joinpath(dir, "f$k.bin")
+                write(path, Float64[k])
+                push!(index, push_uri!(table, path))
+            end
+            manifest = ExplicitChunkMap(
+                table, index, zeros(UInt64, nfiles), fill(UInt64(8), nfiles)
+            )
+            va = ManifestArray{Float64}(manifest, (nfiles,), (1,); dimnames = ["x"])
+            slow = OverlapTransport(0.05)
+            mstore = ChunkManifest(;
+                arrays = Dict{String, ManifestArray}("" => va), transport = slow,
+                readahead = ReadaheadCache(; maxbytes = 0),
+            )
+            @test Zarr.zopen(mstore)[:] == collect(Float64, 1:nfiles)
+            @test slow.peak[] > 1
+        end
+    end
+
     @testset "setindex! and storefromstring are read-only" begin
         mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => _dummyva((4,), (2,))))
         @test_throws "read-only" (mstore["a/.zarray"] = UInt8[1, 2, 3])

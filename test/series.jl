@@ -48,6 +48,19 @@ end
         @test_throws "the dimension name is empty" ManifestSeries([s1], "")
     end
 
+    @testset "scanning several paths keeps their order" begin
+        # More paths than are scanned at once, so results arrive out of order.
+        paths = [isodd(i) ? s1 : s2 for i in 1:(2 * ChunkManifests._CONCURRENT_FILES + 3)]
+        cms = scan(paths, HDF5Driver(); siblings = false)
+        @test cms isa Vector{ChunkManifest}
+        @test [size(arraysof(cm)["h"]) for cm in cms] ==
+            [isodd(i) ? (4, 6) : (4, 9) for i in eachindex(paths)]
+        @test size(arraysof(ChunkManifests.combine(ManifestSeries(cms[1:2], :time)))["h"]) ==
+            (4, 15)
+        # A failure in any one of them is raised, naming that path.
+        @test_throws "no such file" scan([s1, joinpath(dir, "absent.h5")], HDF5Driver())
+    end
+
     @testset "the scan names a coordinate variable's own dimension" begin
         g = ChunkManifest(s1)
         @test dimnamesof(arraysof(g)["h"]) == ["x", "time"]

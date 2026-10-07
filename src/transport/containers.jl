@@ -27,9 +27,11 @@ default) unless it starts with `"http://"`, `"https://"` or `"s3://"`, which
 get these defaults even with no configuration at all: `"http://"` and
 `"https://"` share one `HTTPTransport()`, so its connections pool across
 both, and each distinct `s3://<bucket>/...` gets its own `S3Transport`.
-Each is built the first time a URI needs it and cached thereafter, so a
-manifest referencing only local files never constructs an HTTP client, and an
-`s3://` default is possible whether or not `AWSS3` is loaded yet.
+Each is built the first time a URI needs it and shared by every
+`TransportContainers` thereafter, so a manifest referencing only local files
+never constructs an HTTP client, connections are reused from one scan or read
+to the next, and an `s3://` default is possible whether or not `AWSS3` is
+loaded yet.
 Binding a prefix explicitly overrides these defaults. Resolving an `s3://` URI
 that matches no explicit binding when the `AWSS3` extension is not loaded
 fails with [`S3Transport`](@ref)'s own construction error, which names
@@ -79,9 +81,18 @@ end
 # S3Transport needs the AWSS3 extension. Building either eagerly would make
 # every manifest pay for backends it may never touch, and would make an
 # `s3://` default impossible without AWSS3 loaded.
+#
+# The defaults are shared by every TransportContainers in the session, so the
+# connections a scan opens are reused by the reads of its manifest and by the
+# next scan, rather than each container opening its own and leaving them idle.
+const _SHARED_DEFAULTS = Dict{String, AbstractTransport}()
+const _SHARED_DEFAULTS_LOCK = ReentrantLock()
+
 function _defaulttransport(make, c::TransportContainers, key::AbstractString)
     return lock(c.defaultslock) do
-        get!(make, c.defaults, key)
+        get!(c.defaults, key) do
+            @lock _SHARED_DEFAULTS_LOCK get!(make, _SHARED_DEFAULTS, key)
+        end
     end
 end
 
@@ -185,6 +196,11 @@ that transport, after confirming `c.authorize(uri)` allows it.
 function objectsize(c::TransportContainers, uri::AbstractString)
     _authorize!(c, uri)
     return objectsize(resolve_transport(c, uri), uri)
+end
+
+function _fetchends(c::TransportContainers, uri::AbstractString, head::Integer, tail::Integer)
+    _authorize!(c, uri)
+    return _fetchends(resolve_transport(c, uri), uri, head, tail)
 end
 
 """

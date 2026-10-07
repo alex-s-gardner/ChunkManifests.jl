@@ -371,6 +371,28 @@ end
         @test Zarr.zopen(ge)["empty"][:] == zeros(Int32, 4)
     end
 
+    @testset "written scalar datasets are one contiguous block" begin
+        dir = mktempdir()
+        fn = joinpath(dir, "scalars.h5")
+        h5open(fn, "w") do f
+            f["note"] = "written"
+            f["count"] = Int32(7)
+        end
+        g = scan(fn, HDF5Driver())
+        for key in ("note", "count")
+            m = chunkmapof(arraysof(g)[key])
+            @test m isa AffineChunkMap{0}
+            @test chunklocation(m, CartesianIndex())[3] > 0
+        end
+        @test Zarr.zopen(g)["count"][] == 7
+        # Every format writes the scalar's one chunk reference.
+        json = joinpath(dir, "scalars.json")
+        ChunkManifests.save(json, g, KerchunkJSON())
+        @test Zarr.zopen(ChunkManifest(json))["count"][] == 7
+        native = ChunkManifests.save(joinpath(dir, "scalars"), g, ZarrManifest())
+        @test Zarr.zopen(ChunkManifest(native))["count"][] == 7
+    end
+
     if isfile(ITSLIVE_PATH)
         @testset "NetCDF4 whole-root scan reaches the grid-mapping variable" begin
             # This scan used to abort on `mapping`, whose fixed-length string

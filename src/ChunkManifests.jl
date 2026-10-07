@@ -32,6 +32,8 @@ import Base64
 import HDF5
 import HTTP
 import JSON
+import Logging
+import PrecompileTools
 import Zarr
 
 include("core/types.jl")
@@ -54,6 +56,7 @@ include("drivers/driver.jl")
 include("access/access.jl")
 include("access/rangesource.jl")
 include("access/rangeio.jl")
+include("access/h5prefetch.jl")
 include("access/hdf5vfd.jl")
 include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")
@@ -63,6 +66,7 @@ include("combine/combine.jl")
 include("frompath.jl")
 include("combine/merge.jl")
 include("combine/series.jl")
+include("precompile.jl")
 
 export AbstractChunkMap, ExplicitChunkMap, AffineChunkMap
 export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
@@ -83,6 +87,14 @@ export attrsof, dimnamesof, arraysof, provenanceof, transportof
 export membersof, dimnameof
 
 function __init__()
+    # The precompile workload registers the range driver with the libhdf5 of
+    # that process, and the id it got is saved with the package; a new process
+    # registers it afresh.
+    _RANGE_DRIVER[] = -1
+    # Default transports hold connections, which belong to one process.
+    empty!(_SHARED_DEFAULTS)
+    # The workload probes the Zarr.jl it was precompiled against; probe again.
+    _BYTE_FILTER_SUPPORT[] = nothing
     _register_tiff_predictor!()
     # Registration belongs here rather than at top level: DRIVER_REGISTRY is
     # populated at load time, and a top-level push! would be captured during

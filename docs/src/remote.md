@@ -62,85 +62,86 @@ of it.
 
 ### Minimizing round trips
 
-Two knobs decide how many requests a scan costs, and both trade bytes for round trips —
-which is the trade that matters over a network, where a request costs far more than the bytes
-in it.
+Over a network a request costs far more than the bytes in it, so [`RangeAccess`](@ref)
+spends bytes to save round trips.
 
-`initialread` fetches the head of the object in one request when it is opened, and every read
-inside that span is then served from memory. HDF5's superblock lives there and a file written
-for cloud access keeps the rest of its metadata nearby, so a span covering the metadata turns
-a whole scan into one or two requests. This is the same idea as fsspec's `first` cache. It is
-capped at the object's size, so a small file costs one request whatever the setting, and `0`
-fetches nothing up front.
+**Both ends at once.** Opening the object fetches its first `initialread` bytes (4 MiB) and
+its last `tailread` bytes (1 MiB), which is also how its size is learned, and every read
+inside either span is served from memory. HDF5's superblock and root group sit at the head,
+and a file written for cloud access keeps the rest of its metadata nearby. Much of what a
+NetCDF4 writer emits on closing a file lands at the tail instead: of the 83 metadata reads
+outside the chunk index that a scan of a GOES-16 ABI file makes, 62 fall in its last 64
+KiB. Over HTTP the tail request goes out as soon as the head's response headers state the
+size, and asks only for bytes the head does not hold, so an object smaller than
+`initialread` costs one request. `0` skips either end.
 
 ```julia
 scan(url, HDF5Driver(); access = RangeAccess(; initialread = 8 * 1024^2))
 ```
 
-`blocksize` governs everything outside that span: a miss fetches whole aligned blocks, and a
-run of adjacent misses becomes one request.
+**Blocks.** Every other read fetches whole aligned blocks of `blocksize` bytes (256 KiB),
+and a run of adjacent missing blocks is one request. `blocksize = 0` fetches exactly what
+was asked for.
 
-Scanning a 331 KiB NetCDF4 granule over HTTPS, varying one at a time:
+**Prefetching.** libhdf5 reads a file one structure at a time and learns where the next is
+only from the one before. Two kinds of structure are fetched ahead of it, all at once:
 
-| `initialread` | `blocksize` | requests | bytes read |
-|---|---|---|---|
-| none | none | 83 | 56 833 |
-| 16 KiB | none | 52 | 60 988 |
-| 64 KiB | none | 49 | 102 916 |
-| 4 MiB | none | 1 | 338 824 |
+- The chunk index of a dataset in the HDF5 1.8 format, which is what NetCDF4 writes, is a
+  B-tree whose nodes lie among the chunks they index. Once a node is read, all its children
+  are fetched concurrently, so an index costs one round trip per level rather than one per
+  node.
+- Before walking a group, the scan reads its members' addresses from its links and fetches
+  their object headers together, following each header to any continuation and to the root
+  of its chunk index.
 
-The gain levels off here because this granule's metadata is scattered through it. A product
-written with paged metadata aggregation concentrates it instead, which is what makes a single
-`initialread` cover the whole scan.
+A prefetch fetches the file's own bytes at the address it names, so a wrong guess costs a
+request and never a wrong read.
+
+Scanning public files over HTTPS with the defaults, from a connection with about 75 ms of
+latency:
+
+| file | size | requests | bytes read | share | time |
+|---|---|---|---|---|---|
+| ITS_LIVE image-pair granule (NetCDF4) | 331 KiB | 1 | 339 KB | 100% | 0.09 s |
+| Sentinel-2 COG band | 1.4 MiB | 1 | 1.5 MB | 100% | 0.16 s |
+| GOES-16 ABI full disk, `CMI` only (NetCDF4) | 29 MiB | 40 | 5.6 MB | 18% | 1.5 s |
+| ITS_LIVE annual mosaic (NetCDF4) | 453 MiB | 24 | 5.6 MB | 1.2% | 1.4 s |
+
+Most of the GOES-16 requests are prefetches of its 37 chunk-index nodes, made concurrently,
+one round trip per level of the index.
+
+**Several files.** libhdf5 serves one scan at a time, so a remote scan opens the file
+twice: once to find what it starts from and start prefetching it, then, after those
+prefetches have landed without holding libhdf5, to walk it. Scans of several files given
+together — [`scan`](@ref) over a vector of paths, or a [`ManifestSeries`](@ref) of them —
+therefore overlap their requests. Twelve GOES-16 files scanned that way take 9.9 s,
+against 28 s one after another.
+
+`pagebuffer` sizes libhdf5's own page buffer. A product written with paged metadata
+aggregation — what "cloud optimized" usually means for HDF5 — then has its metadata read in
+a few large aligned requests rather than many small scattered ones.
+
+The driver is registered through a struct whose layout is not stable public API, so it is
+enabled only for libhdf5 versions whose layout has been verified. On any other version it
+refuses and names [`DownloadAccess`](@ref), rather than risking a mismatched struct.
 
 ### When to fetch the object instead
 
-How much a range-read scan costs depends on how far a file's metadata is spread, not on its
-size. Two real files, both scanned with the same mechanism:
-
-| file | requests | bytes read | share | time |
-|---|---|---|---|---|
-| NISAR RSLC, 16.3 GiB, paged metadata | 1 | 8.4 MB | 0.05% | 8 s |
-| NetCDF4 mosaic, 189 MiB, metadata spread throughout | 189 | 198 MB | 100% | 26 s |
-| the same mosaic, [`DownloadAccess`](@ref) | — | 198 MB | 100% | **15 s** |
-
-For the mosaic, range reads end up moving the whole object in more requests than a download
-takes, and gain nothing by it — so [`DownloadAccess`](@ref) is faster and leaves a cached
-copy for the next scan. Reading that file by exact ranges rather than blocks does cut the
-bytes to 8.7%, but costs 6614 requests and seven minutes.
-
-The quantity to watch is **how many bytes a scan pulls against the size of the object**. If
-it approaches the whole thing, fetch it instead:
+How much a range-read scan costs depends on how far a file's metadata is spread and on
+whether its chunk indexes are in a form prefetching follows, not on its size. The quantity
+to watch is **how many bytes a scan pulls against the size of the object**. If it
+approaches the whole thing, fetching it is no slower and leaves a copy for the next scan:
 
 ```julia
 scan(url, HDF5Driver(); access = DownloadAccess(; cachedir = "/data/cache", keep = true))
 ```
 
+For the mosaic above the opposite holds: [`DownloadAccess`](@ref) took 42 s to scan it,
+against 1.4 s in place.
+
 Nothing switches mechanism on your behalf. A named mechanism is never substituted, and
 `AutoAccess` choosing range reads is a default suited to the large files it was built for,
 not a judgement about any particular object.
-
-Varying `blocksize` alone, with no initial read:
-
-| `blocksize` | requests | bytes read | share of the file |
-|---|---|---|---|
-| `0` (exactly what was asked for) | 83 | 56 833 | 17% |
-| 8 KiB | 17 | 134 024 | 40% |
-| 32 KiB | 8 | 240 520 | 71% |
-| 1 MiB (the default) | 1 | 338 824 | 100% |
-
-On a file this small a 1 MiB block is the whole object, so the default collapses to one
-request. That inverts as the file grows: the metadata a scan touches does not scale with the
-data, so on a multi-gigabyte granule the same default reads a handful of blocks. Set
-`blocksize = 0` to fetch exactly what libhdf5 asked for and nothing else.
-
-`pagebuffer` sizes libhdf5's own page buffer. A product written with paged metadata
-aggregation — what "cloud optimized" usually means for HDF5 — then has its metadata read in a
-few large aligned requests rather than many small scattered ones.
-
-The driver is registered through a struct whose layout is not stable public API, so it is
-enabled only for libhdf5 versions whose layout has been verified. On any other version it
-refuses and names [`DownloadAccess`](@ref), rather than risking a mismatched struct.
 
 ## The cost of `DownloadAccess`
 
