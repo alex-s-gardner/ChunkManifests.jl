@@ -421,21 +421,10 @@ function _scanvlenstring!(arrays, table, f, dset, dsetpath::AbstractString, cont
         copyto!(bytes, (i - 1) * width + 1, units, 1, min(length(units), width))
     end
 
-    gridsize = ntuple(_ -> 1, length(shape))
-    manifest = ExplicitChunkMap(
-        table, fill(INLINE_INDEX, gridsize), zeros(UInt64, gridsize),
-        fill(UInt64(length(bytes)), gridsize);
-        inline = Dict(CartesianIndex(gridsize) => bytes),
-    )
-
     dimnames = something(
         _dimnames(f, dset, length(shape)), ["dim_$i" for i in 1:length(shape)]
     )
-    arrays[dsetpath] = ManifestArray{T}(
-        manifest, shape, shape;
-        fillvalue = nothing, compressor = nothing, filters = Dict{String, Any}[],
-        attrs = _datasetattrs(dset), dimnames,
-    )
+    arrays[dsetpath] = _inlinearray(T, table, shape, bytes; attrs = _datasetattrs(dset), dimnames)
     return nothing
 end
 
