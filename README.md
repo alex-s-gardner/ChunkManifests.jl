@@ -10,27 +10,58 @@ without copying or converting them.
 Scanning a source file records where each chunk's *compressed* bytes already live — which
 file, which byte offset, how many bytes — in a **chunk manifest**. That manifest is itself a
 `Zarr.AbstractStore`, so handing it to Zarr.jl gives lazy, chunked, codec-decoded access to
-the original archive in place.
+the original file in place.
 
 This package never decodes array data. It returns the source files' bytes untouched and lets
-Zarr.jl's codec pipeline do the decoding, which is what makes the result byte-for-byte
-identical to reading the original file.
+Zarr.jl's codec pipeline decode them, so the result is byte-for-byte identical to reading the
+original file.
+
+## Example
+
+Every example below reads public data and runs as written.
 
 ```julia
 using ChunkManifests, Zarr
 
-cm = ChunkManifest("granule.h5")       # scan a source file
-z  = Zarr.zopen(cm)                    # a lazy ZArray tree
-z["gt1l/h_li"][1:100]                  # reads only the chunks it needs
+# An ITS_LIVE glacier-velocity granule (NetCDF4) in a public AWS Open Data bucket
+url = "https://its-live-data.s3.us-west-2.amazonaws.com/NSIDC/velocity_image_pair_sample/landsatOLI/v02/N80E010/LC09_L1TP_013243_20230801_20230802_02_T1_X_LC08_L1TP_013243_20240811_20240815_02_T1_G0120V02_P028.nc"
+
+cm = scan(url, HDF5Driver())     # reads the file's metadata in place, not the file
+z  = Zarr.zopen(cm)              # a lazy ZArray tree
+z["v"][1:100, 1:100]             # fetches only the chunks this window needs
 ```
 
-Downstream packages need no knowledge that the data is virtual — a `ChunkManifest` is a Zarr
-store, so anything that consumes one works, Rasters.jl included:
+A local file needs no driver: `ChunkManifest("granule.nc")` recognizes it from its leading
+bytes.
+
+Scanning is the expensive step, so save the manifest and reuse it. Kerchunk JSON is also
+readable from Python through fsspec:
+
+```julia
+ChunkManifests.save("itslive.manifest", cm, ZarrManifest())
+ChunkManifests.save("itslive.json", cm, KerchunkJSON())
+cm = ChunkManifest("itslive.manifest")
+```
+
+A manifest is a Zarr store, so packages that read Zarr read it, Rasters.jl included:
 
 ```julia
 using Rasters, ZarrDatasets
-Raster(cm, "gt1l/land_ice_segments/h_li")
-RasterStack(cm; group = "gt1l/land_ice_segments")
+Raster(cm, "v")
+```
+
+Released Rasters does not yet turn a CF `grid_mapping` into a CRS
+([Rasters.jl#936](https://github.com/rafaqz/Rasters.jl/pull/936)), so the raster has
+coordinates but `crs` is `nothing` unless you pass one.
+
+A cloud-optimized GeoTIFF is scanned the same way, with one array per resolution level, `"0"`
+being full resolution:
+
+```julia
+using TiffImages
+cog = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif"
+cm = scan(cog, GeoTIFFDriver())
+Zarr.zopen(cm)["0"][1:100, 1:100]
 ```
 
 ## Installation
@@ -38,9 +69,8 @@ RasterStack(cm; group = "gt1l/land_ice_segments")
 The package is not registered, and it needs a patched Zarr.jl to read arrays whose last
 filter operates on raw bytes — shuffle or fletcher32 — with an element type wider than one
 byte ([Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), merged but not yet in a
-release). A `[sources]` entry applies only to the project that declares it, so the pin in
-this package's `Project.toml` does not reach your environment and the branch has to be
-requested alongside it:
+release). A `[sources]` entry applies only to the project that declares it, so the patched
+branch has to be added to your own environment too:
 
 ```julia
 using Pkg
@@ -54,30 +84,32 @@ Julia 1.10 or later.
 
 ## What it does
 
-- **Scans** HDF5 and NetCDF4 out of the box, GeoTIFF and COG with `using TiffImages`. One
-  scan pulls in the dimension scales, `coordinates` and `grid_mapping` variables a variable
-  cannot be interpreted without, so a single-variable scan is georeferenced on its own.
+- **Scans** HDF5 and NetCDF4 out of the box, GeoTIFF and COG with `using TiffImages`. Scanning
+  one variable (`group = "v"`) also pulls in the dimension scales, `coordinates` and
+  `grid_mapping` variables needed to interpret it.
+- **Reads remote sources in place**: a scan of an `http(s)://` or `s3://` object fetches only
+  the byte ranges holding its metadata. A 16 GiB NISAR granule scans in one 8 MB request.
 - **Saves** manifests in its own Zarr-based format or as kerchunk JSON/Parquet, to a local
-  directory or to object storage, so the expensive scan happens once.
-- **Fetches** chunk bytes from wherever they are: local paths, `http(s)` and `s3://`, routed
-  per URI prefix, with readahead coalescing and an `authorize` hook for untrusted manifests.
+  directory or to object storage.
+- **Fetches** chunk bytes from local paths, `http(s)://` and `s3://` (with `using AWSS3`),
+  routed by URI prefix, with readahead coalescing and an `authorize` hook for untrusted
+  manifests.
 - **Merges** files holding different variables into one store, and **concatenates** files
   that are successive slices of one dataset.
 
-Read-only with respect to data, single-shot with respect to manifests: no history, branches,
-locks or multi-writer guarantees, and none planned. Versioned, transactional management of
-manifests is [Icechunk](https://github.com/earth-mover/icechunk)'s domain.
-
 Zarr **v2** metadata only. Big-endian sources, and source features with no Zarr v2 codec
 equivalent, are refused by name at scan time rather than scanned into a manifest that would
-decode to wrong values. The
+decode to wrong values; the
 [Limitations](https://alex-s-gardner.github.io/ChunkManifests.jl/dev/limitations/) page lists
 every such case.
 
+Read-only with respect to data, single-shot with respect to manifests: no history, branches,
+locks or multi-writer guarantees. Versioned, transactional management of manifests is
+[Icechunk](https://github.com/earth-mover/icechunk)'s domain.
+
 ## Documentation
 
-Full documentation is at
-<https://alex-s-gardner.github.io/ChunkManifests.jl/dev/>, covering
+<https://alex-s-gardner.github.io/ChunkManifests.jl/dev/> covers
 [concepts](https://alex-s-gardner.github.io/ChunkManifests.jl/dev/concepts/),
 [scanning](https://alex-s-gardner.github.io/ChunkManifests.jl/dev/scanning/),
 [remote sources](https://alex-s-gardner.github.io/ChunkManifests.jl/dev/remote/),

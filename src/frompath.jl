@@ -65,11 +65,11 @@ function _frompath(path::AbstractString, access::SourceAccess)
             ArgumentError(
                 "cannot build a manifest from $(repr(path)): reading a *saved* " *
                     "manifest over a remote URI is not implemented, and a remote source " *
-                    "cannot be recognized without fetching it. Name the driver and the " *
-                    "access mechanism instead, as in " *
-                    "scan($(repr(path)), HDF5Driver(); access=DownloadAccess()). Only this " *
-                    "file is affected — the chunks a manifest references may live " *
-                    "anywhere, which is what its transport resolves",
+                    "cannot be recognized without fetching it. Name the driver instead, " *
+                    "as in scan($(repr(path)), HDF5Driver()), which reads the source's " *
+                    "metadata in place. Only this file is affected — the chunks a " *
+                    "manifest references may live anywhere, which is what its transport " *
+                    "resolves",
             )
         )
     end
@@ -92,7 +92,7 @@ function _frompath(path::AbstractString, access::SourceAccess)
 end
 
 """
-    ChunkManifest(path; transport=TransportContainers(), readahead=ReadaheadCache())
+    ChunkManifest(path; transport=TransportContainers(), readahead=ReadaheadCache(), access=AutoAccess())
 
 Build a [`ChunkManifest`](@ref) from `path`, which may hold either a saved
 manifest or a source file to scan.
@@ -103,9 +103,12 @@ containing `manifest.json` is a [`ZarrManifest`](@ref), a directory containing
 with `{` is a [`KerchunkJSON`](@ref) document. Anything else is scanned as a
 source file, with the driver chosen from its magic bytes.
 
-`path` must be local either way: reading a manifest or a source file over a
-remote URI is not implemented. Only that file is affected — the chunks a
-manifest *references* may live anywhere, which is what `transport` resolves.
+`path` must be local: a saved manifest cannot be read over a remote URI, and a
+remote source cannot be recognized without fetching it. Scan a remote source
+with [`scan`](@ref)`(url, driver)` instead, which reads its metadata in place.
+Only `path` itself is affected — the chunks a manifest *references* may live
+anywhere, which is what `transport` resolves. `access` is the
+[`SourceAccess`](@ref) a scan of `path` reads through.
 
 Scanning is the expensive step, so the usual workflow is to scan once, `save`
 the result, and build from the saved manifest afterwards. Call
