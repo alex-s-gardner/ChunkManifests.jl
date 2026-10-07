@@ -1,5 +1,6 @@
 using HDF5
 import Rasters
+import TiffImages
 import Zarr
 import ZarrDatasets
 
@@ -55,10 +56,14 @@ _ra_decode(hv) = Union{Missing, Float64}[
         # carry no stability guarantee, so each is asserted here: a Rasters
         # upgrade that moves one fails loudly in this testset rather than
         # silently changing what a Raster over a manifest means.
-        var = _RA_CDM.variable(ZarrDatasets.ZarrDataset(ChunkManifest(path)), "h")
+        ds = ZarrDatasets.ZarrDataset(ChunkManifest(path))
+        var = _RA_CDM.variable(ds, "h")
         md = Rasters._metadata(var)
 
         @test Rasters.nokw isa Rasters.NoKW
+        # RasterStack takes its layer names from here, which drops dimension
+        # variables by the dataset's dimension names.
+        @test Rasters._layers(ds).names == ["h"]
         @test hasmethod(Rasters._dims, Tuple{_RA_CDM.AbstractVariable})
         @test Rasters._dims(var, Rasters.nokw, Rasters.nokw) isa Tuple
         @test md isa Rasters.Metadata
@@ -160,16 +165,15 @@ _ra_decode(hv) = Union{Missing, Float64}[
         cm = ChunkManifest(path; transport = counting)
         counting.count[] = 0
         st = Rasters.RasterStack(cm)
-        # Each layer resolves its own dimensions, but the coordinate chunks are
-        # fetched once and then served from the readahead cache, so three
-        # layers cost what one does.
+        # Building the stack reads the coordinate variables, which is what its
+        # dimensions are, and none of the data.
         @test counting.count[] == 4
 
         @test st isa Rasters.RasterStack
-        @test keys(st) == (:h, :time, :x)
+        # x and time are the dimensions, as Rasters makes them of a real Zarr
+        # store, not layers alongside h.
+        @test keys(st) == (:h,)
         @test size(st[:h]) == size(hv)
-        @test size(st[:x]) == (4,)
-        @test size(st[:time]) == (6,)
         @test map(Rasters.name, Rasters.dims(st)) == (:X, :Ti)
         @test eltype(st[:h]) == Union{Missing, Float64}
 
@@ -185,9 +189,11 @@ _ra_decode(hv) = Union{Missing, Float64}[
         @test isequal(exactstack[:h][1:2, 1:3], decoded[1:2, 1:3])
         @test exactcount[] == 1
 
-        renamed = Rasters.RasterStack(cm; name = [:height, :t, :across])
-        @test keys(renamed) == (:height, :t, :across)
-        @test_throws "name has 2 entries but 3 arrays" Rasters.RasterStack(cm; name = [:a, :b])
+        renamed = Rasters.RasterStack(cm; name = [:height])
+        @test keys(renamed) == (:height,)
+        @test_throws "name has 2 entries but 1 layers lie at the manifest root: [\"h\"]" Rasters.RasterStack(
+            cm; name = [:a, :b]
+        )
     end
 
     @testset "groups" begin
@@ -205,14 +211,42 @@ _ra_decode(hv) = Union{Missing, Float64}[
         @test occursin("no array lies at the manifest root", err.msg)
         @test occursin("[\"g1\", \"g2\"]", err.msg)
 
+        # A group's dimension variables are left out exactly as the root's are.
         st = Rasters.RasterStack(nested; group = "g1")
-        @test keys(st) == (:h, :time, :x)
+        @test keys(st) == (:h,)
         @test isequal(st[:h][:, :], decoded)
+        @test map(Rasters.name, Rasters.dims(st)) == (:X, :Ti)
 
         # A full manifest key reaches a nested array directly.
         r = Rasters.Raster(nested, "g2/h")
         @test Rasters.name(r) == :h
         @test isequal(r[:, :], decoded)
+
+        coordsonly = ChunkManifest(;
+            arrays = Dict{String, ManifestArray}("g/x" => arraysof(nested)["g1/x"])
+        )
+        @test_throws "is a dimension, bounds or grid-mapping variable, so none is a layer" Rasters.RasterStack(
+            coordsonly; group = "g"
+        )
+    end
+
+    @testset "GeoTIFF: each level has coordinates and the file's CRS" begin
+        cm = ChunkManifests.scan(GEOTIFF_JUNK_PATH, GeoTIFFDriver())
+        z = Zarr.zopen(cm)["0"]
+        r = Rasters.Raster(cm, "0/data")
+        @test map(Rasters.name, Rasters.dims(r)) == (:X, :Y)
+        @test collect(Rasters.lookup(r, Rasters.X)) == Array(z["x"])
+        @test collect(Rasters.lookup(r, Rasters.Y)) == Array(z["y"])
+        epsg = attrsof(arraysof(cm)["0/data"])["crs"]
+        @test Rasters.crs(r) == Rasters.EPSG(parse(Int, last(split(epsg, ':'))))
+        @test isequal(Array(Rasters.Raster(cm, "0/data"; raw = true)), Array(z["data"]))
+
+        # An explicit crs wins over the recorded one.
+        @test Rasters.crs(Rasters.Raster(cm, "0/data"; crs = Rasters.EPSG(3031))) == Rasters.EPSG(3031)
+
+        st = Rasters.RasterStack(cm; group = "0")
+        @test keys(st) == (:data,)
+        @test Rasters.crs(st[:data]) == Rasters.crs(r)
     end
 
     @testset "Raster(cm) needs exactly one array" begin
