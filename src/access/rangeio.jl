@@ -3,10 +3,11 @@
 # directories and tile offsets through it exactly as it would a local file.
 
 """
-    RangeIO(access::RangeAccess, uri, size) <: IO
+    RangeIO(access::RangeAccess, uri) <: IO
 
 Read-only, seekable `IO` over `uri`, served by `access`'s transport through the
-caches described in [`RangeAccess`](@ref).
+caches described in [`RangeAccess`](@ref). Opening one fetches both ends of
+the object, which is also how its size is learned.
 
 This is what lets a format reader work on a remote object without a local
 copy. A layout designed for it — a COG's tag directories, or HDF5's paged
@@ -17,8 +18,8 @@ mutable struct RangeIO <: IO
     pos::UInt64
 end
 
-RangeIO(access::RangeAccess, uri::AbstractString, total::Integer) =
-    RangeIO(_rangesource(access, uri, total), UInt64(0))
+RangeIO(access::RangeAccess, uri::AbstractString) =
+    RangeIO(_rangesource(access, uri), UInt64(0))
 
 Base.isreadable(::RangeIO) = true
 Base.iswritable(::RangeIO) = false
@@ -49,9 +50,13 @@ end
 """
     rangecost(io::RangeIO) -> NamedTuple
 
-Requests made and bytes fetched so far, against the object's size. What a scan
-cost, for deciding whether reading in place beat fetching the object.
+Requests made and bytes fetched so far, against the object's size, and how
+many of those requests were prefetches. What a scan cost, for deciding whether
+reading in place beat fetching the object.
 """
-rangecost(io::RangeIO) = (
-    requests = io.source.requests, bytes = io.source.bytes, size = Int(io.source.size),
+rangecost(io::RangeIO) = _rangecost(io.source)
+
+_rangecost(source::_RangeSource) = @lock source.lock (
+    requests = source.requests, bytes = source.bytes, size = Int(source.size),
+    prefetched = source.prefetched,
 )

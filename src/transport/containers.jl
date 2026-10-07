@@ -187,6 +187,11 @@ function objectsize(c::TransportContainers, uri::AbstractString)
     return objectsize(resolve_transport(c, uri), uri)
 end
 
+function _fetchends(c::TransportContainers, uri::AbstractString, head::Integer, tail::Integer)
+    _authorize!(c, uri)
+    return _fetchends(resolve_transport(c, uri), uri, head, tail)
+end
+
 """
     concurrency(c::TransportContainers) -> Integer
 

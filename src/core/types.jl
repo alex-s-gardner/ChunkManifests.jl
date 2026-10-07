@@ -585,32 +585,40 @@ struct DownloadAccess <: SourceAccess
 end
 
 """
-    RangeAccess(; transport=TransportContainers(), pagebuffer=4 * 1024 * 1024)
+    RangeAccess(; transport=TransportContainers(), initialread=4 * 1024 * 1024,
+                tailread=1024 * 1024, blocksize=1024 * 1024, pagebuffer=4 * 1024 * 1024,
+                cachelimit=256 * 1024 * 1024)
 
-Read the object in place through byte-range requests, so only the metadata
-libhdf5 actually touches is transferred.
+Read the object in place through byte-range requests, so only the metadata a
+scan touches is transferred.
 
 This is the mechanism [`AutoAccess`](@ref) chooses for a remote object. It
 serves libhdf5 through a virtual file driver backed by `transport`, which means
 every scheme the transports cover — `http://`, `https://`, `s3://` — and the
 `authorize` hook that governs them.
 
-`initialread` is how much of the head of the object to fetch in one request
-when it is opened, which every read inside that span is then served from. HDF5
-puts its superblock there and a file written for cloud access keeps the rest of
-its metadata nearby, so a span covering it turns a scan into one or two
-requests. It is capped at the object's size, so a small file costs one request
-whatever the setting; `0` fetches nothing up front.
+Opening the object fetches its first `initialread` and last `tailread` bytes
+in parallel, which is also how its size is learned, and every read inside
+either span is then served from memory. HDF5 puts its superblock and root group
+at the head and a file written for cloud access keeps the rest of its metadata
+nearby; much of what a writer emits on closing a file, such as a NetCDF4 root
+group's link index, lands at the tail. Both are capped at the object's size,
+and `0` skips that end.
+
+Everything outside those spans is fetched in aligned blocks of `blocksize`
+bytes, a run of adjacent misses as one request, and kept until `cachelimit`
+bytes are held. `blocksize = 0` fetches exactly what was asked for.
+
+Over HDF5, the nodes of a chunk index are fetched ahead of libhdf5, all the
+children of a node at once, as soon as the node itself has been read. libhdf5
+walks the index one node at a time, and those nodes are scattered among the
+chunks they index, so this turns one round trip per node into one per level of
+the index.
 
 `pagebuffer` sizes libhdf5's own page buffer. A file written with paged
 metadata aggregation, as a cloud-optimized product is, then has its metadata
 read in a few large aligned requests rather than many small scattered ones;
 `0` turns the buffer off.
-
-Scanning a 331 KiB NetCDF4 granule over HTTPS this way takes 11 requests and
-2905 bytes, under 1% of the file. The ratio improves with file size, which is
-the point: [`DownloadAccess`](@ref) transfers the whole object to read the same
-metadata.
 
 !!! note
     The driver is registered with libhdf5 through a struct whose layout is not
@@ -622,6 +630,7 @@ metadata.
 struct RangeAccess <: SourceAccess
     transport::AbstractTransport
     initialread::Int
+    tailread::Int
     pagebuffer::Int
     blocksize::Int
     cachelimit::Int
@@ -630,18 +639,21 @@ end
 function RangeAccess(;
         transport::AbstractTransport = TransportContainers(),
         initialread::Integer = 4 * 1024 * 1024,
+        tailread::Integer = 1024 * 1024,
         pagebuffer::Integer = 4 * 1024 * 1024,
         blocksize::Integer = 1024 * 1024,
         cachelimit::Integer = 256 * 1024 * 1024,
     )
     initialread >= 0 ||
         throw(ArgumentError("initialread must be nonnegative, got $initialread"))
+    tailread >= 0 || throw(ArgumentError("tailread must be nonnegative, got $tailread"))
     pagebuffer >= 0 ||
         throw(ArgumentError("pagebuffer must be nonnegative, got $pagebuffer"))
     blocksize >= 0 || throw(ArgumentError("blocksize must be nonnegative, got $blocksize"))
     cachelimit > 0 || throw(ArgumentError("cachelimit must be positive, got $cachelimit"))
     return RangeAccess(
-        transport, Int(initialread), Int(pagebuffer), Int(blocksize), Int(cachelimit)
+        transport, Int(initialread), Int(tailread), Int(pagebuffer), Int(blocksize),
+        Int(cachelimit),
     )
 end
 

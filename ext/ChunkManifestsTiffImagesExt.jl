@@ -751,17 +751,9 @@ function _gt_scan(
         driver::ChunkManifests.GeoTIFFDriver, uri::AbstractString,
         access::ChunkManifests.RangeAccess; level,
     )
-    total = ChunkManifests.objectsize(access.transport, uri)
-    total === nothing && throw(
-        ArgumentError(
-            "RangeAccess cannot scan $(repr(uri)): its size is not known, and a TIFF is " *
-                "read by seeking within it. Scan with DownloadAccess(), which fetches " *
-                "the object once and works anywhere",
-        )
-    )
-    io = ChunkManifests.RangeIO(access, uri, total)
+    io = ChunkManifests.RangeIO(access, uri)
     return _gt_build(
-        driver, String(uri), total, _gt_readpages(io, uri),
+        driver, String(uri), filesize(io), _gt_readpages(io, uri),
         ChunkManifests._scantransport(access); level,
     )
 end

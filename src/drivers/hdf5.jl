@@ -598,27 +598,22 @@ function _scan_hdf5_open(
 end
 
 # Reads the object in place through byte-range requests, so nothing moves but
-# the metadata libhdf5 asks for. There is no local copy to take a size from,
-# but one was needed to address the object at all, so it is recorded.
+# the metadata libhdf5 asks for. Opening the source fetches both ends of the
+# object and learns its size, which is recorded. That happens before
+# `HDF5_IO` is taken, so scans of several objects make those requests
+# concurrently while libhdf5 serves one at a time.
 function _scan_hdf5(
         driver::HDF5Driver, uri::AbstractString, access::RangeAccess;
         group::AbstractString, siblings::Bool,
     )
-    total = objectsize(access.transport, uri)
-    total === nothing && throw(
-        ArgumentError(
-            "RangeAccess cannot scan $(repr(uri)): its size is not known, and libhdf5 " *
-                "needs one to address the object. Scan with DownloadAccess(), which " *
-                "fetches the object once and works anywhere",
-        )
-    )
+    source = _rangesource(access, uri)
     table = PathTable()
     arrays = Dict{String, ManifestArray}()
     groupattrs = Dict{String, Any}()
     lock(HDF5_IO) do
-        withrangefile(access, uri, total) do f
+        withrangefile(access, source) do f
             _scan_hdf5_walk!(
-                arrays, table, groupattrs, f, String(uri), total; group, siblings
+                arrays, table, groupattrs, f, String(uri), source.size; group, siblings
             )
         end
     end

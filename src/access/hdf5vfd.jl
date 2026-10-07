@@ -207,12 +207,15 @@ function _rangedriver()
 end
 
 """
-    withrangefile(f, access::RangeAccess, uri, size)
+    withrangefile(f, access::RangeAccess, source::_RangeSource)
 
-Opens `uri` through the range driver and hands the open `HDF5.File` to `f`,
-keeping the source registered for exactly as long as libhdf5 holds it.
+Opens `source` through the range driver and hands the open `HDF5.File` to
+`f`, keeping the source registered for exactly as long as libhdf5 holds it.
+B-tree nodes are prefetched while it is open (see src/access/h5prefetch.jl),
+and every prefetch has finished by the time this returns.
 """
-function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, total::Integer)
+function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
+    uri = source.uri
     _rangevfdsupported() || throw(
         ArgumentError(
             "RangeAccess cannot scan $(repr(uri)): it drives libhdf5 through a virtual " *
@@ -223,10 +226,11 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
         )
     )
     driver = _rangedriver()
+    source.h5sizes = _h5sizes(source)
     key = @lock _RANGE_LOCK begin
         _RANGE_NEXTKEY[] += 1
         k = _RANGE_NEXTKEY[]
-        _RANGE_SOURCES[k] = _rangesource(access, uri, total)
+        _RANGE_SOURCES[k] = source
         k
     end
     fapl = HDF5.API.h5p_create(HDF5.API.H5P_FILE_ACCESS)
@@ -252,7 +256,7 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
         fid = HDF5.API.h5f_open(
             _RANGE_VFD_SCHEME * string(key), HDF5.API.H5F_ACC_RDONLY, fapl
         )
-        file = HDF5.File(fid, String(uri))
+        file = HDF5.File(fid, uri)
         try
             f(file)
         finally
@@ -261,5 +265,6 @@ function withrangefile(f::Function, access::RangeAccess, uri::AbstractString, to
     finally
         HDF5.API.h5p_close(fapl)
         @lock _RANGE_LOCK delete!(_RANGE_SOURCES, key)
+        _drainprefetches!(source)
     end
 end

@@ -177,3 +177,31 @@ function fetchranges(t::AbstractTransport, uri, ranges::AbstractVector{ByteRange
 
     return _assemble(ranges, mapping, blocks)
 end
+
+"""
+    _fetchends(t::AbstractTransport, uri, head::Integer, tail::Integer)
+        -> (headbytes, tailbytes, size)
+
+The first `head` bytes of `uri`, capped at its size, the last `tail` bytes it
+does not already hold, and the size itself. Opening an object for a remote
+scan starts here, and a round trip there is paid once per file scanned.
+
+This default asks [`objectsize`](@ref) first and then fetches both ends
+concurrently, two round trips in all. A transport whose ranged responses state
+the object's size overrides it to need no request for the size.
+"""
+function _fetchends(t::AbstractTransport, uri::AbstractString, head::Integer, tail::Integer)
+    total = objectsize(t, uri)
+    total === nothing && throw(
+        ArgumentError(
+            "the size of $(repr(uri)) is not known, and reading it in place needs one; " *
+                "fetch the object instead with DownloadAccess()",
+        )
+    )
+    total = UInt64(total)
+    h = min(UInt64(head), total)
+    tl = min(UInt64(tail), total - h)
+    headtask = Threads.@spawn h == 0 ? UInt8[] : fetchrange(t, uri, ByteRange(0, h))
+    tailbytes = tl == 0 ? UInt8[] : fetchrange(t, uri, ByteRange(total - tl, tl))
+    return fetch(headtask), tailbytes, total
+end

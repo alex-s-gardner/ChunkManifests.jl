@@ -102,6 +102,11 @@ end
         t = ChunkManifests.S3Transport(bucket)
         data = ChunkManifests.fetchrange(t, key, ChunkManifests.ByteRange(0, 16))
         @test length(data) == 16
+        total = ChunkManifests.objectsize(t, key)
+        head, tail, size = ChunkManifests._fetchends(t, key, 8, 8)
+        @test size == total
+        @test head == data[1:8]
+        @test tail == ChunkManifests.fetchrange(t, key, ChunkManifests.ByteRange(total - 8, 8))
     else
         @test_skip "set CHUNKMANIFESTS_TEST_S3=true, CHUNKMANIFESTS_TEST_S3_BUCKET and " *
             "CHUNKMANIFESTS_TEST_S3_KEY (a real, readable object, >=16 bytes) " *

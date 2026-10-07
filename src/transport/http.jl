@@ -138,3 +138,113 @@ function objectsize(t::HTTPTransport, uri::AbstractString)
     )
     return parse(UInt64, m[1])
 end
+
+# A ranged GET whose range may run past the end of the object, which a server
+# answers by clipping it. Returns the body, the offset of its first byte, and
+# the object's size: a `206` states both in `Content-Range`, a `200` is a
+# server ignoring `Range` and sending the whole object, and a `416` is a range
+# holding no byte of an empty object, with the size in `Content-Range`.
+#
+# The response is streamed so that `onsize(total)` runs as soon as the headers
+# arrive, before the body has, which is how a second request can be started
+# on what the first reveals without waiting for its bytes.
+function _httpclipped(
+        t::HTTPTransport, uri::AbstractString, rangeheader::AbstractString;
+        onsize = Returns(nothing),
+    )
+    body = UInt8[]
+    start = total = UInt64(0)
+    status = 0
+    try
+        HTTP.open(
+            "GET", uri, ["Range" => rangeheader];
+            client = t.client, retries = t.retries, status_exception = false,
+        ) do stream
+            resp = HTTP.startread(stream)
+            status = resp.status
+            contentrange = HTTP.header(resp, "Content-Range", "")
+            if status == 206
+                m = match(r"^bytes\s+(\d+)-\d+/(\d+)$", contentrange)
+                m === nothing && error(
+                    "HTTP 206 for $rangeheader from $(repr(uri)) carried no usable " *
+                        "Content-Range: $(repr(contentrange))",
+                )
+                start, total = parse(UInt64, m[1]), parse(UInt64, m[2])
+                onsize(total)
+            elseif status == 416
+                m = match(r"^bytes\s+\*/(\d+)$", contentrange)
+                m === nothing && error(
+                    "HTTP 416 for $rangeheader from $(repr(uri)) carried no size in " *
+                        "Content-Range: $(repr(contentrange))",
+                )
+                total = parse(UInt64, m[1])
+                onsize(total)
+            end
+            body = read(stream)
+        end
+    catch err
+        throw(
+            ErrorException("HTTP request failed fetching $rangeheader from $(repr(uri)): $err")
+        )
+    end
+    status in (200, 206, 416) ||
+        error("HTTP $status fetching $rangeheader from $(repr(uri))")
+    status == 200 && return body, UInt64(0), UInt64(length(body))
+    status == 416 && return UInt8[], UInt64(0), total
+    return body, start, total
+end
+
+# The bytes [from, from + n) out of a body that starts at offset `start`.
+function _bodyspan(body::Vector{UInt8}, start::UInt64, from::UInt64, n::UInt64, uri)
+    (from >= start && from + n <= start + length(body)) || error(
+        "response from $(repr(uri)) covers bytes [$start, $(start + length(body))), " *
+            "not the requested [$from, $(from + n))",
+    )
+    lo = Int(from - start) + 1
+    return lo == 1 && n == length(body) ? body : body[lo:(lo + Int(n) - 1)]
+end
+
+"""
+    _fetchends(t::HTTPTransport, uri, head, tail) -> (headbytes, tailbytes, size)
+
+Both ends of `uri` without a request spent sizing it. The request for the
+head states the object's size in its response headers, and the request for
+the tail goes out as soon as they arrive, so the two overlap and the tail
+asks only for bytes the head does not hold.
+"""
+function _fetchends(t::HTTPTransport, uri::AbstractString, head::Integer, tail::Integer)
+    _httpuri(uri)
+    if head == 0
+        tail == 0 && return UInt8[], UInt8[], objectsize(t, uri)
+        body, start, total = _httpclipped(t, uri, "bytes=-$tail")
+        tl = min(UInt64(tail), total)
+        return UInt8[], _bodyspan(body, start, total - tl, tl, uri), total
+    end
+
+    tailtask = Ref{Union{Nothing, Task}}(nothing)
+    function starttail(total)
+        tl = min(UInt64(tail), total - min(UInt64(head), total))
+        tl == 0 && return nothing
+        tailtask[] = Threads.@spawn _httpclipped(t, uri, "bytes=$(total - tl)-$(total - 1)")
+        return nothing
+    end
+    body, start, total = _httpclipped(t, uri, "bytes=0-$(head - 1)"; onsize = starttail)
+
+    h = min(UInt64(head), total)
+    headbytes = h == 0 ? UInt8[] : _bodyspan(body, start, UInt64(0), h, uri)
+    tl = min(UInt64(tail), total - h)
+    tailbytes = if tl == 0
+        UInt8[]
+    elseif tailtask[] === nothing
+        # The server sent the whole object in answer to the head request.
+        _bodyspan(body, start, total - tl, tl, uri)
+    else
+        tbody, tstart, ttotal = fetch(tailtask[])
+        ttotal == total || error(
+            "$(repr(uri)) reported sizes $total and $ttotal in two responses; it " *
+                "changed while being read",
+        )
+        _bodyspan(tbody, tstart, total - tl, tl, uri)
+    end
+    return headbytes, tailbytes, total
+end

@@ -54,9 +54,15 @@ function _handle(ts::_TestServer, req::HTTP.Request)
         return HTTP.Response(200, route.bytes)
     end
 
+    suffix = match(r"^bytes=-(\d+)$", rangeheader)
     m = match(r"^bytes=(\d+)-(\d+)$", rangeheader)
-    m === nothing && return HTTP.Response(400, "malformed Range: $rangeheader")
-    a, b = parse(Int, m[1]), parse(Int, m[2])
+    (m === nothing && suffix === nothing) &&
+        return HTTP.Response(400, "malformed Range: $rangeheader")
+    a, b = if suffix === nothing
+        parse(Int, m[1]), parse(Int, m[2])
+    else
+        max(0, len - parse(Int, suffix[1])), len - 1
+    end
     (a > b || a >= len) && return HTTP.Response(416, ["Content-Range" => "bytes */$len"])
     b = min(b, len - 1)
     return HTTP.Response(
@@ -293,6 +299,60 @@ end
 
                 @test zv_http[:, :, :] == data
                 @test zv_http[5:7, 8:11, 10:13] == zv_direct[5:7, 8:11, 10:13]
+            end
+        end
+    end
+
+    @testset "both ends of an object without a request to size it" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/ends.bin", content)
+            uri = base * "/ends.bin"
+            t = HTTPTransport()
+            ends(head, tail) = ChunkManifests._fetchends(t, uri, head, tail)
+
+            @testset "head and tail, each one request" begin
+                before = _hits(ts, "/ends.bin")
+                @test ends(64, 32) == (content[1:64], content[225:256], UInt64(nbytes))
+                @test _hits(ts, "/ends.bin") - before == 2
+            end
+            @testset "the tail asks only for what the head does not hold" begin
+                @test ends(200, 100) == (content[1:200], content[201:256], UInt64(nbytes))
+            end
+            @testset "a head covering the object makes the only request" begin
+                before = _hits(ts, "/ends.bin")
+                @test ends(1000, 32) == (content, UInt8[], UInt64(nbytes))
+                @test _hits(ts, "/ends.bin") - before == 1
+            end
+            @testset "no head is a suffix request" begin
+                @test ends(0, 32) == (UInt8[], content[225:256], UInt64(nbytes))
+                @test ends(0, 1000) == (UInt8[], content, UInt64(nbytes))
+            end
+            @testset "neither end still learns the size" begin
+                @test ends(0, 0) == (UInt8[], UInt8[], UInt64(nbytes))
+            end
+            @testset "the generic default agrees" begin
+                mktempdir() do dir
+                    path = joinpath(dir, "ends.bin")
+                    write(path, content)
+                    for (h, tl) in ((64, 32), (200, 100), (1000, 32), (0, 32), (0, 0))
+                        @test ChunkManifests._fetchends(LocalTransport(), path, h, tl) == ends(h, tl)
+                    end
+                end
+            end
+        end
+
+        _withserver() do ts, base
+            _addroute!(ts, "/whole.bin", content; ignorerange = true)
+            _addroute!(ts, "/empty.bin", UInt8[])
+            t = HTTPTransport()
+            @testset "a server ignoring Range answers both ends at once" begin
+                @test ChunkManifests._fetchends(t, base * "/whole.bin", 64, 32) ==
+                    (content[1:64], content[225:256], UInt64(nbytes))
+                @test _hits(ts, "/whole.bin") == 1
+            end
+            @testset "an empty object" begin
+                @test ChunkManifests._fetchends(t, base * "/empty.bin", 64, 32) ==
+                    (UInt8[], UInt8[], UInt64(0))
             end
         end
     end
