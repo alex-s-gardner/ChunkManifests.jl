@@ -1,3 +1,4 @@
+import HDF5
 import HTTP
 import JSON
 import Zarr
@@ -105,9 +106,12 @@ end
             end
 
             @testset "lazy reload: columns are Zarr.ZArray, not materialized, with correct values" begin
-                @test parent(manifest2.index) isa Zarr.ZArray{UInt32}
-                @test parent(manifest2.offset) isa Zarr.ZArray{UInt64}
-                @test parent(manifest2.nbytes) isa Zarr.ZArray{UInt64}
+                # Each column is a stretch of the manifest's one set of
+                # columns, so the ZArray is a few wrappers down.
+                backing(a) = (p = parent(a); p === a ? a : backing(p))
+                @test backing(manifest2.index) isa Zarr.ZArray{UInt32}
+                @test backing(manifest2.offset) isa Zarr.ZArray{UInt64}
+                @test backing(manifest2.nbytes) isa Zarr.ZArray{UInt64}
                 for I in CartesianIndices(gridsize)
                     @test manifest2.index[I] == manifest.index[I]
                     @test manifest2.offset[I] == manifest.offset[I]
@@ -211,7 +215,7 @@ end
             # 200 cells chunked 8 at a time: 25 manifest chunks per column.
             fmt = ZarrManifest(; chunkcells = 8)
             outdir = ChunkManifests.save(joinpath(dir, "out"), group, fmt)
-            coldir = joinpath(outdir, "arrays", "0")
+            coldir = joinpath(outdir, "columns")
 
             allcolumnfiles() = [
                 joinpath(root, f)
@@ -341,7 +345,75 @@ end
                 doc = JSON.parse(read(jsonpath, String); dicttype = Dict{String, Any})
                 doc["arrays"][1]["manifest"]["gridsize"] = [2]
                 write(jsonpath, JSON.json(doc))
-                @test_throws "chunk grid" ChunkManifest(outdir, fmt)
+                @test_throws "accounts for 2 chunk-grid cells, but its columns hold 4" ChunkManifest(
+                    outdir, fmt
+                )
+            end
+
+            @testset "an array's recorded start contradicts the arrays before it" begin
+                two = ChunkManifest(;
+                    arrays = Dict{String, ManifestArray}("a" => va, "b" => va),
+                )
+                outdir = ChunkManifests.save(joinpath(dir, "out4"), two, fmt)
+                jsonpath = joinpath(outdir, "manifest.json")
+                doc = JSON.parse(read(jsonpath, String); dicttype = Dict{String, Any})
+                doc["arrays"][2]["manifest"]["start"] = 1
+                write(jsonpath, JSON.json(doc))
+                @test_throws "starting at 1 in the columns, but the arrays before it hold 4" ChunkManifest(
+                    outdir, fmt
+                )
+            end
+        end
+    end
+
+    @testset "many arrays share one table and one set of columns" begin
+        mktempdir() do dir
+            path = joinpath(dir, "many.h5")
+            HDF5.h5open(path, "w") do f
+                for k in 1:30
+                    d = HDF5.create_dataset(f, "g$(k % 3)/v$k", Float32, (12,); chunk = (k % 4 + 1,))
+                    write(d, rand(Float32, 12))
+                end
+                c = HDF5.create_dataset(f, "contiguous", Float64, (5,))
+                write(c, rand(5))
+            end
+            cm = scan(path, HDF5Driver())
+            outdir = ChunkManifests.save(joinpath(dir, "out"), cm, ZarrManifest(; chunkcells = 7))
+            # The same few files however many arrays there are.
+            @test sort(readdir(outdir)) == ["columns", "manifest.json"]
+            @test sort(readdir(joinpath(outdir, "columns"))) == ["index", "nbytes", "offset"]
+
+            loaded = ChunkManifest(outdir)
+            @test sort(collect(keys(arraysof(loaded)))) == sort(collect(keys(arraysof(cm))))
+            for (key, a) in arraysof(cm)
+                b = arraysof(loaded)[key]
+                # Opening shares the one table rather than rebuilding the maps.
+                @test tableof(chunkmapof(b)) === tableof(loaded)
+                m, n = chunkmapof(a), chunkmapof(b)
+                @test chunkgridsize(m) == chunkgridsize(n)
+                for I in CartesianIndices(chunkgridaxes(m))
+                    @test chunklocation(m, I) == chunklocation(n, I)
+                end
+            end
+            @test Zarr.zopen(loaded)["g1"]["v7"][:] == Zarr.zopen(cm)["g1"]["v7"][:]
+        end
+    end
+
+    @testset "format version 2 is still read" begin
+        # Written by the version 2 writer: one table and set of columns per
+        # array, under arrays/<n>/. Its chunks name test/data/v2source.h5 by
+        # a relative path.
+        fixture = joinpath(@__DIR__, "data", "v2manifest")
+        @test JSON.parse(read(joinpath(fixture, "manifest.json"), String))["format_version"] == 2
+        old = ChunkManifest(fixture)
+        fresh = scan(joinpath(@__DIR__, "data", "v2source.h5"), HDF5Driver())
+        @test sort(collect(keys(arraysof(old)))) == ["a", "b", "c"]
+        for key in ("a", "b", "c")
+            m, n = chunkmapof(arraysof(old)[key]), chunkmapof(arraysof(fresh)[key])
+            @test chunkgridsize(m) == chunkgridsize(n)
+            for I in CartesianIndices(chunkgridaxes(m))
+                @test chunklocation(m, I)[2:3] == chunklocation(n, I)[2:3]
+                @test chunklocation(m, I)[1] == "v2source.h5"
             end
         end
     end
@@ -359,7 +431,7 @@ end
             store = Zarr.DictStore()
             ChunkManifests.save(store, "", group, fmt)
             @test store["manifest.json"] !== nothing
-            @test store["arrays/0/index/.zarray"] !== nothing
+            @test store["columns/index/.zarray"] !== nothing
 
             group2 = ChunkManifest(store, "", fmt)
             manifest2 = chunkmapof(arraysof(group2)["a"])

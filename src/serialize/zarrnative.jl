@@ -11,42 +11,43 @@
 # On-disk layout, where `path` is the directory given to save/load:
 #
 #   path/
-#     manifest.json           -- format_version, group attrs/provenance, and
-#                                 one entry per array: its shape, chunkshape,
-#                                 dtype, fill value, compressor, filters,
-#                                 attrs and dimnames (all in Julia dimension
-#                                 order, as ManifestArray stores them), plus
-#                                 its manifest: a PathTable, and either an
-#                                 AffineChunkMap's handful of fields or a
-#                                 ExplicitChunkMap's chunk grid size, inline-chunk
-#                                 bytes, and the name of its column directory.
-#     arrays/<n>/index/        -- Zarr v2 array of UInt32 over the chunk grid.
-#     arrays/<n>/offset/       -- Zarr v2 array of UInt64, delta-filtered.
-#     arrays/<n>/nbytes/       -- Zarr v2 array of UInt64.
+#     manifest.json      -- format_version, group attrs/provenance, the
+#                           manifest's one PathTable, and one entry per array:
+#                           its shape, chunkshape, dtype, fill value,
+#                           compressor, filters, attrs and dimnames (all in
+#                           Julia dimension order, as ManifestArray stores
+#                           them), plus its chunk map: an AffineChunkMap's
+#                           handful of fields, or an ExplicitChunkMap's chunk
+#                           grid size, inline-chunk bytes, and `start`, where
+#                           its cells begin in the columns.
+#     columns/index/     -- 1-D Zarr v2 array of UInt32.
+#     columns/offset/    -- 1-D Zarr v2 array of UInt64, delta-filtered.
+#     columns/nbytes/    -- 1-D Zarr v2 array of UInt64.
 #
-# `<n>` is an arbitrary integer assigned when saving, recorded in
-# manifest.json as each array's "dir", rather than derived from the array's
-# own Zarr path: that path may be "" or nest ("grp/sub/c"), which is not safe
-# to reuse directly as a directory name alongside sibling arrays. An
-# AffineChunkMap array has no `arrays/<n>/` directory at all: its fields are
-# O(1) and live entirely in manifest.json.
+# The columns hold every ExplicitChunkMap's cells in turn, in the order the
+# arrays are listed, each grid flattened in Julia (column-major) order. One
+# set of columns for the whole manifest keeps the number of files, and of
+# requests to open them from object storage, independent of how many arrays
+# it holds. `start` is redundant with the arrays' order and sizes, and is
+# checked against them on load. An AffineChunkMap has no cells: its fields
+# are O(1) and live entirely in manifest.json.
 #
-# The three column arrays share one array's chunk grid shape, addressed in
-# the same Julia dimension order as `chunkgridsize` (shape/chunk reversal for
-# Zarr's own C order is Zarr.jl's concern when it writes `.zarray`, not
-# this format's). `offset` carries a delta filter because byte offsets within
-# one source file are usually near-monotonic; encoding is Julia `diff`,
-# decoding `cumsum`, both over `UInt64`, so a decreasing offset wraps on
-# encode and unwraps back to the exact original value on decode by the same
-# modular arithmetic, not by accident.
+# `offset` carries a delta filter because byte offsets within one source file
+# are usually near-monotonic; encoding is Julia `diff`, decoding `cumsum`,
+# both over `UInt64`, so a decreasing offset wraps on encode and unwraps back
+# to the exact original value on decode by the same modular arithmetic, not
+# by accident.
 #
 # Zarr arrays have no notion of an axis offset, so a manifest's chunk grid is
 # normalized to standard 1-based `Base.OneTo` axes on save: values round-trip
 # exactly, axis offsets do not.
 #
+# Format version 2 kept a table and three column arrays per array, under
+# `arrays/<n>/`, and is still read.
+#
 # `path` is resolved to a single `(store, prefix)` pair through
 # `Zarr.storefromstring` (see `_resolvestore` below), and everything above —
-# `manifest.json`, each `arrays/<n>/<column>` — is addressed as a key or a
+# `manifest.json` and each column — is addressed as a key or a
 # `zcreate`/`zopen` `path` kwarg under that one store rather than through
 # separate filesystem operations. A local directory still ends up with
 # exactly the layout above, since `Zarr.storefromstring` falls back to a
@@ -55,6 +56,7 @@
 # loading a manifest on object storage reuses this same code path.
 
 const _ZARR_MANIFEST_ARRAYS_DIR = "arrays"
+const _ZARR_MANIFEST_COLUMNS_DIR = "columns"
 const _ZARR_MANIFEST_JSON = "manifest.json"
 
 # A string that `Zarr.storefromstring` resolves to a store other than a local
@@ -111,12 +113,6 @@ function _compressor_for(fmt::ZarrManifest)
     )
 end
 
-# `fmt.chunkcells` applied along every chunk-grid dimension, clamped to that
-# dimension's own length so a grid smaller than `chunkcells` becomes one
-# manifest chunk rather than one padded to `chunkcells`.
-_manifestchunks(fmt::ZarrManifest, gridsize::NTuple{N, Int}) where {N} =
-    ntuple(d -> min(fmt.chunkcells, gridsize[d]), N)
-
 # The position `I` (addressed over `ax`, which may start anywhere) occupies
 # once that axis is renumbered from 1, preserving relative position.
 _torigin1based(I::CartesianIndex, ax) = CartesianIndex(Tuple(I) .- first.(ax) .+ 1)
@@ -152,41 +148,18 @@ function _cartesian_from_key(key::AbstractString, N::Integer)
     return CartesianIndex(ntuple(d -> parse(Int, parts[d]), N))
 end
 
-function _save_chunkmanifest(
-        store::Zarr.AbstractStore, prefix::AbstractString, manifest::ExplicitChunkMap{N}, fmt::ZarrManifest
-    ) where {N}
+# Appends `manifest`'s cells to the three column buffers and returns the
+# array's chunk-map document.
+function _save_chunkmanifest!(columns, manifest::ExplicitChunkMap{N}) where {N}
     gridaxes = chunkgridaxes(manifest)
     gridsize = chunkgridsize(manifest)
-
-    index = Array{UInt32}(undef, gridsize)
-    offset = Array{UInt64}(undef, gridsize)
-    nbytes = Array{UInt64}(undef, gridsize)
-    copyto!(index, manifest.index)
-    copyto!(offset, manifest.offset)
-    copyto!(nbytes, manifest.nbytes)
-
-    manifestchunks = _manifestchunks(fmt, gridsize)
-
-    za_index = Zarr.zcreate(
-        UInt32, store, gridsize...;
-        path = _joinkey(prefix, "index"), chunks = manifestchunks, compressor = _compressor_for(fmt), filters = nothing,
-    )
-    za_nbytes = Zarr.zcreate(
-        UInt64, store, gridsize...;
-        path = _joinkey(prefix, "nbytes"), chunks = manifestchunks, compressor = _compressor_for(fmt), filters = nothing,
-    )
-    # astype must equal dtype: Zarr.jl's DeltaFilter JSON parser (getfilter)
-    # drops astype when it differs from dtype, silently reinterpreting as the
-    # single-type form; keeping them equal avoids relying on that path.
-    za_offset = Zarr.zcreate(
-        UInt64, store, gridsize...;
-        path = _joinkey(prefix, "offset"), chunks = manifestchunks, compressor = _compressor_for(fmt),
-        filters = (Zarr.DeltaFilter{UInt64}(),),
-    )
-
-    copyto!(za_index, index)
-    copyto!(za_nbytes, nbytes)
-    copyto!(za_offset, offset)
+    index, offset, nbytes = columns
+    start = length(index)
+    # Through an Array of the grid's size, so a column with any axes is
+    # flattened in the same column-major order the loader reshapes by.
+    append!(index, vec(copyto!(Array{UInt32}(undef, gridsize), manifest.index)))
+    append!(offset, vec(copyto!(Array{UInt64}(undef, gridsize), manifest.offset)))
+    append!(nbytes, vec(copyto!(Array{UInt64}(undef, gridsize), manifest.nbytes)))
 
     # Inline chunks are the only raw bytes in this otherwise textual document,
     # so they are base64-encoded, matching how the kerchunk format carries them.
@@ -198,16 +171,39 @@ function _save_chunkmanifest(
     return Dict{String, Any}(
         "kind" => "chunk",
         "gridsize" => collect(gridsize),
-        "tableof" => _pathtable_to_json(manifest.table),
+        "start" => start,
         "inline" => inline,
     )
+end
+
+function _save_columns(store::Zarr.AbstractStore, prefix::AbstractString, columns, fmt::ZarrManifest)
+    index, offset, nbytes = columns
+    n = length(index)
+    chunks = (max(1, min(fmt.chunkcells, n)),)
+    compressor = _compressor_for(fmt)
+    za_index = Zarr.zcreate(
+        UInt32, store, n; path = _joinkey(prefix, "index"), chunks, compressor, filters = nothing,
+    )
+    za_nbytes = Zarr.zcreate(
+        UInt64, store, n; path = _joinkey(prefix, "nbytes"), chunks, compressor, filters = nothing,
+    )
+    # astype must equal dtype: Zarr.jl's DeltaFilter JSON parser (getfilter)
+    # drops astype when it differs from dtype, silently reinterpreting as the
+    # single-type form; keeping them equal avoids relying on that path.
+    za_offset = Zarr.zcreate(
+        UInt64, store, n; path = _joinkey(prefix, "offset"), chunks, compressor,
+        filters = (Zarr.DeltaFilter{UInt64}(),),
+    )
+    copyto!(za_index, index)
+    copyto!(za_nbytes, nbytes)
+    copyto!(za_offset, offset)
+    return nothing
 end
 
 function _save_affinemanifest(manifest::AffineChunkMap)
     return Dict{String, Any}(
         "kind" => "affine",
         "gridsize" => collect(manifest.gridsize),
-        "tableof" => _pathtable_to_json(manifest.table),
         "fileindex" => manifest.fileindex,
         "base" => manifest.base,
         "strides" => collect(manifest.strides),
@@ -238,10 +234,9 @@ Write `group` as a [`ZarrManifest`](@ref) into `store` under the key prefix
 store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
 """
 function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
-    arraysprefix = _joinkey(prefix, _ZARR_MANIFEST_ARRAYS_DIR)
-
+    columns = (UInt32[], UInt64[], UInt64[])
+    explicit = false
     arraydocs = Dict{String, Any}[]
-    dircounter = 0
     for key in sort!(collect(keys(arraysof(group))))
         va = arraysof(group)[key]
         manifest = chunkmapof(va)
@@ -259,12 +254,9 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
         )
 
         if manifest isa ExplicitChunkMap
-            dirname = string(dircounter)
-            dircounter += 1
-            doc["dir"] = dirname
-            doc["manifest"] = _save_chunkmanifest(store, _joinkey(arraysprefix, dirname), manifest, fmt)
+            explicit = true
+            doc["manifest"] = _save_chunkmanifest!(columns, manifest)
         elseif manifest isa AffineChunkMap
-            doc["dir"] = nothing
             doc["manifest"] = _save_affinemanifest(manifest)
         else
             throw(
@@ -277,10 +269,12 @@ function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkMan
         push!(arraydocs, doc)
     end
 
+    explicit && _save_columns(store, _joinkey(prefix, _ZARR_MANIFEST_COLUMNS_DIR), columns, fmt)
     toplevel = Dict{String, Any}(
         "format_version" => MANIFEST_FORMAT_VERSION,
         "group_attrs" => attrsof(group),
         "provenance" => provenanceof(group),
+        "table" => _pathtable_to_json(tableof(group)),
         "arrays" => arraydocs,
     )
     store[prefix, _ZARR_MANIFEST_JSON] = Vector{UInt8}(codeunits(JSON.json(toplevel)))
@@ -352,6 +346,7 @@ function Base.getindex(c::_ZarrColumn{T, N}, I::Vararg{Int, N}) where {T, N}
     return @lock c.lock _loadblock!(c, b)[J...]
 end
 
+# Format version 2: one array's columns, under `arrays/<n>/`.
 function _load_chunkmanifest(
         store::Zarr.AbstractStore, arrayprefix::AbstractString, table::PathTable, gridsize::NTuple{N, Int},
         mdoc, label::AbstractString,
@@ -377,6 +372,7 @@ function _load_chunkmanifest(
     return ExplicitChunkMap(table, index, offset, nbytes; inline)
 end
 
+# Format version 2: one array's chunk map, over a table of its own.
 function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, arraydoc, label::AbstractString)
     mdoc = arraydoc["manifest"]
     kind = mdoc["kind"]
@@ -443,7 +439,7 @@ function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::Z
 
     doc = JSON.parse(String(jsonbytes); dicttype = Dict{String, Any})
     version = get(doc, "format_version", nothing)
-    version == MANIFEST_FORMAT_VERSION || throw(
+    version in _READABLE_FORMAT_VERSIONS || throw(
         ArgumentError(
             version === nothing ?
                 "load: \"$label\" has no \"format_version\" field; expected $MANIFEST_FORMAT_VERSION" :
@@ -451,11 +447,16 @@ function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::Z
         )
     )
 
+    maps, table = if version == MANIFEST_FORMAT_VERSION
+        _load_chunkmaps(store, prefix, doc, label)
+    else
+        [_load_manifestpart(store, prefix, a, label) for a in doc["arrays"]], nothing
+    end
+
     arrays = Dict{String, ManifestArray}()
-    for arraydoc in doc["arrays"]
+    for (arraydoc, manifest) in zip(doc["arrays"], maps)
         key = arraydoc["path"]::AbstractString
         T = Zarr.typestr(arraydoc["dtype"]::AbstractString)
-        manifest = _load_manifestpart(store, prefix, arraydoc, label)
         shape = Tuple(arraydoc["shape"])
         chunkshape = Tuple(arraydoc["chunkshape"])
 
@@ -471,7 +472,78 @@ function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::Z
 
     return ChunkManifest(;
         arrays,
+        table,
         attrs = Dict{String, Any}(doc["group_attrs"]),
         provenance = Dict{String, Any}(doc["provenance"]),
     )
+end
+
+# Format version 2, one table and one set of columns per array, is still read.
+const _READABLE_FORMAT_VERSIONS = (2, MANIFEST_FORMAT_VERSION)
+
+# Every array's chunk map in a current-format manifest, in the order listed,
+# over the one table they share, and that table. The columns are opened once
+# and each ExplicitChunkMap reads its own stretch of them.
+function _load_chunkmaps(store::Zarr.AbstractStore, prefix::AbstractString, doc, label::AbstractString)
+    table = _pathtable_from_json(doc["table"])
+    arraydocs = doc["arrays"]
+    explicit = any(a -> a["manifest"]["kind"] == "chunk", arraydocs)
+    columns = if explicit
+        colprefix = _joinkey(prefix, _ZARR_MANIFEST_COLUMNS_DIR)
+        Tuple(
+            _ZarrColumn(Zarr.zopen(store; path = _joinkey(colprefix, name)))
+                for name in ("index", "offset", "nbytes")
+        )
+    else
+        nothing
+    end
+
+    ncells = 0
+    maps = AbstractChunkMap[]
+    for arraydoc in arraydocs
+        mdoc = arraydoc["manifest"]
+        kind = mdoc["kind"]
+        gridsize = NTuple{length(mdoc["gridsize"]), Int}(mdoc["gridsize"])
+        if kind == "chunk"
+            n = prod(gridsize)
+            mdoc["start"] == ncells || throw(
+                ArgumentError(
+                    "load: \"$label\": array $(repr(arraydoc["path"])) records its cells as " *
+                        "starting at $(mdoc["start"]) in the columns, but the arrays before it " *
+                        "hold $ncells",
+                )
+            )
+            cells = (ncells + 1):(ncells + n)
+            ncells += n
+            index, offset, nbytes = map(c -> reshape(view(c, cells), gridsize), columns)
+            inline = Dict{CartesianIndex{length(gridsize)}, Vector{UInt8}}(
+                _cartesian_from_key(k, length(gridsize)) => Base64.base64decode(b64)
+                    for (k, b64) in mdoc["inline"]
+            )
+            push!(maps, ExplicitChunkMap(table, index, offset, nbytes; inline))
+        elseif kind == "affine"
+            strides = NTuple{length(mdoc["strides"]), UInt64}(mdoc["strides"])
+            push!(
+                maps, AffineChunkMap(
+                    table, gridsize, UInt64(mdoc["base"]), strides, UInt32(mdoc["chunkbytes"]);
+                    fileindex = mdoc["fileindex"],
+                )
+            )
+        else
+            throw(
+                ArgumentError(
+                    "load: unrecognized manifest kind $(repr(kind)) for array $(repr(arraydoc["path"]))"
+                )
+            )
+        end
+    end
+
+    held = columns === nothing ? 0 : length(first(columns))
+    ncells == held || throw(
+        DimensionMismatch(
+            "load: \"$label\": $_ZARR_MANIFEST_JSON accounts for $ncells chunk-grid cells, " *
+                "but its columns hold $held",
+        )
+    )
+    return maps, table
 end

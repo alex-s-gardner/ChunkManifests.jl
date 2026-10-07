@@ -4,7 +4,7 @@
 
 # Version of this package's own native on-disk format ([`ZarrManifest`](@ref)),
 # incremented whenever that layout changes.
-const MANIFEST_FORMAT_VERSION = 2
+const MANIFEST_FORMAT_VERSION = 3
 
 # Version of kerchunk's reference-set schema, which this package reads and
 # writes but does not define. Fixed at 1 by kerchunk; it is not ours to
@@ -428,14 +428,16 @@ abstract type ManifestFormat end
 """
     ZarrManifest(; chunkcells=65536, compressor="zstd")
 
-Native format: each manifest column is stored as a Zarr v2 array over the chunk
-grid, with the path table and array metadata alongside as JSON.
+Native format: the chunk references of every array are stored as three
+one-dimensional Zarr v2 arrays — file index, byte offset, byte length — with
+the path table and array metadata alongside as JSON.
 
 Because the columns are plain integer arrays, one chunk's reference can be
 rewritten without rewriting the whole document, a manifest too large to
 materialize can be read back lazily, and the result stays readable by any Zarr
-implementation. `chunkcells` is the chunk length of those arrays in chunk-grid
-cells.
+implementation. One set of columns serves every array, so saving or opening a
+manifest touches the same few files however many arrays it holds.
+`chunkcells` is the chunk length of those arrays in chunk-grid cells.
 """
 struct ZarrManifest <: ManifestFormat
     chunkcells::Int
