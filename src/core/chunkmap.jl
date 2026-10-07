@@ -216,7 +216,8 @@ chunkstate(m::AffineChunkMap{N}, I::Vararg{Integer, N}) where {N} = chunkstate(m
 
 function chunklocation(m::AffineChunkMap{N}, I::CartesianIndex{N}) where {N}
     _checkgridindex(m, I)
-    offset = m.base + sum(m.strides .* UInt64.(Tuple(I) .- 1))
+    # `init` because a zero-dimensional grid, a scalar dataset, has no strides.
+    offset = m.base + sum(m.strides .* UInt64.(Tuple(I) .- 1); init = UInt64(0))
     return (uriof(m.table, m.fileindex), UInt64(offset), UInt64(m.chunkbytes))
 end
 function chunklocation(m::AffineChunkMap{N}, I::Vararg{Integer, N}) where {N}
