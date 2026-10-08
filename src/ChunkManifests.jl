@@ -27,9 +27,11 @@ Full documentation: <https://alex-s-gardner.github.io/ChunkManifests.jl>.
 module ChunkManifests
 
 import Base64
+import Downloads
 import HDF5
 import HTTP
 import JSON
+import LibCURL
 import Logging
 import Mmap
 import PrecompileTools
