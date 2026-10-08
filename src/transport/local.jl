@@ -1,7 +1,5 @@
-# LocalTransport: byte ranges from the local filesystem, read with plain
-# open/seek/read. ByteRange offsets are zero-based; Julia IO is one-based, so
-# every seek below is a direct byte offset while the final one-based slicing
-# happens in `_assemble` (shared with the generic fetchranges).
+# LocalTransport: byte ranges from the local filesystem, as views of a
+# memory map of the file. ByteRange offsets are zero-based.
 
 function _localpath(uri::AbstractString)
     return startswith(uri, "file://") ? chop(uri; head = 7, tail = 0) : uri
@@ -17,16 +15,41 @@ function _checked_range(path::AbstractString, sz::Integer, r::ByteRange)
     return nothing
 end
 
-function _read_checked(io::IO, path::AbstractString, r::ByteRange)
-    seek(io, r.offset)
-    data = read(io, Int(r.nbytes))
-    length(data) == r.nbytes || throw(
-        ErrorException(
-            "short read from $path: requested $(r.nbytes) bytes at offset " *
-                "$(r.offset), got $(length(data)) bytes",
-        )
-    )
-    return data
+# Every file a LocalTransport has read, memory-mapped once and kept for the life of the process.
+#
+# A range is returned as a view of the map, so a read moves only the pages it touches: a chunk spanning
+# the full width of an uncompressed image costs the lines a window takes rather than the whole chunk,
+# and concurrent reads of one file share no handle. A map is never released, because the views handed
+# out alias it with nothing to keep it alive; a file whose size, modification time or inode changes is
+# mapped afresh and the old map is kept alongside.
+const _LOCAL_MAPS = Dict{String, Tuple{Base.Filesystem.StatStruct, Vector{UInt8}}}()
+const _LOCAL_RETIRED = Vector{UInt8}[]
+const _LOCAL_MAPS_LOCK = ReentrantLock()
+
+_samefile(a::Base.Filesystem.StatStruct, b::Base.Filesystem.StatStruct) =
+    (a.inode, a.size, a.mtime) == (b.inode, b.size, b.mtime)
+
+function _localmap(path::AbstractString)
+    st = stat(path)
+    isfile(st) || throw(ArgumentError("no such file: $path"))
+    return @lock _LOCAL_MAPS_LOCK begin
+        held = get(_LOCAL_MAPS, path, nothing)
+        if held !== nothing && _samefile(first(held), st)
+            last(held)
+        else
+            held === nothing || push!(_LOCAL_RETIRED, last(held))
+            bytes = st.size == 0 ? UInt8[] : open(io -> Mmap.mmap(io, Vector{UInt8}, st.size), path, "r")
+            _LOCAL_MAPS[String(path)] = (st, bytes)
+            bytes
+        end
+    end
+end
+
+function _mapped_range(path::AbstractString, r::ByteRange)
+    bytes = _localmap(path)
+    _checked_range(path, length(bytes), r)
+    r.nbytes == 0 && return UInt8[]
+    return unsafe_wrap(Array, pointer(bytes, Int(r.offset) + 1), Int(r.nbytes); own = false)
 end
 
 """
@@ -35,54 +58,20 @@ end
 Read `r` from the local file at `uri` (a plain path, or a `file://` URI).
 Throws if the file does not exist, and throws if `r` extends past
 end-of-file rather than returning a short read as if it were complete.
+
+The result is a read-only view of the file, memory-mapped: writing to it
+faults.
 """
-function fetchrange(::LocalTransport, uri::AbstractString, r::ByteRange)
-    path = _localpath(uri)
-    # The handle is opened before anything else is asked about the path, and
-    # the size is taken from it: `isfile` then `filesize` then `open` is three
-    # filesystem round trips where one will do, and this runs once for every
-    # chunk a read touches. A failed open carries the same error the
-    # missing-file check raised.
-    io = try
-        open(path, "r")
-    catch e
-        (e isa SystemError || e isa Base.IOError) || rethrow()
-        throw(ArgumentError("no such file: $path"))
-    end
-    try
-        _checked_range(path, filesize(io), r)
-        return _read_checked(io, path, r)
-    finally
-        close(io)
-    end
-end
+fetchrange(::LocalTransport, uri::AbstractString, r::ByteRange) = _mapped_range(_localpath(uri), r)
 
 """
     fetchranges(::LocalTransport, uri, ranges::AbstractVector{ByteRange})
         -> Vector{Vector{UInt8}}
 
-Overrides the generic [`fetchranges`](@ref) default to share one open file
-handle across every coalesced block instead of opening the file once per
-block. Semantics match the generic default exactly: ranges are coalesced
-with the same [`coalesce_ranges`](@ref) call, and the result is one
-independently owned `Vector{UInt8}` per input range, in input order. Reads
-run sequentially on this one handle rather than through `concurrency(t)`,
-since a single `IOStream` cannot be seeked and read from concurrently.
+One read-only view of the memory-mapped file per range, in input order. Ranges
+are not coalesced: a view of a mapped file costs nothing until it is read.
 """
-function fetchranges(t::LocalTransport, uri::AbstractString, ranges::AbstractVector{ByteRange})
-    merged, mapping = coalesce_ranges(ranges; maxgap = maxgap(t), maxblock = maxblock(t))
+function fetchranges(::LocalTransport, uri::AbstractString, ranges::AbstractVector{ByteRange})
     path = _localpath(uri)
-    isfile(path) || throw(ArgumentError("no such file: $path"))
-    sz = filesize(path)
-
-    blocks = Vector{Vector{UInt8}}(undef, length(merged))
-    open(path, "r") do io
-        for i in eachindex(merged)
-            r = merged[i]
-            _checked_range(path, sz, r)
-            blocks[i] = _read_checked(io, path, r)
-        end
-    end
-
-    return _assemble(ranges, mapping, blocks)
+    return [_mapped_range(path, r) for r in ranges]
 end

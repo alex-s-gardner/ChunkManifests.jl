@@ -31,6 +31,7 @@ import HDF5
 import HTTP
 import JSON
 import Logging
+import Mmap
 import PrecompileTools
 import Zarr
 
