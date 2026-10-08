@@ -4,10 +4,9 @@ CurrentModule = ChunkManifests
 
 # Limitations
 
-A manifest serves a source file's bytes untouched, so a source feature that Zarr v2's codec
-set cannot express is not something a manifest can work around. Every case below is
-**refused by name** at scan time rather than scanned into a manifest that would decode to
-wrong values.
+A manifest serves a file's bytes untouched, so it cannot represent a feature Zarr v2's
+codecs cannot express. Such a feature is **refused with an error naming it**, never scanned
+into a manifest that would decode to wrong values.
 
 ## Zarr v2 only
 
@@ -16,24 +15,20 @@ what HDF5 files actually contain. Manifests are Zarr v2.
 
 ## Requires a patched Zarr.jl
 
-Reading an array whose last filter operates on raw bytes — shuffle or fletcher32 — with an
-element type wider than one byte needs
-[Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), merged but not yet in a release.
-`Project.toml` pins a branch carrying it; see [Installation](@ref) for what that means for
-your own environment.
+Two cases need the Zarr.jl branch this package pins (see [Installation](@ref)):
 
-The state is checked at run time rather than from a version bound, because a patched branch
-and an unpatched one carry the same version number.
+- an array whose last filter is shuffle or fletcher32 with elements wider than one byte
+  ([Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), merged but not yet released);
+- a complex-integer array, such as a Sentinel-1 SLC's CInt16.
+
+Both are checked when used, since the patched and released Zarr.jl share a version number.
 
 ## Big-endian sources are refused
 
-Zarr v2 puts byte order in the dtype string, but Zarr.jl parses the marker and does not
-byte-swap on read, so the bytes would decode to wrong values rather than fail. This store
-passes a source's bytes through untouched and has no codec to swap them with.
-
-Applies to HDF5/NetCDF4 datasets stored big-endian, to TIFFs whose header declares the
-opposite order to the host, and to a kerchunk document declaring a big-endian dtype such as
-`">i4"`. Single-byte elements and strings have no byte order to get wrong and are unaffected.
+Zarr.jl reads the byte-order marker in a Zarr v2 dtype but does not byte-swap, so big-endian
+bytes would decode to wrong values. Refused: HDF5/NetCDF4 datasets stored big-endian, TIFFs
+in the opposite byte order to the host, and kerchunk dtypes such as `">i4"`. Single-byte
+elements and strings are unaffected.
 
 ## Per format
 
@@ -43,61 +38,45 @@ Rejected outright, naming the file and the feature: szip, nbit, scaleoffset, LZF
 bitshuffle, and any nonzero per-chunk `filter_mask`. A compound dtype is rejected the same
 way — no Zarr v2 dtype describes its layout.
 
-A **variable-length string** dataset is not rejected: it holds pointers into HDF5's global
-heap, so there are no bytes worth referencing, and its values are read during the scan and
-embedded as fixed-length `|SN` records instead. NetCDF4 writers use this dtype for scalar
-metadata variables — a CF `grid_mapping`, or whatever provenance a producer attaches — so
-refusing it would make many real files unscannable. The cost is that those values are copied
-into the manifest rather than referenced, which is why it applies to strings and not to data.
+Handled, with a cost:
 
-An attribute whose value is **not finite** is dropped, with a warning naming it. JSON has no
-literal for `NaN` or an infinity: a bare one is what zarr-python emits and Python parses, but
-Julia's JSON parser refuses it, and permitting it turns every integer in the document into a
-float. `_FillValue = NaN` on a NetCDF4 coordinate variable is the case this reaches. The
-array's own fill value is unaffected — `.zarray` carries it as the string the Zarr v2 spec
-reserves for exactly this.
+- A **variable-length string** dataset, as NetCDF4 writes for a CF `grid_mapping` and other
+  scalar metadata, has its values copied into the manifest as fixed-length `|SN` strings
+  rather than referenced.
+- An attribute whose value is **not finite**, such as `_FillValue = NaN` on a coordinate
+  variable, is dropped with a warning, because JSON has no literal for it. The array's own
+  fill value is unaffected.
 
 ### GeoTIFF and COG
 
+- LZW, PackBits, JPEG and WebP compression are refused, as is predictor 3.
 - `PREDICTOR=2` needs a codec with no `numcodecs` equivalent, so those manifests are readable
-  from Julia in any format but not from Python. Predictor 3 is refused.
-- TIFF strips are not padded to a full size, so a final partial strip cannot be a Zarr chunk.
-  Tiled TIFFs and COGs map cleanly; striped ones may not.
-- A remote GeoTIFF is read in place by [`RangeAccess`](@ref) like an HDF5 one, through a
-  seekable stream rather than a virtual file driver, so it needs no verified libhdf5. LZW,
-  PackBits, JPEG and WebP are still refused whether the file is local or remote.
-- LZW, PackBits, JPEG and WebP compression are refused.
+  from Julia but not from Python.
+- A final partial strip cannot be a Zarr chunk, because TIFF strips are not padded. Tiled
+  TIFFs and COGs map cleanly; striped ones may not.
 
 ### Kerchunk
 
 - Whole-object references (`[url]` with no byte length) are recorded but cannot be fetched,
   since no byte length is known without reading the object first.
 - Zero-dimensional arrays cannot carry virtual references in the kerchunk Parquet format.
-- A dtype with no exact Zarr v2 encoding is refused on load, naming the array and the dtype.
-  Readable dtypes are those this package can emit again: `Bool`, fixed-width integers,
-  floating-point, complex-float, and fixed-length byte strings (`|SN`).
+- A dtype this package cannot write back is refused on load, naming the array and the
+  dtype. Readable dtypes are `Bool`, fixed-width integers, floating-point, complex, and
+  fixed-length byte strings (`|SN`).
 
 ## Remote scanning
 
-[`RangeAccess`](@ref) reads a remote object in place, and is what [`AutoAccess`](@ref)
-selects. Its own limit is that libhdf5 has no public API for registering a virtual file
-driver, so the HDF5 path is enabled only for libhdf5 versions whose driver struct layout has
-been verified — currently 2.2.x — and refuses on others rather than risk a mismatched struct.
-The GeoTIFF path needs no such gate: it reads through a stream, with no libhdf5 involved.
+libhdf5 has no public API for registering a virtual file driver, so reading a remote HDF5
+file in place with [`RangeAccess`](@ref) works only with libhdf5 versions whose driver struct
+layout has been verified — currently 2.2.x. On others it refuses and names
+[`DownloadAccess`](@ref). Remote GeoTIFFs are unaffected.
 
-How much a range-read scan costs depends on how far a file's metadata is spread. Where it
-approaches the size of the object, [`DownloadAccess`](@ref) moves the same bytes in fewer
-requests and leaves a cached copy; see [Remote sources](@ref).
-
-libhdf5's own read-only S3 driver is not used. It hangs on open — waiting for a request to
-report completion that never does, on Linux and macOS alike, against objects plain HTTP
-requests read immediately — and there is no timeout that would turn that into an error.
-`UPSTREAM.md` records the reproducer. Nothing depends on it: range reads cover the same
-ground through this package's transports, over more URL shapes than libhdf5's parser accepts.
+libhdf5's own S3 driver is not used: it hangs on open with no timeout. `UPSTREAM.md` records
+the reproducer.
 
 ## Not in scope
 
-No history, branches, locks or multi-writer guarantees, and none are planned. Versioned,
-transactional management of manifests is
-[Icechunk](https://github.com/earth-mover/icechunk)'s domain, and Icechunk deliberately does
-not scan source files, so the two layers complement rather than duplicate each other.
+Data is read-only. Manifests have no history, branches, locks or multi-writer guarantees,
+and none are planned: versioned, transactional management of manifests is
+[Icechunk](https://github.com/earth-mover/icechunk)'s domain. Icechunk does not scan source
+files, so the two complement each other.

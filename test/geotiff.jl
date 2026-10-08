@@ -101,6 +101,40 @@ using TiffImages
             @test decoded == data
         end
 
+        @testset "complex samples (SAMPLEFORMAT 5 and 6), as a Sentinel-1 SLC stores them" begin
+            width, height = 9, 6
+            # Complex integers need the structured dtype of the Zarr.jl `[sources]` pins, which Julia
+            # 1.10 does not honor; there the scan refuses them by name.
+            complexints = Zarr.typestr(Complex{Int16}) isa AbstractVector
+            for (T, sampleformat) in ((Complex{Int16}, 5), (Complex{Int32}, 5), (ComplexF32, 6))
+                data = T.(rand(-100:100, width, height), rand(-100:100, width, height))
+                path = joinpath(dir, "complex_$(sampleformat)_$(sizeof(T)).tif")
+                _gt_striped(
+                    path; width, height, rowsperstrip = 1, bits = 8 * sizeof(T), sampleformat,
+                    payload = _gt_striprows(data, 1),
+                )
+                if T <: Complex{<:Signed} && !complexints
+                    @test_throws "complex integers need the Zarr.jl branch" scan(path)
+                    continue
+                end
+                z = scan(path)
+                @test eltype(z["0"]["data"]) === T
+                @test z["0"]["data"][:, :] == data
+                @test z["0"]["data"][3:5, 2:4] == data[3:5, 2:4]
+                for ext in ("json", "manifest")
+                    manifestpath = joinpath(dir, "complex_$(sampleformat)_$(sizeof(T)).$ext")
+                    save(manifestpath, z)
+                    @test load(manifestpath)["0"]["data"][:, :] == data
+                end
+            end
+            path = joinpath(dir, "complex_bad.tif")
+            _gt_striped(
+                path; width, height, rowsperstrip = 1, bits = 32, sampleformat = 6,
+                payload = [zeros(UInt8, 4 * width) for _ in 1:height],
+            )
+            @test_throws "complex SAMPLEFORMAT=6 with BITSPERSAMPLE=32 has no Julia element type" scan(path)
+        end
+
         @testset "uncompressed striped: non-contiguous falls back to ExplicitChunkMap" begin
             width, height, rowsperstrip = 5, 6, 3
             data = rand(UInt16, width, height)

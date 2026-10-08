@@ -104,8 +104,11 @@ transfers no object data.
 """
 function ChunkManifests.objectsize(t::ChunkManifests.S3Transport, uri::AbstractString)
     bucket, key = _s3_bucket_key(t, uri)
+    # The transport's own headers go on the HEAD as on every GET: a requester-pays bucket refuses a
+    # HEAD that does not say who pays.
     headers = try
-        AWSS3.s3_get_meta(_awsconfig(t.aws), bucket, key)
+        params = Dict{String, Any}("headers" => _headers(t.aws))
+        Dict(AWSS3.S3.head_object(bucket, key, params; aws_config = _awsconfig(t.aws)).headers)
     catch e
         error("failed to size s3://$bucket/$key: $e")
     end

@@ -36,6 +36,12 @@ No version has been released yet. `0.1.0` will be the first, and the
   in order.
 - `RangeAccess(; tailread)`: the last bytes of an object, fetched together with its head.
 - `HTTPTransport(; connect_timeout, read_idle_timeout)`, on by default.
+- `JPEG2000Driver`, chosen for `.jp2`, `.j2k`, `.j2c` and `.jpc`: one chunk per tile, read
+  in place from a remote object. Scanning needs nothing more; decoding a chunk needs
+  `using OpenJpeg_jll`.
+- A GeoTIFF with complex samples (`SAMPLEFORMAT` 5 or 6, as a Sentinel-1 SLC's CInt16) scans
+  as `Complex{Int16}`, `ComplexF32` and so on. A complex integer is written as the structured
+  dtype `[["r", "<i2"], ["i", "<i2"]]`.
 
 ### Changed
 

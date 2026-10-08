@@ -9,7 +9,7 @@ ChunkManifests = {path = ".."}
 # Project.toml does not reach this environment and has to be repeated. Keep the
 # two in step: a docs build against registered Zarr resolves a different
 # version than the test suite runs on.
-Zarr = {url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-filter-fix"}
+Zarr = {url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "complex-int-dtype"}
 
 [compat]
 Documenter = "1"

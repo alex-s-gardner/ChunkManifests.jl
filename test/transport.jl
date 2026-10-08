@@ -217,19 +217,25 @@ end
             end
         end
 
-        @testset "fetchranges returns independent, correctly ordered vectors" begin
-            ranges = [ByteRange(100, 10), ByteRange(0, 10), ByteRange(50, 10)]
+        @testset "fetchranges returns correctly ordered, read-only views" begin
+            ranges = [ByteRange(100, 10), ByteRange(0, 10), ByteRange(50, 10), ByteRange(7, 0)]
             results = fetchranges(LocalTransport(), path, ranges)
             @test length(results) == length(ranges)
             for (i, r) in enumerate(ranges)
                 @test results[i] == content[(r.offset + 1):(r.offset + r.nbytes)]
             end
+            # Views of the file's memory map, which is mapped read-only.
+            @test_throws ReadOnlyMemoryError results[1][1] = 0x00
+            @test_throws "exceeds size" fetchranges(LocalTransport(), path, [ByteRange(length(content) - 2, 4)])
+        end
 
-            # mutating one result must not affect another
-            original = copy(results[1])
-            results[1][1] = results[1][1] + UInt8(1)
-            @test results[1] != original
-            @test results[2] == content[1:10]
+        @testset "a file rewritten in place is mapped afresh" begin
+            rewritten = joinpath(dir, "rewritten.bin")
+            write(rewritten, fill(0x01, 64))
+            @test fetchrange(LocalTransport(), rewritten, ByteRange(0, 4)) == fill(0x01, 4)
+            sleep(1.1)  # a modification time the filesystem can tell apart
+            write(rewritten, fill(0x02, 128))
+            @test fetchrange(LocalTransport(), rewritten, ByteRange(100, 4)) == fill(0x02, 4)
         end
 
         @testset "fetchranges on LocalTransport matches generic DummyTransport path" begin

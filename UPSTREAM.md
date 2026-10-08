@@ -4,6 +4,23 @@ Each entry is something another repository has to change. Nothing here is a
 defect in this package, and nothing here has been posted by this package's
 authors except where noted. States verified 2026-10-05.
 
+## Zarr.jl: complex-integer dtype and concurrent chunk decoding — not yet proposed
+
+`[sources]` pins the `complex-int-dtype` branch of the fork, which is
+`v0.10.2-bytes-filter-fix` (the #354 fix, below) plus four changes no upstream
+release carries:
+
+- complex integers read and written as the Zarr v2 structured dtype
+  `[["r", T], ["i", T]]`, which a Sentinel-1 SLC's CInt16 GeoTIFF scans to;
+- a complex fill value whose part is `"NaN"` or `"Infinity"` decodes, as a
+  NISAR GSLC's `NaN + NaN*im` needs;
+- a read spanning several chunks decodes them on several threads, and an
+  uncompressed chunk is copied straight from its bytes, so a memory-mapped
+  local file reads only the pages a window touches;
+- chunk buffers are pooled, and zlib+shuffle decodes into them.
+
+None of these has been offered to JuliaIO/Zarr.jl yet.
+
 ## Zarr.jl #354 — merged, release pending on #356
 
 [JuliaIO/Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), "Fix

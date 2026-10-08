@@ -41,6 +41,7 @@ validate(::Zarr.ZGroup)
 AbstractDriver
 HDF5Driver
 GeoTIFFDriver
+JPEG2000Driver
 ```
 
 ### Reaching a source's metadata

@@ -7,50 +7,41 @@ end
 
 # ChunkManifests.jl
 
-Virtual Zarr for Julia: read existing HDF5, NetCDF4 and GeoTIFF/COG files as Zarr arrays
-without copying or converting them.
+Read HDF5, NetCDF4, GeoTIFF/COG and JPEG 2000 files as lazy Zarr arrays — on disk, over HTTP
+or in S3 — without copying or converting them.
 
-Scanning a source file records where each chunk's *compressed* bytes already live — which
-file, which byte offset, how many bytes — in a chunk manifest, and returns a lazy
-`Zarr.ZGroup` over it. Indexing an array of the group fetches and decodes only the chunks the
-selection touches, straight from the original file.
-
-This package never decodes array data. It returns the source files' bytes untouched and lets
-Zarr.jl's codec pipeline do the decoding, which is what makes the result byte-for-byte
-identical to reading the original file.
+A scan reads a file's metadata and records where each chunk's compressed bytes are: which
+file, at what byte offset, and how many bytes. That record is a *chunk manifest*. Indexing an
+array then fetches only the chunks the selection touches, straight from the original file,
+and Zarr.jl decodes them, so the values are identical to reading the file directly.
 
 ## Installation
 
-The package is not registered, and it needs a patched Zarr.jl to read arrays whose last
-filter operates on raw bytes — shuffle or fletcher32 — with an element type wider than one
-byte ([Zarr.jl#354](https://github.com/JuliaIO/Zarr.jl/pull/354), merged but not yet in a
-release). A `[sources]` entry applies only to the project that declares it, so the pin in
-this package's `Project.toml` does not reach your environment and the branch has to be
-requested alongside it:
+The package is not registered, and it needs a patched Zarr.jl branch. The pin in this
+package's `Project.toml` applies only to this package's own environment, so add the branch to
+yours too:
 
 ```julia
 using Pkg
-Pkg.add(url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "v0.10.2-bytes-filter-fix")
+Pkg.add(url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "complex-int-dtype")
 Pkg.add(url = "https://github.com/alex-s-gardner/ChunkManifests.jl")
 ```
 
-Without the patched Zarr everything else works; only that one filter combination fails. The
-state is checked at run time rather than from a version bound, because a patched branch and
-an unpatched one carry the same version number.
-
-Julia 1.10 or later. `[sources]` is a Julia 1.11 feature, so on 1.10 the pin above is the
-only way to get the patched Zarr.
+Without the patched branch everything works except complex-integer arrays and arrays whose
+last filter is shuffle or fletcher32 on elements wider than one byte. Julia 1.10 or later.
 
 ## Quick start
 
 ```julia
 using ChunkManifests
 
-z = scan("granule.h5")      # the driver is chosen from the extension
-z["gt1l/h_li"][1:100]       # reads only the chunks it needs
+z = scan("granule.h5")       # or an http(s):// or s3:// URL
+z["gt1l/h_li"][1:100]        # reads only the chunks it needs
+save("granule.manifest", z)  # scan once, then
+z = load("granule.manifest") # reuse
 ```
 
-Run against the NetCDF4 file committed in this repository, that is:
+Against the NetCDF4 file in this repository's tests:
 
 ```jldoctest index
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
@@ -75,32 +66,17 @@ julia> z["grounded"][1:4, 1]
  0x00
 ```
 
-That last read touched one chunk of a 22896×18392 array, and the bytes it returned came out
-of the NetCDF4 file unaltered.
+That last read fetched one chunk of a 22896×18392 array.
 
-Downstream packages need no knowledge that the data is virtual — `scan` and `load` return a
-plain `Zarr.ZGroup`, so anything that consumes one works. See [Downstream packages](@ref) for
-Zarr.jl, ZarrDatasets.jl, YAXArrays.jl and Rasters.jl.
-
-## Scope
-
-**Read-only with respect to data, single-shot with respect to manifests.** It scans, serves
-and saves manifests. It has no history, branches, locks or multi-writer guarantees, and will
-not grow them — versioned, transactional management of manifests is
-[Icechunk](https://github.com/earth-mover/icechunk)'s domain, and Icechunk deliberately does
-not scan source files, so the two layers complement rather than duplicate each other.
-
-Zarr **v2** metadata only. Zarr v3's codec set has no `zlib`, `shuffle`, `fletcher32` or
-`delta`, so it cannot represent what HDF5 files actually contain.
+`scan` and `load` return a plain `Zarr.ZGroup`, so Zarr.jl, ZarrDatasets.jl, YAXArrays.jl and
+Rasters.jl read it directly; see [Downstream packages](@ref).
 
 ## Where to go next
 
-- [Concepts](@ref) — what a manifest holds and why the bytes pass through untouched.
-- [Scanning a source](@ref) — drivers, groups, and which variables one scan brings in.
-- [Remote sources](@ref) — how the metadata bytes of a remote object are reached.
-- [Saving and loading](@ref) — scan once, save, reuse; the three formats.
-- [Fetching chunk bytes](@ref) — transports, prefix routing, and restricting what a manifest
-  may read.
+- [Scanning a source](@ref) — drivers, and which variables one scan brings in.
+- [Saving and loading](@ref) — the three saved formats, and object storage.
 - [Several files at once](@ref) — merging different variables, concatenating slices.
-- [Limitations](@ref) — what is refused, and what is refused *loudly*.
-- [API reference](@ref) — every exported name.
+- [Downstream packages](@ref) — Rasters.jl, YAXArrays.jl and friends.
+- [Remote sources](@ref) and [Fetching chunk bytes](@ref) — tuning network access.
+- [Limitations](@ref) — what is refused, and why.
+- [How it works](@ref) — what a manifest holds.

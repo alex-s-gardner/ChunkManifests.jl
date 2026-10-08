@@ -63,7 +63,12 @@ import Zarr
         @test ChunkManifests.zarr_dtype_string(UInt16) == "<u2"
         @test ChunkManifests.zarr_dtype_string(Bool) == "|b1"
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
-        @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(Complex{Int32})
+        if Zarr.typestr(Complex{Int32}) isa AbstractVector
+            @test ChunkManifests.zarr_dtype_string(Complex{Int32}) == [["r", "<i4"], ["i", "<i4"]]
+        else
+            @test_throws "complex integers need" ChunkManifests.zarr_dtype_string(Complex{Int32})
+        end
+        @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(Complex{UInt16})
     end
 
     @testset "chunkkey verified mappings" begin
@@ -144,6 +149,15 @@ import Zarr
         va_naninf = mkva(ComplexF64, (2, 2), (2, 2); fillvalue = ComplexF64(NaN, -Inf))
         @test JSON.parse(String(ChunkManifests.zarray_json(va_naninf)))["fill_value"] ==
             ["NaN", "-Infinity"]
+    end
+
+    @testset "a non-finite complex attribute is dropped, as a real one is" begin
+        # A NISAR GSLC's samples carry `_FillValue = NaN + NaN*im`.
+        va = mkva(ComplexF32, (2, 2), (2, 2);
+            attrs = Dict{String, Any}("_FillValue" => ComplexF32(NaN, NaN), "units" => "1"))
+        doc = JSON.parse(String(ChunkManifests.zattrs_json(va)))
+        @test !haskey(doc, "_FillValue")
+        @test doc["units"] == "1"
     end
 
     @testset "end-to-end Zarr.zopen round trip" begin

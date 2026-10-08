@@ -629,9 +629,16 @@ end
 # so it covers every scheme they do.
 #
 # It falls back to fetching only where the virtual file driver cannot be
-# registered, which is a libhdf5 whose struct layout has not been verified.
-_remoteaccess(::HDF5Driver, ::AbstractString, transport::AbstractTransport) =
-    _rangevfdsupported() ? RangeAccess(; transport) : DownloadAccess(; transport)
+# registered, which is a libhdf5 whose struct layout has not been verified, and
+# says so: the whole object then moves, which for a granule is gigabytes.
+function _remoteaccess(::HDF5Driver, uri::AbstractString, transport::AbstractTransport)
+    _rangevfdsupported() && return RangeAccess(; transport)
+    @warn "Scanning $uri by downloading all of it: reading it in place needs libhdf5 " *
+        "$(join(join.(_RANGE_VFD_LIBVERSIONS, '.'), " or ")).x, and this one is " *
+        "$(HDF5.API.h5_get_libversion()). Update HDF5_jll, or pass access = DownloadAccess() " *
+        "to choose the download." maxlog = 1
+    return DownloadAccess(; transport)
+end
 function _scan_hdf5_open(
         driver::HDF5Driver,
         openloc::AbstractString,

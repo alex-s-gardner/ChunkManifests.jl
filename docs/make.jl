@@ -29,14 +29,14 @@ makedocs(;
     ),
     pages = [
         "Home" => "index.md",
-        "Concepts" => "concepts.md",
         "Scanning a source" => "scanning.md",
-        "Remote sources" => "remote.md",
         "Saving and loading" => "manifests.md",
-        "Fetching chunk bytes" => "transports.md",
         "Several files at once" => "combining.md",
         "Downstream packages" => "integration.md",
+        "Remote sources" => "remote.md",
+        "Fetching chunk bytes" => "transports.md",
         "Limitations" => "limitations.md",
+        "How it works" => "concepts.md",
         "API reference" => "api.md",
     ],
     # Every exported name must appear in the reference, so an export added

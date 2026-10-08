@@ -11,6 +11,8 @@ const DRIVER_EXTENSIONS = Dict{String, AbstractDriver}(
     ".h5" => HDF5Driver(), ".hdf5" => HDF5Driver(), ".he5" => HDF5Driver(),
     ".nc" => HDF5Driver(), ".nc4" => HDF5Driver(),
     ".tif" => GeoTIFFDriver(), ".tiff" => GeoTIFFDriver(),
+    ".jp2" => JPEG2000Driver(), ".j2k" => JPEG2000Driver(), ".j2c" => JPEG2000Driver(),
+    ".jpc" => JPEG2000Driver(),
 )
 
 # Saved-manifest formats by extension. Any other extension is a ZarrManifest,

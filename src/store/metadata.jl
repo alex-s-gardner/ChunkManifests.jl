@@ -6,26 +6,39 @@
 const _V2_CHUNK_KEY_ENCODING = Zarr.ChunkKeyEncoding('.', false)
 
 """
-    zarr_dtype_string(::Type{T}) -> String
+    zarr_dtype_string(::Type{T}) -> Union{String, Vector{Any}}
 
-Numpy-style Zarr v2 dtype string for element type `T`.
+Numpy-style Zarr v2 dtype for element type `T`: a string, or for a complex
+integer the structured dtype `[["r", "<i2"], ["i", "<i2"]]` (NumPy has no
+complex-integer typestr).
 
 Only `Bool`, fixed-width signed/unsigned integers, floating-point types,
-complex-float types and fixed-length byte strings have an exact Zarr v2
-encoding and are supported. Every other type throws: `Zarr.typestr`'s fallback
-for an unrecognized type encodes it as opaque raw bytes (`"<Vn"`), which would
-silently discard the type's actual layout rather than fail on it.
+complex-float and complex-integer types and fixed-length byte strings have an
+exact Zarr v2 encoding and are supported. Every other type throws:
+`Zarr.typestr`'s fallback for an unrecognized type encodes it as opaque raw
+bytes (`"<Vn"`), which would silently discard the type's actual layout rather
+than fail on it.
 """
 function zarr_dtype_string(::Type{T}) where {T}
-    if T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat ||
-            T <: Complex{<:AbstractFloat}
+    if T <: Complex{<:Signed}
+        dtype = Zarr.typestr(T)
+        # A Zarr.jl without the structured complex-integer dtype spells one as opaque bytes.
+        dtype isa AbstractVector || throw(
+            ArgumentError(
+                "this Zarr.jl has no dtype for $T: complex integers need the Zarr.jl branch " *
+                    "this package's `[sources]` pins, which Julia 1.10 does not honor"
+            )
+        )
+        return dtype
+    end
+    if T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat || T <: Complex{<:AbstractFloat}
         return Zarr.typestr(T)
     end
     throw(
         ArgumentError(
             "no faithful Zarr v2 dtype for element type $T; supported types are " *
                 "Bool, fixed-width signed/unsigned integers, floating-point, " *
-                "complex-float, and fixed-length byte string types",
+                "complex-float, complex-integer, and fixed-length byte string types",
         )
     )
 end
@@ -58,6 +71,9 @@ end
 # Complex, JSON writes the struct as an object and a reader gets a mapping
 # where it expects a number.
 _jsonfillvalue(v::Complex) = [_jsonfillvalue(real(v)), _jsonfillvalue(imag(v))]
+# A complex integer is a structured dtype, whose fill value the spec writes as
+# the Base64 of its bytes.
+_jsonfillvalue(v::Complex{<:Signed}) = Zarr.fill_value_encoding(v)
 
 # The inverse, reading a document back. Only a floating-point array's fill
 # value is reinterpreted: the three spellings are reserved for those, and a
@@ -69,6 +85,8 @@ function _fillvaluefromjson(v::AbstractString, ::Type{T}) where {T <: AbstractFl
     v == "-Infinity" && return T(-Inf)
     return v
 end
+_fillvaluefromjson(v::AbstractString, ::Type{T}) where {T <: Complex{<:Signed}} =
+    Zarr.fill_value_decoding(v, T)
 function _fillvaluefromjson(v::AbstractVector, ::Type{Complex{T}}) where {T}
     length(v) == 2 || return v
     return Complex{T}(
@@ -83,7 +101,7 @@ end
 # rather than re-typed, which would hand a consumer a string where it expects a
 # number. An array's own fill value is unaffected: `.zarray` carries it in the
 # spelling the Zarr v2 spec reserves for it.
-_hasnonfinite(v::AbstractFloat) = !isfinite(v)
+_hasnonfinite(v::Union{AbstractFloat, Complex{<:AbstractFloat}}) = !isfinite(v)
 _hasnonfinite(v::AbstractArray) = any(_hasnonfinite, v)
 _hasnonfinite(@nospecialize(v)) = false
 
