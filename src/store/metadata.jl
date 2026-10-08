@@ -20,8 +20,18 @@ bytes (`"<Vn"`), which would silently discard the type's actual layout rather
 than fail on it.
 """
 function zarr_dtype_string(::Type{T}) where {T}
-    if T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat ||
-            T <: Complex{<:Union{AbstractFloat, Signed}}
+    if T <: Complex{<:Signed}
+        dtype = Zarr.typestr(T)
+        # A Zarr.jl without the structured complex-integer dtype spells one as opaque bytes.
+        dtype isa AbstractVector || throw(
+            ArgumentError(
+                "this Zarr.jl has no dtype for $T: complex integers need the Zarr.jl branch " *
+                    "this package's `[sources]` pins, which Julia 1.10 does not honor"
+            )
+        )
+        return dtype
+    end
+    if T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat || T <: Complex{<:AbstractFloat}
         return Zarr.typestr(T)
     end
     throw(
