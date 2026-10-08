@@ -63,7 +63,11 @@ import Zarr
         @test ChunkManifests.zarr_dtype_string(UInt16) == "<u2"
         @test ChunkManifests.zarr_dtype_string(Bool) == "|b1"
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
-        @test ChunkManifests.zarr_dtype_string(Complex{Int32}) == [["r", "<i4"], ["i", "<i4"]]
+        if Zarr.typestr(Complex{Int32}) isa AbstractVector
+            @test ChunkManifests.zarr_dtype_string(Complex{Int32}) == [["r", "<i4"], ["i", "<i4"]]
+        else
+            @test_throws "complex integers need" ChunkManifests.zarr_dtype_string(Complex{Int32})
+        end
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(Complex{UInt16})
     end
 
