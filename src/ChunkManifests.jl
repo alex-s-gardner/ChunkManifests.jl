@@ -41,6 +41,7 @@ include("core/manifestarray.jl")
 include("core/validate.jl")
 include("codecs/mapping.jl")
 include("codecs/tiffpredictor.jl")
+include("codecs/jpeg2000.jl")
 include("transport/transport.jl")
 include("transport/local.jl")
 include("transport/http.jl")
@@ -58,6 +59,7 @@ include("access/h5prefetch.jl")
 include("access/hdf5vfd.jl")
 include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")
+include("drivers/jpeg2000.jl")
 include("serialize/zarrnative.jl")
 include("serialize/kerchunkjson.jl")
 include("combine/combine.jl")
@@ -67,7 +69,7 @@ include("entry.jl")
 include("precompile.jl")
 
 export scan, load, save, concat, replace_prefix!, validate
-export AbstractDriver, HDF5Driver, GeoTIFFDriver
+export AbstractDriver, HDF5Driver, GeoTIFFDriver, JPEG2000Driver
 export ManifestFormat, ZarrManifest, KerchunkJSON, KerchunkParquet
 export AbstractTransport, LocalTransport, HTTPTransport, S3Transport, TransportContainers
 export ReadaheadCache
@@ -95,6 +97,7 @@ function __init__()
     # The workload probes the Zarr.jl it was precompiled against; probe again.
     _BYTE_FILTER_SUPPORT[] = nothing
     _register_tiff_predictor!()
+    _register_jpeg2000_tile!()
     return nothing
 end
 

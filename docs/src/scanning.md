@@ -43,6 +43,7 @@ file and a saved manifest alike.
 |---|---|---|
 | [`HDF5Driver`](@ref) | HDF5 and NetCDF4 | the package itself |
 | [`GeoTIFFDriver`](@ref) | GeoTIFF, COG | `using TiffImages` |
+| [`JPEG2000Driver`](@ref) | JP2, JPEG 2000 codestream | the package itself; decoding needs `using OpenJpeg_jll` |
 
 `.tif` and `.tiff` are registered to [`GeoTIFFDriver`](@ref) by the package itself, but the
 driver's own `_scan` method lives in a package extension, so scanning a TIFF requires

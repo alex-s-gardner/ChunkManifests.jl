@@ -720,6 +720,33 @@ function GeoTIFFDriver(; chunkbytes::Integer = 8 * 1024 * 1024)
     return GeoTIFFDriver(Int(chunkbytes))
 end
 
+"""
+    JPEG2000Driver()
+
+Reads the tile layout of a JPEG 2000 file: a JP2 file or a bare codestream.
+Chosen by [`scan`](@ref) for `.jp2`, `.j2k`, `.j2c` and `.jpc`.
+
+The result has one group, `"0"`, holding `"data"`: the image as an `(x, y)`
+array with one chunk per tile, its element type the narrowest integer holding
+the component's precision. A JPEG 2000 tile is coded independently of the
+others, so a chunk's bytes are the tile's tile-parts, decoded with the
+codestream's main header, which the array's compressor carries. Locating the
+tiles reads the main header and the 12-byte header of each tile-part, one after
+another, and no sample data.
+
+Decoding a chunk needs `libopenjp2`: load `OpenJpeg_jll` before reading. The
+scan itself needs nothing beyond this package.
+
+`access` decides how the file is reached; the default reads a remote object in
+place through [`RangeAccess`](@ref).
+
+Rejected, by name, with an `ArgumentError`: more than one component, a
+subsampled component, a tile grid offset from the image origin, packed packet
+headers in the main header (PPM), a tile whose tile-parts are interleaved with
+other tiles' (so that it is not one byte range), and a tile with no tile-parts.
+"""
+struct JPEG2000Driver <: AbstractDriver end
+
 # Manifest interface.
 function chunkgridaxes end
 function chunkgridsize end
