@@ -45,8 +45,7 @@ function _localmap(path::AbstractString)
     end
 end
 
-function _mapped_range(path::AbstractString, r::ByteRange)
-    bytes = _localmap(path)
+function _mapped_range(path::AbstractString, bytes::Vector{UInt8}, r::ByteRange)
     _checked_range(path, length(bytes), r)
     r.nbytes == 0 && return UInt8[]
     return unsafe_wrap(Array, pointer(bytes, Int(r.offset) + 1), Int(r.nbytes); own = false)
@@ -62,7 +61,10 @@ end-of-file rather than returning a short read as if it were complete.
 The result is a read-only view of the file, memory-mapped: writing to it
 faults.
 """
-fetchrange(::LocalTransport, uri::AbstractString, r::ByteRange) = _mapped_range(_localpath(uri), r)
+function fetchrange(::LocalTransport, uri::AbstractString, r::ByteRange)
+    path = _localpath(uri)
+    return _mapped_range(path, _localmap(path), r)
+end
 
 """
     fetchranges(::LocalTransport, uri, ranges::AbstractVector{ByteRange})
@@ -73,5 +75,6 @@ are not coalesced: a view of a mapped file costs nothing until it is read.
 """
 function fetchranges(::LocalTransport, uri::AbstractString, ranges::AbstractVector{ByteRange})
     path = _localpath(uri)
-    return [_mapped_range(path, r) for r in ranges]
+    bytes = _localmap(path)
+    return [_mapped_range(path, bytes, r) for r in ranges]
 end
