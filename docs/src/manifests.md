@@ -45,8 +45,8 @@ manifest. A local path whose extension names no format is recognized from its co
 The kerchunk formats are implemented in Julia; neither Python, `kerchunk` nor `fsspec` is
 needed. Add a format by defining a [`ManifestFormat`](@ref) subtype.
 
-Saved dtypes are `Bool`, fixed-width integers, floating-point, complex-float and fixed-length
-byte strings. Zarr.jl reads a one-byte string (`|S1`, as a CF `grid_mapping` variable holds)
+Saved dtypes are `Bool`, fixed-width integers, floating-point, complex (complex integers need
+the patched Zarr.jl) and fixed-length byte strings. Zarr.jl reads a one-byte string (`|S1`, as a CF `grid_mapping` variable holds)
 back as a character type, with the same bytes.
 
 ## Object storage

@@ -61,7 +61,7 @@ Handled, with a cost:
   since no byte length is known without reading the object first.
 - Zero-dimensional arrays cannot carry virtual references in the kerchunk Parquet format.
 - A dtype this package cannot write back is refused on load, naming the array and the
-  dtype. Readable dtypes are `Bool`, fixed-width integers, floating-point, complex-float, and
+  dtype. Readable dtypes are `Bool`, fixed-width integers, floating-point, complex, and
   fixed-length byte strings (`|SN`).
 
 ## Remote scanning
