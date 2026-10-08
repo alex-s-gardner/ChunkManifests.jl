@@ -7,21 +7,21 @@ end
 
 # Several files at once
 
-Two file collections look alike and mean different things, so they are spelled differently.
+Use `merge` for files holding different variables and `concat` for files that are successive
+slices of one dataset.
 
 ## Different variables: merge
 
-Files that hold *different* variables merge into one group, a layer per file, following
-`RasterStack(filenames; name)`. A file holding one array becomes that layer; a file holding
-several keeps its own keys beneath its name:
+`merge` makes one group with a layer per file, like `RasterStack(filenames; name)`. A file
+holding one array becomes that layer; a file holding several keeps its own keys beneath its
+name:
 
 ```julia
 merge(load(["elevation.tif", "slope.tif"]))    # keys "elevation", "slope"
 merge(load(["a.h5", "b.h5"]))                  # keys "a/lat", "a/h", "b/lat", "b/h"
 ```
 
-`names` defaults to each input's file name without its extension, as recorded by
-[`scan`](@ref) or [`load`](@ref); pass it to set the layer names instead:
+Layer names default to each file's name without its extension; pass `names` to set them:
 
 ```jldoctest combining
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
@@ -41,16 +41,11 @@ julia> sort(collect(keys(zm["a"].arrays)))
  "y"
 ```
 
-The merged manifest shares one [`PathTable`](@ref) across every input, so the usual per-file
-operations — [`validate`](@ref), [`replace_prefix!`](@ref) — still cost one request or one
-edit per file.
 
 ## Successive slices: concatenate
 
-Files that are successive *slices* of one dataset are concatenated instead. Which dimension
-they lie along cannot be recovered from the files without reading and ordering their
-coordinate values, so it is declared, following `RasterSeries(paths, Ti)` then
-`Rasters.combine`:
+[`concat`](@ref) joins the arrays along a dimension you name, like `RasterSeries(paths, Ti)`
+followed by `Rasters.combine`:
 
 ```jldoctest combining
 julia> zc = concat([load(path), load(path)], :x);
@@ -66,31 +61,21 @@ julia> size(zc["grounded"]), size(zc["x"]), size(zc["y"])
 ((45792, 18392), (45792,), (18392,))
 ```
 
-`grounded` and `x` both name dimension `"x"` and are concatenated along it; `y` does not, so
-only the first input's copy survives. `mapping`, the `grid_mapping` variable, is likewise
-left as the first input's copy.
+Arrays with dimension `"x"` (`grounded` and `x`) are concatenated along it. The others (`y`
+and `mapping`) are kept from the first input.
 
-[`scan`](@ref) and [`load`](@ref) each take a vector of paths and read them several at a
-time, which is the right way to build the groups [`concat`](@ref) and `merge` take from a
-set of remote files:
+[`scan`](@ref) and [`load`](@ref) take a vector of paths and work on several at a time, which
+is much faster for remote files than one after another:
 
 ```julia
 urls = ["https://host/granule_$(i).nc" for i in 1:12]
 zc = concat(scan(urls), :time)
 ```
 
-Scanning the `CMI` variable of twelve GOES-16 full-disk files over HTTPS this way takes
-about 8 s, against 30 s scanning them one after another: libhdf5 serves one scan at a time,
-but each file's metadata requests run while the others are being walked.
+### Checking the inputs agree
 
-### What gets concatenated
-
-Each array is handled on its own: one naming the concatenation dimension is concatenated
-along it, while an array that does not — a coordinate like `y` above — is left as the first
-input's copy.
-
-[`concat`](@ref)'s `check` keyword decides how hard the inputs are compared on those
-uncombined arrays:
+`concat`'s `check` keyword sets how the arrays kept from the first input are compared
+against the other inputs' copies:
 
 | `check` | does | costs |
 |---|---|---|
@@ -98,9 +83,8 @@ uncombined arrays:
 | `:values` | decodes and compares the values | reads chunks |
 | `:none` | nothing | nothing |
 
-### The chunk boundary rule
+### Chunk boundaries
 
-Every input but the last must end on a chunk boundary along the concatenation dimension.
-Zarr permits a partial chunk only as a grid's last one, so a 10-long axis chunked by 4
-cannot be followed by anything. That is rejected outright, rather than producing a group
-that reads garbage.
+Every input but the last must end on a chunk boundary along the concatenation dimension,
+because Zarr allows a partial chunk only at the end of a grid. A 10-long axis chunked by 4
+cannot be followed by anything, and `concat` refuses it.

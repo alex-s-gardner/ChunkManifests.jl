@@ -34,10 +34,10 @@ julia> sort(collect(keys(z2.arrays))) == sort(collect(keys(z.arrays)))
 true
 ```
 
-[`load`](@ref) scans a path whose extension names a driver too, so `load` opens a source
-file and a saved manifest alike.
+[`load`](@ref) also scans a source file, so it opens a source file and a saved manifest
+alike.
 
-## Drivers and the registry
+## Drivers
 
 | driver | reads | comes with |
 |---|---|---|
@@ -45,20 +45,16 @@ file and a saved manifest alike.
 | [`GeoTIFFDriver`](@ref) | GeoTIFF, COG | `using TiffImages` |
 | [`JPEG2000Driver`](@ref) | JP2, JPEG 2000 codestream | the package itself; decoding needs `using OpenJpeg_jll` |
 
-`.tif` and `.tiff` are registered to [`GeoTIFFDriver`](@ref) by the package itself, but the
-driver's own `_scan` method lives in a package extension, so scanning a TIFF requires
-TiffImages to be loaded. Until it is, scanning throws, naming the fix rather than guessing at
-one:
+Without TiffImages loaded, scanning a TIFF says so:
 
 ```julia
 julia> scan("junk.tif")
 ERROR: TiffImages must be loaded to scan with GeoTIFFDriver. Try `using TiffImages`.
 ```
 
-A driver is a type, so a format this package does not cover is a new
-[`AbstractDriver`](@ref) subtype with a [`ChunkManifests._scan`](@ref) method, made the
-default for an extension by a [`ChunkManifests.register_driver!`](@ref) call — not an edit to
-a dispatch chain here.
+To add a format, define an [`AbstractDriver`](@ref) subtype with a
+[`ChunkManifests._scan`](@ref) method and register it for an extension with
+[`ChunkManifests.register_driver!`](@ref).
 
 ## What one scan includes
 
@@ -102,9 +98,9 @@ pixel-center coordinates when the image is georeferenced:
 …
 ```
 
-Each level has its own coordinates because a dimension name has one length within a group,
-which is what lets Rasters and xarray open any level directly. A TIFF holding several
-separate full-resolution images adds the image index in front, as `"<image>/<level>/data"`.
+Each level carries its own coordinates, so Rasters and xarray open any level directly. A TIFF
+holding several separate full-resolution images adds the image index in front, as
+`"<image>/<level>/data"`.
 
 ## Keywords
 
@@ -120,7 +116,5 @@ With [`GeoTIFFDriver`](@ref):
 - `level` — keep one resolution level, `0` being full resolution. Defaults to every level.
 - `access` — as above.
 
-[`scan`](@ref) and [`load`](@ref) both also take the two things that govern reading chunks
-afterwards: `transport` resolves the URIs the manifest names (see
-[Fetching chunk bytes](@ref)), and `readahead` is the [`ReadaheadCache`](@ref) that
-coalesces nearby chunk requests.
+With any driver, [`scan`](@ref) and [`load`](@ref) also take `transport` and `readahead`,
+which govern how chunks are read afterwards; see [Fetching chunk bytes](@ref).

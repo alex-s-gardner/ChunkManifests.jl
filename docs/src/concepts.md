@@ -5,26 +5,23 @@ DocTestSetup = quote
 end
 ```
 
-# Concepts
+# How it works
+
+This page is for readers who want to inspect or extend a manifest. Using one needs none of
+it.
 
 ## A manifest is a set of byte locations
 
 A scan reads a source file's metadata — superblocks, chunk indexes, tag directories — and
-records, for every chunk of every array, which file the chunk's compressed bytes are in, the
-offset they start at, and how many bytes they run for. That record is the manifest, reached
-from the group [`scan`](@ref) and [`load`](@ref) return with
-[`ChunkManifests._manifest`](@ref). The array data itself is not read, not copied and not
-converted.
+records, for every chunk of every array, which file holds its compressed bytes, the offset
+they start at, and their length. [`ChunkManifests._manifest`](@ref) reaches that record from
+the group [`scan`](@ref) and [`load`](@ref) return.
 
-Serving a chunk therefore means fetching those bytes and handing them back. Nothing in this
-package decompresses, unshuffles or byte-swaps them; Zarr.jl's codec pipeline does all of
-that, from the codec description the scan translated out of the source file's filter
-pipeline. A chunk read through a manifest is byte-for-byte a chunk read from the original
-file, because it is the same bytes.
-
-That is also where the limits come from. A source feature with no Zarr v2 codec equivalent
-cannot be represented, and such a file is refused by name rather than scanned into a
-manifest that would decode to wrong values. See [Limitations](@ref).
+Serving a chunk means fetching those bytes and handing them back. Nothing in this package
+decompresses, unshuffles or byte-swaps them; Zarr.jl does, using the codecs the scan
+translated from the file's filter pipeline. That is also where the limits come from: a
+source feature with no Zarr v2 codec equivalent cannot be represented, so it is refused (see
+[Limitations](@ref)).
 
 ## The object model
 
