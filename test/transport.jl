@@ -225,8 +225,20 @@ end
                 @test results[i] == content[(r.offset + 1):(r.offset + r.nbytes)]
             end
             # Views of the file's memory map, which is mapped read-only.
-            @test_throws ReadOnlyMemoryError results[1][1] = 0x00
+            ChunkManifests._MAP_LOCAL_FILES && @test_throws ReadOnlyMemoryError results[1][1] = 0x00
             @test_throws "exceeds size" fetchranges(LocalTransport(), path, [ByteRange(length(content) - 2, 4)])
+        end
+
+        # The path Windows takes, run on every platform.
+        @testset "unmapped reads return independent, correctly ordered vectors" begin
+            ranges = [ByteRange(100, 10), ByteRange(0, 10), ByteRange(50, 10), ByteRange(7, 0)]
+            results = ChunkManifests._read_ranges(LocalTransport(), path, ranges)
+            @test results == [content[(r.offset + 1):(r.offset + r.nbytes)] for r in ranges]
+            results[2][1] += 0x01
+            @test results[2] != content[1:10]
+            @test ChunkManifests._read_ranges(LocalTransport(), path, ranges[2:2]) == [content[1:10]]
+            @test_throws "exceeds size" ChunkManifests._read_ranges(LocalTransport(), path, [ByteRange(length(content) - 2, 4)])
+            @test_throws "no such file" ChunkManifests._read_ranges(LocalTransport(), joinpath(dir, "absent.bin"), ranges)
         end
 
         @testset "a file rewritten in place is mapped afresh" begin
