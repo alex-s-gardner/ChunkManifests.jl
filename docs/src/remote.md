@@ -19,8 +19,8 @@ inferred.
 | [`RangeAccess`](@ref) | metadata only, in aligned blocks through this package's transports | implemented; what [`AutoAccess`](@ref) chooses for a remote object, for both HDF5 and GeoTIFF |
 
 ```julia
-scan("https://host/granule.h5", HDF5Driver(); access = DownloadAccess())
-scan(url, HDF5Driver(); access = DownloadAccess(; cachedir = "/data/cache", keep = true))
+scan("https://host/granule.h5"; access = DownloadAccess())
+scan(url; access = DownloadAccess(; cachedir = "/data/cache", keep = true))
 ```
 
 [`AutoAccess`](@ref), the default, reads a local path directly and a remote one in place
@@ -28,7 +28,7 @@ through [`RangeAccess`](@ref) — so pointing a scan at a remote object moves th
 libhdf5 asks for, not the object:
 
 ```julia
-scan("s3://bucket/granule.h5", HDF5Driver())      # reads what it needs, nothing more
+scan("s3://bucket/granule.h5")      # reads what it needs, nothing more
 ```
 
 It falls back to fetching only where the virtual file driver cannot be registered, which is a
@@ -51,8 +51,8 @@ does:
 
 - **HDF5 and NetCDF4** are read through a libhdf5 *virtual file driver*, since libhdf5 does
   its own I/O.
-- **GeoTIFF and COG** are read through [`RangeIO`](@ref), a seekable stream that TiffImages
-  walks exactly as it walks a local file.
+- **GeoTIFF and COG** are read through [`ChunkManifests.RangeIO`](@ref), a seekable stream
+  that TiffImages walks exactly as it walks a local file.
 
 Both sit in `src/access/`, a layer below building a manifest: deciding which ranges to ask
 for and which to keep is a separate concern from what a manifest is, and the drivers above
@@ -76,7 +76,7 @@ size, and asks only for bytes the head does not hold, so an object smaller than
 `initialread` costs one request. `0` skips either end.
 
 ```julia
-scan(url, HDF5Driver(); access = RangeAccess(; initialread = 8 * 1024^2))
+scan(url; access = RangeAccess(; initialread = 8 * 1024^2))
 ```
 
 **Blocks.** Every other read fetches whole aligned blocks of `blocksize` bytes (256 KiB),
@@ -112,10 +112,9 @@ one round trip per level of the index.
 
 **Several files.** libhdf5 serves one scan at a time, so a remote scan opens the file
 twice: once to find what it starts from and start prefetching it, then, after those
-prefetches have landed without holding libhdf5, to walk it. Scans of several files given
-together — [`scan`](@ref) over a vector of paths, or a [`ManifestSeries`](@ref) of them —
-therefore overlap their requests. Twelve GOES-16 files scanned that way take 9.9 s,
-against 28 s one after another.
+prefetches have landed without holding libhdf5, to walk it. [`scan`](@ref) over a vector of
+paths scans them together and so overlaps their requests. Twelve GOES-16 files scanned that
+way take 9.9 s, against 28 s one after another.
 
 `pagebuffer` sizes libhdf5's own page buffer. A product written with paged metadata
 aggregation — what "cloud optimized" usually means for HDF5 — then has its metadata read in
@@ -133,7 +132,7 @@ to watch is **how many bytes a scan pulls against the size of the object**. If i
 approaches the whole thing, fetching it is no slower and leaves a copy for the next scan:
 
 ```julia
-scan(url, HDF5Driver(); access = DownloadAccess(; cachedir = "/data/cache", keep = true))
+scan(url; access = DownloadAccess(; cachedir = "/data/cache", keep = true))
 ```
 
 For the mosaic above the opposite holds: [`DownloadAccess`](@ref) took 42 s to scan it,
@@ -157,7 +156,13 @@ same object is local.
 ## S3
 
 An `s3://` URI is read through [`S3Transport`](@ref), which needs `using AWSS3` and resolves
-credentials the way the AWS tools do.
+credentials the way the AWS tools do. A transport passed to [`scan`](@ref) as `transport`
+reads both the scan's metadata requests, under the default [`AutoAccess`](@ref), and the
+chunks afterwards:
+
+```julia
+scan("s3://bucket/granule.h5"; transport = TransportContainers(["s3://bucket/" => S3Transport("bucket"; aws = config)]))
+```
 
 A **public or pre-signed** object needs none of that. An `https://` URL for one is an ordinary
 ranged `GET`, so [`HTTPTransport`](@ref) reads it with no AWS dependency and no credentials in

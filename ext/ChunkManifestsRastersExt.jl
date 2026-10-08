@@ -1,11 +1,11 @@
 module ChunkManifestsRastersExt
 
-# A ChunkManifest reaches Rasters as an already-open, lazy array rather than
-# through Rasters' FileArray.
+# A group returned by `scan` or `load` reaches Rasters as an already-open, lazy
+# array rather than through Rasters' FileArray.
 #
 # FileArray holds a filename and reopens the dataset on every readblock!; it
-# exists to defer opening a file. A ChunkManifest is a manifest already in
-# memory plus byte-range transports, so there is nothing left to defer, and
+# exists to defer opening a file. Such a group is a manifest already in memory
+# plus byte-range transports, so there is nothing left to defer, and
 # routing through FileArray would discard the store instance along with its
 # transport containers and its warmed readahead cache. Handing Rasters an open
 # lazy DiskArray is its ordinary Raster(A, dims) path, not a special case.
@@ -28,45 +28,58 @@ module ChunkManifestsRastersExt
 # they move only when that path moves.
 
 using ChunkManifests
+using ChunkManifests: ChunkManifest
 import Rasters
 import Zarr
 import ZarrDatasets
 
 const CDM = ZarrDatasets.CDM
 
-# A ChunkManifest keys its arrays by full Zarr path ("gt1l/h_li"), while
+# A manifest keys its arrays by full Zarr path ("gt1l/h_li"), while
 # CommonDataModel addresses a variable by name within a dataset, so a key's
 # leading groups are walked here rather than passed along as part of the name.
 # The split is the store's own, so a key divides here exactly as it does when
 # the store resolves one.
 const _splitpath = ChunkManifests._splitkey
 
-# The dataset over one group of `cm`, `""` being the root. A group is opened as
-# a dataset of its own rather than reached through
-# `CDM.group`: ZarrDatasets 0.1.6 builds a `CDM.group` dataset with an empty
-# dimension table, so it reports no dimensions and Rasters' layer selection,
-# which removes dimension variables by name, fails on it.
-function _groupof(cm::ChunkManifest, group::AbstractString)
-    zg = Zarr.zopen(cm)
+const ManifestGroup = Zarr.ZGroup{ChunkManifest}
+
+# The array keys under `z`, relative to it, from the group tree Zarr.jl built
+# when it opened `z`.
+function _relkeys(z::Zarr.ZGroup, prefix::AbstractString = "")
+    ks = [ChunkManifests._joinkey(prefix, k) for k in keys(z.arrays)]
+    for (name, g) in z.groups
+        append!(ks, _relkeys(g, ChunkManifests._joinkey(prefix, name)))
+    end
+    return sort!(ks)
+end
+
+# The dataset over `group` of `z`, `""` being `z` itself. A group is opened as
+# a dataset of its own rather than reached through `CDM.group`: ZarrDatasets
+# 0.1.6 builds a `CDM.group` dataset with an empty dimension table, so it
+# reports no dimensions and Rasters' layer selection, which removes dimension
+# variables by name, fails on it.
+function _groupof(z::ManifestGroup, group::AbstractString)
+    zg = z
     isempty(group) || for part in split(group, '/')
         zg = zg[String(part)]
     end
     return ZarrDatasets.ZarrDataset(zg)
 end
 
-# Array keys of `cm` lying directly under `group`, with their leaf names.
-function _leaves(cm::ChunkManifest, group::AbstractString)
+# Array keys of `z` lying directly under `group`, with their leaf names.
+function _leaves(z::ManifestGroup, group::AbstractString)
     out = Pair{String, String}[]
-    for key in sort!(collect(keys(arraysof(cm))))
+    for key in _relkeys(z)
         g, leaf = _splitpath(key)
         g == group && push!(out, key => String(leaf))
     end
     return out
 end
 
-function _groupnames(cm::ChunkManifest)
+function _groupnames(z::ManifestGroup)
     groups = Set{String}()
-    for key in keys(arraysof(cm))
+    for key in _relkeys(z)
         g, _ = _splitpath(key)
         isempty(g) || push!(groups, g)
     end
@@ -74,14 +87,14 @@ function _groupnames(cm::ChunkManifest)
 end
 
 _describe(group::AbstractString) =
-    isempty(group) ? "at the manifest root" : "under group $(repr(group))"
+    isempty(group) ? "at the group's root" : "under group $(repr(group))"
 
-function _nolayers(cm::ChunkManifest, group::AbstractString)
-    groups = _groupnames(cm)
+function _nolayers(z::ManifestGroup, group::AbstractString)
+    groups = _groupnames(z)
     throw(
         ArgumentError(
-            "RasterStack: no array lies $(_describe(group)). The manifest holds " *
-                "$(sort!(collect(keys(arraysof(cm))))). " *
+            "RasterStack: no array lies $(_describe(group)). The group holds " *
+                "$(_relkeys(z)). " *
                 (
                 isempty(groups) ? "It has no groups." :
                     "Name one of its groups to reach them: $(groups)"
@@ -122,13 +135,14 @@ function _raster(
 end
 
 """
-    Rasters.Raster(cm::ChunkManifest, name; kw...)
+    Rasters.Raster(z::Zarr.ZGroup, name; kw...)
 
-A lazy [`Rasters.Raster`](@extref) over one array of `cm`, named by its full
-manifest key (`"gt1l/land_ice_segments/h_li"`).
+A lazy [`Rasters.Raster`](@extref) over one array of `z`, a group returned by
+[`scan`](@ref) or [`load`](@ref), named by its key within `z`
+(`"gt1l/land_ice_segments/h_li"`).
 
-`parent(raster)` wraps `cm` itself, so the store instance, its transports and
-its readahead cache survive into the raster, and a windowed read fetches only
+`parent(raster)` wraps the manifest behind `z` itself, so the store instance,
+its transports and its readahead cache survive into the raster, and a windowed read fetches only
 the chunks that window covers. Constructing one reads the *coordinate*
 variables, because a `Sampled` or `Projected` lookup is those coordinate
 values; it reads none of the data variable.
@@ -139,13 +153,11 @@ metadata, so the result matches what `Raster(path; lazy=true)` builds from a
 real Zarr store. `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce` and `raw`
 mean what they mean there.
 
-Each call opens its own dataset over `cm`, which costs a walk of the manifest's
-whole array tree. [`Rasters.RasterStack`](@extref)`(cm)` opens one and shares it
-across every layer, so that is the cheaper route to several arrays of one
-manifest.
+[`Rasters.RasterStack`](@extref)`(z)` opens one dataset and shares it across
+every layer, so that is the cheaper route to several arrays of one group.
 """
 function Rasters.Raster(
-        cm::ChunkManifest, name;
+        z::ManifestGroup, name;
         crs = Rasters.nokw,
         mappedcrs = Rasters.nokw,
         missingval = Rasters.nokw,
@@ -156,14 +168,12 @@ function Rasters.Raster(
         kw...,
     )
     key = String(string(name))
-    haskey(arraysof(cm), key) || throw(
-        ArgumentError(
-            "Raster: the manifest has no array at $(repr(key)); it holds " *
-                "$(sort!(collect(keys(arraysof(cm)))))",
-        )
+    ks = _relkeys(z)
+    key in ks || throw(
+        ArgumentError("Raster: the group has no array at $(repr(key)); it holds $ks")
     )
     group, leaf = _splitpath(key)
-    ds = _groupof(cm, group)
+    ds = _groupof(z, group)
     return _raster(
         CDM.variable(ds, leaf), leaf;
         crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
@@ -171,45 +181,46 @@ function Rasters.Raster(
 end
 
 """
-    Rasters.Raster(cm::ChunkManifest; kw...)
+    Rasters.Raster(z::Zarr.ZGroup; kw...)
 
-A lazy [`Rasters.Raster`](@extref) over the single array of `cm`.
+A lazy [`Rasters.Raster`](@extref) over the single array of `z`.
 
-Errors if `cm` holds more than one array, listing them, rather than choosing
+Errors if `z` holds more than one array, listing them, rather than choosing
 one: which variable of a multi-variable granule was meant is not something to
 guess at.
 """
-function Rasters.Raster(cm::ChunkManifest; kw...)
-    ks = sort!(collect(keys(arraysof(cm))))
+function Rasters.Raster(z::ManifestGroup; kw...)
+    ks = _relkeys(z)
     length(ks) == 1 || throw(
         ArgumentError(
-            "Raster: the manifest holds $(length(ks)) arrays, so which one to build a " *
+            "Raster: the group holds $(length(ks)) arrays, so which one to build a " *
                 "Raster from has to be named: $(ks). Use RasterStack to take them all",
         )
     )
-    return Rasters.Raster(cm, only(ks); kw...)
+    return Rasters.Raster(z, only(ks); kw...)
 end
 
 """
-    Rasters.RasterStack(cm::ChunkManifest; group=nothing, name, kw...)
+    Rasters.RasterStack(z::Zarr.ZGroup; group=nothing, name, kw...)
 
-A lazy [`Rasters.RasterStack`](@extref) with one layer per array of `cm`.
+A lazy [`Rasters.RasterStack`](@extref) with one layer per array of `z`, a
+group returned by [`scan`](@ref) or [`load`](@ref).
 
-Only the arrays lying directly at one level become layers: those at the
-manifest root by default, or those directly under `group`. A manifest whose
-arrays all sit in groups — an HDF5 granule, or a merge of several files —
-reports the groups available rather than flattening paths into layer names.
+Only the arrays lying directly at one level become layers: those directly in
+`z` by default, or those directly under its subgroup `group`. A group whose
+arrays all sit in subgroups — an HDF5 granule, or a merge of several files —
+reports the subgroups available rather than flattening paths into layer names.
 
 Layers are the arrays Rasters itself makes layers of a dataset: dimension
 (coordinate) variables, their bounds and `grid_mapping` variables are left out,
 since they describe the layers rather than being data.
 
 `name` overrides the layer names, which default to each array's own leaf name.
-Each layer is built as in [`Rasters.Raster`](@extref)`(cm, name)` and accepts
+Each layer is built as in [`Rasters.Raster`](@extref)`(z, name)` and accepts
 the same keywords.
 """
 function Rasters.RasterStack(
-        cm::ChunkManifest;
+        z::ManifestGroup;
         group = nothing,
         name = nothing,
         crs = Rasters.nokw,
@@ -222,10 +233,10 @@ function Rasters.RasterStack(
         kw...,
     )
     g = group === nothing ? "" : String(string(group))
-    leaves = _leaves(cm, g)
-    isempty(leaves) && _nolayers(cm, g)
+    leaves = _leaves(z, g)
+    isempty(leaves) && _nolayers(z, g)
 
-    ds = _groupof(cm, g)
+    ds = _groupof(z, g)
     layernames = sort!(String.(Rasters._layers(ds).names))
     isempty(layernames) && throw(
         ArgumentError(

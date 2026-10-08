@@ -22,8 +22,8 @@ end
         _cc_write_h5(fileA, "x", dataA, (2, 3))
         _cc_write_h5(fileB, "x", dataB, (2, 3))
 
-        vaA = arraysof(scan(fileA, HDF5Driver(); group = "/x"))["x"]
-        vaB = arraysof(scan(fileB, HDF5Driver(); group = "/x"))["x"]
+        vaA = arraysof(_scan(fileA, HDF5Driver(); group = "/x"))["x"]
+        vaB = arraysof(_scan(fileB, HDF5Driver(); group = "/x"))["x"]
 
         merged = concat([vaA, vaB]; dims = 2)
         @test size(merged) == (4, 15)
@@ -246,68 +246,6 @@ end
             a1 = dummy_manifestarray((4, 6), (2, 3), "e1.bin")
             @test concat([a1]; dims = 1) === a1
             @test_throws "no arrays given" concat(ManifestArray[]; dims = 1)
-        end
-    end
-
-    @testset "group level" begin
-        @testset "multiple arrays and nested keys" begin
-            g1 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}(
-                    "root" => dummy_manifestarray((4, 6), (2, 3), "g1root.bin"),
-                    "nested/arr" => dummy_manifestarray((4, 6), (2, 3), "g1nested.bin"),
-                ),
-                attrs = Dict{String, Any}("title" => "t"),
-                provenance = Dict{String, Any}("driver" => "HDF5Driver"),
-            )
-            g2 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}(
-                    "root" => dummy_manifestarray((4, 6), (2, 3), "g2root.bin"),
-                    "nested/arr" => dummy_manifestarray((4, 6), (2, 3), "g2nested.bin"),
-                ),
-                attrs = Dict{String, Any}("title" => "t"),
-            )
-
-            merged = concat([g1, g2]; dims = 2)
-            @test Set(keys(arraysof(merged))) == Set(["root", "nested/arr"])
-            @test size(arraysof(merged)["root"]) == (4, 12)
-            @test size(arraysof(merged)["nested/arr"]) == (4, 12)
-            @test attrsof(merged)["title"] == "t"
-            @test provenanceof(merged)["driver"] == "concat"
-            @test provenanceof(merged)["ninputs"] == 2
-        end
-
-        @testset "mismatched array keys rejected" begin
-            g1 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}(
-                    "a" => dummy_manifestarray((4, 6), (2, 3), "m1a.bin"),
-                    "b" => dummy_manifestarray((4, 6), (2, 3), "m1b.bin"),
-                ),
-            )
-            g2 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}(
-                    "a" => dummy_manifestarray((4, 6), (2, 3), "m2a.bin"),
-                    "c" => dummy_manifestarray((4, 6), (2, 3), "m2c.bin"),
-                ),
-            )
-            @test_throws "array keys" concat([g1, g2]; dims = 2)
-        end
-
-        @testset "per-array rejection names the array key" begin
-            g1 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}("a" => dummy_manifestarray((4, 6), (2, 3), "k1.bin")),
-            )
-            g2 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}("a" => dummy_manifestarray((4, 6), (1, 3), "k2.bin")),
-            )
-            @test_throws "array \"a\"" concat([g1, g2]; dims = 1)
-        end
-
-        @testset "single input and empty input" begin
-            g1 = ChunkManifest(;
-                arrays = Dict{String, ManifestArray}("a" => dummy_manifestarray((4, 6), (2, 3), "se1.bin")),
-            )
-            @test concat([g1]; dims = 1) === g1
-            @test_throws "no groups given" concat(ChunkManifest[]; dims = 1)
         end
     end
 end

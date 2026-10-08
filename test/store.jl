@@ -238,10 +238,35 @@ end
         end
     end
 
+    @testset "isinitialized agrees with getindex without producing bytes" begin
+        t = PathTable()
+        push_uri!(t, "absent.bin")
+        index = UInt32[ChunkManifests.MISSING_INDEX 1; ChunkManifests.INLINE_INDEX 1]
+        m = ExplicitChunkMap(
+            t, index, UInt64[0 0; 0 48], UInt64[0 48; 0 48];
+            inline = Dict(CartesianIndex(2, 1) => UInt8[1, 2, 3]),
+        )
+        va = ManifestArray{Float64}(m, (4, 6), (2, 3))
+        mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("g/a" => va))
+        # A virtual chunk is reported present without its file being read:
+        # "absent.bin" does not exist.
+        @test Zarr.isinitialized(mstore, "g/a/" * ChunkManifests.chunkkey(va, CartesianIndex(1, 2)))
+        keys_ = [
+            ".zgroup", ".zattrs", ".zarray", "g/.zgroup", "g/.zattrs", "g/.zarray",
+            "g/a/.zarray", "g/a/.zattrs", "g/a/.zgroup", "g/a/nonsense", "g/a/9.9",
+            "g/a/" * ChunkManifests.chunkkey(va, CartesianIndex(1, 1)),
+            "g/a/" * ChunkManifests.chunkkey(va, CartesianIndex(2, 1)),
+            "h/.zgroup", "nope",
+        ]
+        for k in keys_
+            @test Zarr.isinitialized(mstore, k) == (mstore[k] !== nothing)
+        end
+    end
+
     @testset "setindex! and storefromstring are read-only" begin
         mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => _dummyva((4,), (2,))))
         @test_throws "read-only" (mstore["a/.zarray"] = UInt8[1, 2, 3])
-        @test_throws "cannot be constructed from" Zarr.storefromstring(ChunkManifest, "s3://bucket/key", false)
+        @test_throws "cannot be opened from inside Zarr.zopen" Zarr.storefromstring(ChunkManifest, "s3://bucket/key", false)
     end
 
     @testset "store_read_strategy reports transport concurrency" begin

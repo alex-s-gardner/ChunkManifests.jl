@@ -212,28 +212,28 @@ function _save_affinemanifest(manifest::AffineChunkMap)
 end
 
 """
-    save(path, group::ChunkManifest, fmt::ZarrManifest) -> String
+    _save(path, group::ChunkManifest, fmt::ZarrManifest) -> String
 
 Write `group` to `path` as a [`ZarrManifest`](@ref). `path` is resolved to a
 store through `Zarr.storefromstring`: a plain local path is created as a
 directory if needed; an `s3://`, `gs://`, `http://`, or `https://` URI is
 written to the matching remote store instead. Returns `path`.
 """
-function save(path::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
+function _save(path::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
     store, prefix = _resolvestore(path, true)
-    save(store, prefix, group, fmt)
+    _save(store, prefix, group, fmt)
     return path
 end
 
 """
-    save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
+    _save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
 
 Write `group` as a [`ZarrManifest`](@ref) into `store` under the key prefix
-`prefix`, exactly as `save(path, group, fmt)` does once it has resolved
+`prefix`, exactly as `_save(path, group, fmt)` does once it has resolved
 `path` to a store. Not part of the public interface; exists so a manifest's
 store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
 """
-function save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
+function _save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
     columns = (UInt32[], UInt64[], UInt64[])
     explicit = false
     arraydocs = Dict{String, Any}[]
@@ -404,7 +404,7 @@ function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, a
 end
 
 """
-    ChunkManifest(path, fmt::ZarrManifest) -> ChunkManifest
+    _load(path, fmt::ZarrManifest) -> ChunkManifest
 
 Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
 `path`. `path` is resolved to a store through `Zarr.storefromstring`, the
@@ -414,22 +414,22 @@ back by this same method. A `ExplicitChunkMap`'s columns are opened as
 keeping the most recent few in memory, so a manifest larger than memory can be
 read back lazily.
 """
-function ChunkManifest(path::AbstractString, fmt::ZarrManifest)
+function _load(path::AbstractString, fmt::ZarrManifest)
     store, prefix = _resolvestore(path, false)
-    return ChunkManifest(store, prefix, fmt; label = path)
+    return _load(store, prefix, fmt; label = path)
 end
 
 """
-    ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label=prefix) -> ChunkManifest
+    _load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label=prefix) -> ChunkManifest
 
 Read a [`ZarrManifest`](@ref) from `store` under the key prefix `prefix`,
-exactly as `ChunkManifest(path, fmt)` does once it has resolved `path` to a store.
+exactly as `_load(path, fmt)` does once it has resolved `path` to a store.
 `label` names `store`/`prefix` in any error message; it defaults to `prefix`
 since a bare store has no path of its own. Not part of the public interface;
 exists so a manifest's store-agnosticism can be exercised directly against
 any `Zarr.AbstractStore`.
 """
-function ChunkManifest(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString = prefix)
+function _load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString = prefix)
     jsonbytes = store[prefix, _ZARR_MANIFEST_JSON]
     jsonbytes === nothing && throw(
         ArgumentError(

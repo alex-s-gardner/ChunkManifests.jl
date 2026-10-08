@@ -24,6 +24,12 @@ function _sr_write_slice(
     return path
 end
 
+# The manifest `concat` builds from `members`: a path is scanned, a manifest is
+# opened as a group.
+_sr_group(x::AbstractString) = scan(x)
+_sr_group(m::ChunkManifest) = asgroup(m)
+_sr_concat(members, dim; kw...) = _manifest(concat([_sr_group(x) for x in members], dim; kw...))
+
 @testset "Series" begin
     dir = mktempdir()
     xv = Int32.(1:4)
@@ -32,44 +38,42 @@ end
     s1 = _sr_write_slice(joinpath(dir, "s2001.h5"), h1, xv, Int32.(1:6))
     s2 = _sr_write_slice(joinpath(dir, "s2002.h5"), h2, xv, Int32.(7:15))
 
-    @testset "construction" begin
-        ser = ManifestSeries([s1, s2], :time)
-        @test dimnameof(ser) == "time"
-        @test length(ser) == 2
-        @test membersof(ser) isa Vector{ChunkManifest}
-        @test sprint(show, ser) == "ManifestSeries(2 manifests along \"time\")"
+    @testset "arguments" begin
+        # The dimension may be named by a string or a symbol, and the groups
+        # given as a vector or a tuple.
+        @test size(concat([scan(s1), scan(s2)], "time")["h"]) == (4, 15)
+        @test size(concat((scan(s1), scan(s2)), :time)["h"]) == (4, 15)
+        @test_throws "no groups given" concat(Zarr.ZGroup{ChunkManifest}[], :time)
+        @test_throws "the dimension name is empty" concat([scan(s1)], "")
 
-        @test dimnameof(ManifestSeries([s1, s2], "time")) == "time"
-        @test dimnameof(ManifestSeries(membersof(ser), :time)) == "time"
-        @test length(ManifestSeries((s1, s2), :time)) == 2
-
-        @test_throws "no paths given" ManifestSeries(String[], :time)
-        @test_throws "no manifests given" ManifestSeries(ChunkManifest[], :time)
-        @test_throws "the dimension name is empty" ManifestSeries([s1], "")
+        # A subgroup shares its parent's manifest, so it is refused rather than
+        # concatenated along with everything outside it.
+        h = arraysof(_scan(s1, HDF5Driver()))["h"]
+        nested = _sr_group(ChunkManifest(; arrays = Dict{String, ManifestArray}("g/h" => h)))
+        @test_throws "subgroup \"g\"" concat([nested["g"]], :time)
+        @test_throws "not a chunk manifest" concat([Zarr.zgroup(Zarr.DictStore())], :time)
     end
 
     @testset "scanning several paths keeps their order" begin
         # More paths than are scanned at once, so results arrive out of order.
         paths = [isodd(i) ? s1 : s2 for i in 1:(2 * ChunkManifests._CONCURRENT_FILES + 3)]
-        cms = scan(paths, HDF5Driver(); siblings = false)
-        @test cms isa Vector{ChunkManifest}
-        @test [size(arraysof(cm)["h"]) for cm in cms] ==
-            [isodd(i) ? (4, 6) : (4, 9) for i in eachindex(paths)]
-        @test size(arraysof(ChunkManifests.combine(ManifestSeries(cms[1:2], :time)))["h"]) ==
-            (4, 15)
+        zs = scan(paths; siblings = false)
+        @test zs isa Vector{Zarr.ZGroup{ChunkManifest}}
+        @test [size(z["h"]) for z in zs] == [isodd(i) ? (4, 6) : (4, 9) for i in eachindex(paths)]
+        @test size(concat(zs[1:2], :time)["h"]) == (4, 15)
         # A failure in any one of them is raised, naming that path.
-        @test_throws "no such file" scan([s1, joinpath(dir, "absent.h5")], HDF5Driver())
+        @test_throws "no such file" scan([s1, joinpath(dir, "absent.h5")])
     end
 
     @testset "the scan names a coordinate variable's own dimension" begin
-        g = ChunkManifest(s1)
+        g = _scan(s1, HDF5Driver())
         @test dimnamesof(arraysof(g)["h"]) == ["x", "time"]
         @test dimnamesof(arraysof(g)["x"]) == ["x"]
         @test dimnamesof(arraysof(g)["time"]) == ["time"]
     end
 
     @testset "combine concatenates by name, per array" begin
-        cm = ChunkManifests.combine(ManifestSeries([s1, s2], :time))
+        cm = _sr_concat([s1, s2], :time)
 
         @test sort(collect(keys(arraysof(cm)))) == ["h", "time", "x"]
         @test size(arraysof(cm)["h"]) == (4, 15)
@@ -78,7 +82,7 @@ end
         @test size(arraysof(cm)["x"]) == (4,)
         @test dimnamesof(arraysof(cm)["h"]) == ["x", "time"]
         @test provenanceof(cm) ==
-            Dict{String, Any}("driver" => "combine", "ninputs" => 2, "dim" => "time")
+            Dict{String, Any}("driver" => "concat", "ninputs" => 2, "dim" => "time")
 
         full = hcat(h1, h2)
         z = Zarr.zopen(cm)
@@ -96,8 +100,16 @@ end
         end
     end
 
+    @testset "the result has a path table of its own" begin
+        a = scan(s1)
+        c = concat([a, scan(s2)], :time)
+        replace_prefix!(c, dir => "/moved")
+        @test startswith(uriof(tableof(_manifest(c)), 1), "/moved")
+        @test uriof(tableof(_manifest(a)), 1) == s1
+    end
+
     @testset "a one-member series still resolves and validates" begin
-        cm = ChunkManifests.combine(ManifestSeries([s1], :time))
+        cm = _sr_concat([s1], :time)
         @test size(arraysof(cm)["h"]) == (4, 6)
         @test Zarr.zopen(cm)["h"][:, :] == h1
     end
@@ -105,15 +117,15 @@ end
     @testset "check governs the arrays that are not concatenated" begin
         # Same shape and chunking as s1, but different x values.
         s3 = _sr_write_slice(joinpath(dir, "s2003.h5"), h2, Int32.(11:14), Int32.(7:15))
-        ser = ManifestSeries([s1, s3], :time)
+        ser = [s1, s3]
 
         # :shape cannot see the difference — identical shape, chunks, dtype and
         # dimnames — which is exactly why :values exists.
-        @test size(arraysof(ChunkManifests.combine(ser))["x"]) == (4,)
-        @test size(arraysof(ChunkManifests.combine(ser; check = :none))["x"]) == (4,)
+        @test size(arraysof(_sr_concat(ser, :time))["x"]) == (4,)
+        @test size(arraysof(_sr_concat(ser, :time; check = :none))["x"]) == (4,)
 
         err = try
-            ChunkManifests.combine(ser; check = :values)
+            _sr_concat(ser, :time; check = :values)
             nothing
         catch e
             e
@@ -135,7 +147,7 @@ end
             )
         end
         wide = try
-            ChunkManifests.combine(ManifestSeries([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time))
+            _sr_concat([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time)
             nothing
         catch e
             e
@@ -144,13 +156,11 @@ end
         @test occursin("array \"x\"", wide.msg)
         @test occursin("has shape (6,), not (4,)", wide.msg)
 
-        lenient = ChunkManifests.combine(
-            ManifestSeries([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time); check = :none
-        )
+        lenient = _sr_concat([_grid("f1.bin", 4), _grid("f2.bin", 6)], :time; check = :none)
         @test size(arraysof(lenient)["x"]) == (4,)
         @test size(arraysof(lenient)["h"]) == (8,)
 
-        @test_throws "check=:bogus is not one of" ChunkManifests.combine(ser; check = :bogus)
+        @test_throws "check=:bogus is not one of" _sr_concat(ser, :time; check = :bogus)
     end
 
     @testset "an interior member must end on a chunk boundary" begin
@@ -160,7 +170,7 @@ end
             joinpath(dir, "ragged.h5"), reshape(Int32.(1:40), 4, 10), xv, Int32.(1:10)
         )
         err = try
-            ChunkManifests.combine(ManifestSeries([ragged, s1], :time))
+            _sr_concat([ragged, s1], :time)
             nothing
         catch e
             e
@@ -172,14 +182,14 @@ end
         @test occursin("chunk length 3", err.msg)
 
         # As the last member it is accepted.
-        ok = ChunkManifests.combine(ManifestSeries([s1, ragged], :time))
+        ok = _sr_concat([s1, ragged], :time)
         @test size(arraysof(ok)["h"]) == (4, 16)
         @test Zarr.zopen(ok)["h"][:, :] == hcat(h1, reshape(Int32.(1:40), 4, 10))
     end
 
     @testset "rejected series" begin
         err = try
-            ChunkManifests.combine(ManifestSeries([s1, s2], :nosuchdim))
+            _sr_concat([s1, s2], :nosuchdim)
             nothing
         catch e
             e
@@ -194,7 +204,7 @@ end
             write(d, Int32.(1:8))
         end
         keyset = try
-            ChunkManifests.combine(ManifestSeries([s1, other], :time))
+            _sr_concat([s1, other], :time)
             nothing
         catch e
             e
@@ -208,13 +218,9 @@ end
                 "sq" => dummy_manifestarray((4, 4), (2, 2), "f.bin"; dimnames = ["time", "time"]),
             ),
         )
-        @test_throws "names dimension \"time\" at positions [1, 2]" ChunkManifests.combine(
-            ManifestSeries([twice, twice], :time)
-        )
+        @test_throws "names dimension \"time\" at positions [1, 2]" _sr_concat([twice, twice], :time)
 
-        @test_throws "holds no arrays" ChunkManifests.combine(
-            ManifestSeries([ChunkManifest()], :time)
-        )
+        @test_throws "holds no arrays" _sr_concat([ChunkManifest()], :time)
     end
 
     @testset "group attributes" begin
@@ -230,11 +236,11 @@ end
         m2 = member("f2.bin", Dict{String, Any}("mission" => "M", "granule" => "B"))
         m3 = member("f3.bin", Dict{String, Any}("mission" => "M"))
 
-        @test attrsof(ChunkManifests.combine(ManifestSeries([m1, m3], :time))) ==
+        @test attrsof(_sr_concat([m1, m3], :time)) ==
             Dict{String, Any}("mission" => "M", "granule" => "A")
 
         err = try
-            ChunkManifests.combine(ManifestSeries([m1, m2], :time))
+            _sr_concat([m1, m2], :time)
             nothing
         catch e
             e
@@ -243,15 +249,9 @@ end
         @test occursin("member 2's group attribute \"granule\"", err.msg)
         @test occursin("Pass attrs=", err.msg)
 
-        override = ChunkManifests.combine(
-            ManifestSeries([m1, m2], :time); attrs = Dict("mission" => "M")
+        override = _sr_concat([m1, m2], :time; attrs = Dict("mission" => "M")
         )
         @test attrsof(override) == Dict{String, Any}("mission" => "M")
         @test size(arraysof(override)["h"]) == (8,)
-    end
-
-    @testset "combine is not exported" begin
-        @test !(:combine in names(ChunkManifests))
-        @test isdefined(ChunkManifests, :combine)
     end
 end

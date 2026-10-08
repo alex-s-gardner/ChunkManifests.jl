@@ -6,7 +6,8 @@ import TiffImages
 import JSON
 
 # Last in the suite, so every extension is loaded by the time this runs and the
-# ambiguity and piracy checks cover their methods as well as the base module's.
+# ambiguity check covers their methods. Aqua's piracy check looks only at methods
+# defined in ChunkManifests itself, not in its extensions.
 @testset "Aqua" begin
     Aqua.test_all(
         ChunkManifests;
@@ -24,8 +25,15 @@ end
     test_explicit_imports(
         ChunkManifests;
         # Only accurate from Julia 1.11, where "public" means Base.ispublic
-        # rather than falling back to isexported.
-        all_explicit_imports_are_public = VERSION >= v"1.11",
+        # rather than falling back to isexported. The extensions import their
+        # parent's internals, for the reason given for qualified accesses below.
+        all_explicit_imports_are_public = VERSION >= v"1.11" && (;
+            ignore = (
+                :ChunkManifest, :ExplicitChunkMap, :INLINE_CHUNK, :ManifestArray, :PathTable,
+                :VIRTUAL_CHUNK, :arraysof, :attrsof, :chunkgridaxes, :chunklocation,
+                :chunkmapof, :chunkstate, :inlinebytes, :push_uri!,
+            ),
+        ),
         # Three reasons this fails, none fixable without reimplementing
         # another package's internals or over-exposing our own. Zarr exports
         # no API for writing a custom store or filter — building

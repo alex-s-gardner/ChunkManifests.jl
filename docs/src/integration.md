@@ -7,18 +7,18 @@ end
 
 # Downstream packages
 
-Downstream packages need no knowledge that the data is virtual. A [`ChunkManifest`](@ref) is
-a `Zarr.AbstractStore`, so anything that consumes one works, and it takes the same code path
-a real Zarr store takes.
+Downstream packages need no knowledge that the data is virtual. [`scan`](@ref) and
+[`load`](@ref) return a plain `Zarr.ZGroup`, so anything that consumes one works, and it
+takes the same code path a real Zarr store takes.
 
 ## Zarr.jl
 
-`Zarr.zopen` over a manifest gives the lazy array tree:
+`scan` and `load` already give the lazy array tree, with no `zopen` step needed:
 
 ```jldoctest integration
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
 
-julia> z = Zarr.zopen(ChunkManifest(path));
+julia> z = scan(path);
 
 julia> sort(collect(keys(z.arrays)))
 4-element Vector{String}:
@@ -37,31 +37,31 @@ julia> z["grounded"][1:2, 1:2]
 
 ```julia
 using ZarrDatasets, YAXArrays
-ZarrDatasets.ZarrDataset(cm)           # CommonDataModel
-YAXArrays.open_dataset(Zarr.zopen(cm)) # the zopen step is required
+ZarrDatasets.ZarrDataset(z)   # CommonDataModel
+YAXArrays.open_dataset(z)
 ```
 
-`ZarrDataset` takes the store itself. `open_dataset` takes a Zarr group, so the `zopen` step
-is not optional there. It opens the arrays directly in that group, so a manifest whose arrays
-sit in groups — a GeoTIFF's levels, or a merge of several files — opens one group at a time:
+Both take the group directly. `open_dataset` opens the arrays in that one group, so a
+manifest whose arrays sit in subgroups — a GeoTIFF's levels, or a merge of several files —
+opens one group at a time:
 
 ```julia
-YAXArrays.open_dataset(Zarr.zopen(cm)["0"])  # a GeoTIFF's full-resolution level
+YAXArrays.open_dataset(z["0"])   # a GeoTIFF's full-resolution level
 ```
 
 ## Rasters.jl
 
-With Rasters and ZarrDatasets loaded, a manifest goes through Rasters' own entry points —
-a manifest reaches Rasters as a CommonDataModel dataset, and ZarrDatasets is what builds one
-over the store:
+With Rasters and ZarrDatasets loaded, a group goes through Rasters' own entry points —
+it reaches Rasters as a CommonDataModel dataset, and ZarrDatasets is what builds one over
+the group:
 
 ```julia
 using Rasters, ZarrDatasets
-Raster(cm, "gt1l/land_ice_segments/h_li")   # one variable
-RasterStack(cm; group = "gt1l/land_ice_segments")
+Raster(z, "gt1l/land_ice_segments/h_li")   # one variable
+RasterStack(z; group = "gt1l/land_ice_segments")
 ```
 
-The raster is lazy and holds the store itself, not a filename to reopen, so its transports
+The raster is lazy and holds the group itself, not a filename to reopen, so its transports
 and its warmed readahead cache survive and a windowed read fetches only the chunks that
 window covers.
 
@@ -75,9 +75,9 @@ records as an EPSG code; an explicit `crs` keyword overrides it:
 
 ```julia
 using TiffImages
-cm = scan("https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif", GeoTIFFDriver())
-Raster(cm, "0/data")    # full resolution, EPSG:32701
-Raster(cm, "2/data")    # the second overview
+z = scan("https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif")
+Raster(z, "0/data")    # full resolution, EPSG:32701
+Raster(z, "2/data")    # the second overview
 ```
 
 Constructing a raster does read the *coordinate* variables, since a `Sampled` or `Projected`

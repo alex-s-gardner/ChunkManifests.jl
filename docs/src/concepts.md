@@ -11,8 +11,10 @@ end
 
 A scan reads a source file's metadata — superblocks, chunk indexes, tag directories — and
 records, for every chunk of every array, which file the chunk's compressed bytes are in, the
-offset they start at, and how many bytes they run for. That record is the manifest. The
-array data itself is not read, not copied and not converted.
+offset they start at, and how many bytes they run for. That record is the manifest, reached
+from the group [`scan`](@ref) and [`load`](@ref) return with
+[`ChunkManifests._manifest`](@ref). The array data itself is not read, not copied and not
+converted.
 
 Serving a chunk therefore means fetching those bytes and handing them back. Nothing in this
 package decompresses, unshuffles or byte-swaps them; Zarr.jl's codec pipeline does all of
@@ -36,35 +38,45 @@ ChunkManifest                 a Zarr.AbstractStore; group attributes; provenance
 
 A [`ChunkManifest`](@ref) *is* a read-only `Zarr.AbstractStore`. It answers metadata keys
 with synthesized Zarr v2 documents and chunk keys with the source files' raw, still-encoded
-bytes, which is why `Zarr.zopen(cm)` is all that stands between a scan and an array.
+bytes, which is why the `Zarr.ZGroup` that [`scan`](@ref) and [`load`](@ref) return needs no
+further wrapping.
 
 Every array in a manifest shares one [`PathTable`](@ref), and chunks store a `UInt32` index
 into it rather than a path. Two consequences follow: repointing a file is a single edit
-however many chunks reference it ([`seturi!`](@ref), [`replace_prefix!`](@ref)), and
-[`validate`](@ref) costs one request per *file* rather than one per chunk.
+however many chunks reference it ([`ChunkManifests.seturi!`](@ref),
+[`replace_prefix!`](@ref)), and [`validate`](@ref) costs one request per *file* rather than
+one per chunk.
 
 Struct fields are internal. Everything outside the package goes through the accessors —
-[`arraysof`](@ref), [`tableof`](@ref), [`attrsof`](@ref), [`chunkmapof`](@ref) and the rest,
-all listed under [API reference](@ref).
+[`ChunkManifests.arraysof`](@ref), [`tableof`](@ref), [`ChunkManifests.attrsof`](@ref),
+[`ChunkManifests.chunkmapof`](@ref) and the rest, all listed under [API reference](@ref).
 
 ```jldoctest concepts
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
 
-julia> cm = ChunkManifest(path)
-ChunkManifest(4 arrays, 1 files)
+julia> z = scan(path);
 
-julia> a = arraysof(cm)["grounded"]
+julia> m = ChunkManifests._manifest(z);
+
+julia> sort(collect(keys(z.arrays)))
+4-element Vector{String}:
+ "grounded"
+ "mapping"
+ "x"
+ "y"
+
+julia> a = ChunkManifests.arraysof(m)["grounded"]
 ManifestArray{UInt8,2}(shape=(22896, 18392), chunkshape=(3816, 3066))
 
-julia> dimnamesof(a)
+julia> ChunkManifests.dimnamesof(a)
 2-element Vector{String}:
  "x"
  "y"
 
-julia> chunkmapof(a)
+julia> ChunkManifests.chunkmapof(a)
 ExplicitChunkMap{2}(grid=(6, 6), files=1, virtual=36, missing=0, inline=0)
 
-julia> basename(uriof(tableof(cm), 1))
+julia> basename(ChunkManifests.uriof(ChunkManifests.tableof(m), 1))
 "antarctic_grounded_ice.nc"
 ```
 
@@ -72,13 +84,13 @@ The scan also carries across what the file said about the array — its codecs, 
 attributes — since those are what Zarr.jl needs in order to decode:
 
 ```jldoctest concepts
-julia> compressorof(a)["id"], only(filtersof(a))["id"]
+julia> ChunkManifests.compressorof(a)["id"], only(ChunkManifests.filtersof(a))["id"]
 ("zlib", "shuffle")
 
-julia> fillvalueof(a)
+julia> ChunkManifests.fillvalueof(a)
 0xff
 
-julia> sort(collect(keys(attrsof(a))))
+julia> sort(collect(keys(ChunkManifests.attrsof(a))))
 3-element Vector{String}:
  "data_source"
  "grid_mapping"
@@ -87,14 +99,14 @@ julia> sort(collect(keys(attrsof(a))))
 
 ## Chunk states
 
-Not every cell of a chunk grid points at a file. [`chunkstate`](@ref) distinguishes three
-cases, and [`ChunkState`](@ref) names them:
+Not every cell of a chunk grid points at a file. [`ChunkManifests.chunkstate`](@ref)
+distinguishes three cases, and [`ChunkManifests.ChunkState`](@ref) names them:
 
 | state | meaning | where the bytes are |
 |---|---|---|
-| [`VIRTUAL_CHUNK`](@ref) | the common case | in an external file, at the URI, offset and length [`chunklocation`](@ref) reports |
-| [`MISSING_CHUNK`](@ref) | the source wrote no bytes for this chunk | nowhere; it reads as the array's fill value |
-| [`INLINE_CHUNK`](@ref) | small or awkward data | in the manifest itself, returned by [`inlinebytes`](@ref) |
+| [`ChunkManifests.VIRTUAL_CHUNK`](@ref) | the common case | in an external file, at the URI, offset and length [`ChunkManifests.chunklocation`](@ref) reports |
+| [`ChunkManifests.MISSING_CHUNK`](@ref) | the source wrote no bytes for this chunk | nowhere; it reads as the array's fill value |
+| [`ChunkManifests.INLINE_CHUNK`](@ref) | small or awkward data | in the manifest itself, returned by [`ChunkManifests.inlinebytes`](@ref) |
 
 Inline chunks are what let a manifest be self-contained where a reference would not work —
 a short coordinate variable, or a value stored in the source's metadata rather than in a
@@ -118,13 +130,15 @@ contiguous dataset cheap to describe.
 
 ## Provenance
 
-A manifest records which driver produced it and when, which is what tells a later reader
-whether a manifest and a source file still correspond:
+A manifest records which driver produced it, the path it was scanned or loaded from, and
+when — which is what tells a later reader whether a manifest and a source file still
+correspond:
 
 ```jldoctest concepts
-julia> sort(collect(keys(provenanceof(cm))))
-2-element Vector{String}:
+julia> sort(collect(keys(ChunkManifests.provenanceof(m))))
+3-element Vector{String}:
  "driver"
+ "path"
  "scanned_at"
 ```
 
@@ -133,6 +147,6 @@ as the source made them available. [`validate`](@ref) compares them against what
 report now.
 
 ```jldoctest concepts
-julia> validate(cm)
+julia> validate(z)
 ValidationReport(verified=4, unverifiable=0, missing=0, mismatched=0, consistency=0)
 ```

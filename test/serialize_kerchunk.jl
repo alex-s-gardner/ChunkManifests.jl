@@ -41,8 +41,8 @@ import Zarr
             )
 
             manifestpath = joinpath(dir, "refs.json")
-            ChunkManifests.save(manifestpath, group, KerchunkJSON())
-            loaded = ChunkManifest(manifestpath, KerchunkJSON())
+            _save(manifestpath, group, KerchunkJSON())
+            loaded = _load(manifestpath, KerchunkJSON())
 
             @test attrsof(loaded) == attrsof(group)
             va2 = arraysof(loaded)["arr"]
@@ -100,7 +100,7 @@ import Zarr
             manifestpath = joinpath(dir, "fixture.json")
             write(manifestpath, fixturejson)
 
-            group = ChunkManifest(manifestpath, KerchunkJSON())
+            group = _load(manifestpath, KerchunkJSON())
             @test attrsof(group) == Dict{String, Any}("title" => "fixture")
 
             va = arraysof(group)["arr"]
@@ -162,13 +162,13 @@ import Zarr
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("arr" => va))
 
             manifestpath = joinpath(dir, "refs.json")
-            ChunkManifests.save(manifestpath, group, KerchunkJSON())
+            _save(manifestpath, group, KerchunkJSON())
 
             doc = JSON.parse(read(manifestpath, String))
             @test haskey(doc["refs"], "arr/0")
             @test !haskey(doc["refs"], "arr/1")
 
-            loaded = ChunkManifest(manifestpath, KerchunkJSON())
+            loaded = _load(manifestpath, KerchunkJSON())
             @test chunkstate(chunkmapof(arraysof(loaded)["arr"]), CartesianIndex(2)) == MISSING_CHUNK
 
             zv = Zarr.zopen(loaded)["arr"]
@@ -196,14 +196,14 @@ import Zarr
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("arr" => va))
 
             manifestpath = joinpath(dir, "refs.json")
-            ChunkManifests.save(manifestpath, group, KerchunkJSON(; inlinethreshold = 2))
+            _save(manifestpath, group, KerchunkJSON(; inlinethreshold = 2))
 
             doc = JSON.parse(read(manifestpath, String))
             for k in 0:5
                 @test startswith(doc["refs"]["arr/$k"], "base64:")
             end
 
-            loaded = ChunkManifest(manifestpath, KerchunkJSON())
+            loaded = _load(manifestpath, KerchunkJSON())
             m2 = chunkmapof(arraysof(loaded)["arr"])
             for I in CartesianIndices(gridsize)
                 @test chunkstate(m2, I) == INLINE_CHUNK
@@ -239,8 +239,8 @@ import Zarr
             )
 
             manifestpath = joinpath(dir, "refs.json")
-            ChunkManifests.save(manifestpath, group, KerchunkJSON())
-            loaded = ChunkManifest(manifestpath, KerchunkJSON())
+            _save(manifestpath, group, KerchunkJSON())
+            loaded = _load(manifestpath, KerchunkJSON())
 
             @test Set(keys(arraysof(loaded))) == Set(["a", "grp/b"])
             table_a = tableof(chunkmapof(arraysof(loaded)["a"]))
@@ -258,13 +258,13 @@ import Zarr
                 return path
             end
 
-            @test_throws "missing required \"version\"" ChunkManifest(
+            @test_throws "missing required \"version\"" _load(
                 _write(JSON.json(Dict{String, Any}("refs" => Dict{String, Any}()))), KerchunkJSON()
             )
-            @test_throws "unsupported kerchunk reference-set version" ChunkManifest(
+            @test_throws "unsupported kerchunk reference-set version" _load(
                 _write(JSON.json(Dict{String, Any}("version" => 2, "refs" => Dict{String, Any}()))), KerchunkJSON()
             )
-            @test_throws "programmatic reference generation" ChunkManifest(
+            @test_throws "programmatic reference generation" _load(
                 _write(JSON.json(Dict{String, Any}("version" => 1, "gen" => [], "refs" => Dict{String, Any}()))),
                 KerchunkJSON(),
             )
@@ -282,7 +282,7 @@ import Zarr
                 )
             )
 
-            @test_throws "no faithful round trip" ChunkManifest(
+            @test_throws "no faithful round trip" _load(
                 _write(
                     JSON.json(
                         Dict{String, Any}(
@@ -293,7 +293,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "does not parse for array" ChunkManifest(
+            @test_throws "does not parse for array" _load(
                 _write(
                     JSON.json(
                         Dict{String, Any}(
@@ -305,7 +305,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "1 or 3 elements" ChunkManifest(
+            @test_throws "1 or 3 elements" _load(
                 _write(
                     JSON.json(
                         Dict{String, Any}(
@@ -317,7 +317,7 @@ import Zarr
                 KerchunkJSON(),
             )
 
-            @test_throws "a reference value must be" ChunkManifest(
+            @test_throws "a reference value must be" _load(
                 _write(
                     JSON.json(
                         Dict{String, Any}(
@@ -333,7 +333,7 @@ import Zarr
 
     @testset "dtypes a document may declare" begin
         mktempdir() do dir
-            function _load(dtype)
+            function _loaddtype(dtype)
                 doc = Dict{String, Any}(
                     "version" => 1,
                     "refs" => Dict{String, Any}(
@@ -350,36 +350,36 @@ import Zarr
                 )
                 path = joinpath(dir, "dtype_$(rand(UInt64)).json")
                 write(path, JSON.json(doc))
-                return eltype(arraysof(ChunkManifest(path, KerchunkJSON()))["arr"])
+                return eltype(arraysof(_load(path, KerchunkJSON()))["arr"])
             end
 
             # Fixed-length byte strings: the dtype a CF grid-mapping variable
             # carries, and what `zarr_dtype_string` emits for one. Zarr.jl
             # decodes `|S1` as ASCIIChar and wider ones as a string type.
-            @test _load("|S1") === Zarr.ASCIIChar
-            @test _load("|S5") === Zarr.MaxLengthString{5, UInt8}
-            @test _load("<S5") === Zarr.MaxLengthString{5, UInt8}
+            @test _loaddtype("|S1") === Zarr.ASCIIChar
+            @test _loaddtype("|S5") === Zarr.MaxLengthString{5, UInt8}
+            @test _loaddtype("<S5") === Zarr.MaxLengthString{5, UInt8}
 
-            @test _load("|u1") === UInt8
-            @test _load("<i4") === Int32
-            @test _load("<f8") === Float64
-            @test _load("|b1") === Bool
-            @test _load("<c8") === ComplexF32
+            @test _loaddtype("|u1") === UInt8
+            @test _loaddtype("<i4") === Int32
+            @test _loaddtype("<f8") === Float64
+            @test _loaddtype("|b1") === Bool
+            @test _loaddtype("<c8") === ComplexF32
 
             # One byte has no byte order, and numpy writes all three markers
             # for it interchangeably.
-            @test _load("<u1") === UInt8
-            @test _load(">u1") === UInt8
+            @test _loaddtype("<u1") === UInt8
+            @test _loaddtype(">u1") === UInt8
 
             # Multi-byte big-endian is refused. Zarr.jl parses the marker and
             # then ignores it, so decoding would give wrong values instead of
             # failing.
-            @test_throws "is big-endian, which cannot be served faithfully" _load(">i4")
-            @test_throws "is big-endian, which cannot be served faithfully" _load(">f8")
+            @test_throws "is big-endian, which cannot be served faithfully" _loaddtype(">i4")
+            @test_throws "is big-endian, which cannot be served faithfully" _loaddtype(">f8")
 
             # Element types with no exact Zarr v2 encoding stay refused.
-            @test_throws "no faithful round trip" _load("<U10")
-            @test_throws "no faithful round trip" _load("<M8[ns]")
+            @test_throws "no faithful round trip" _loaddtype("<U10")
+            @test_throws "no faithful round trip" _loaddtype("<M8[ns]")
         end
     end
 
@@ -389,12 +389,12 @@ import Zarr
     if isfile(ITSLIVE_PATH)
         @testset "round trip of a scanned NetCDF4 file" begin
             mktempdir() do dir
-                cm = ChunkManifest(ITSLIVE_PATH)
+                cm = _scan(ITSLIVE_PATH, HDF5Driver())
                 @test ChunkManifests.zarr_dtype_string(eltype(arraysof(cm)["mapping"])) == "|S1"
 
                 path = joinpath(dir, "mask.json")
-                ChunkManifests.save(path, cm, KerchunkJSON())
-                loaded = ChunkManifest(path, KerchunkJSON())
+                _save(path, cm, KerchunkJSON())
+                loaded = _load(path, KerchunkJSON())
 
                 @test Set(keys(arraysof(loaded))) == Set(keys(arraysof(cm)))
                 for k in keys(arraysof(cm))
@@ -432,10 +432,10 @@ import Zarr
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("arr" => va))
 
             store = Zarr.DictStore()
-            ChunkManifests.save(store, "refs.json", group, KerchunkJSON())
+            _save(store, "refs.json", group, KerchunkJSON())
             @test store["refs.json"] !== nothing
 
-            loaded = ChunkManifest(store, "refs.json", KerchunkJSON())
+            loaded = _load(store, "refs.json", KerchunkJSON())
             m2 = chunkmapof(arraysof(loaded)["arr"])
             for I in CartesianIndices(gridsize)
                 @test chunklocation(m2, I) == chunklocation(manifest, I)

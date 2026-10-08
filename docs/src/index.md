@@ -11,9 +11,9 @@ Virtual Zarr for Julia: read existing HDF5, NetCDF4 and GeoTIFF/COG files as Zar
 without copying or converting them.
 
 Scanning a source file records where each chunk's *compressed* bytes already live — which
-file, which byte offset, how many bytes — in a **chunk manifest**. That manifest is itself a
-`Zarr.AbstractStore`, so handing it to Zarr.jl gives lazy, chunked, codec-decoded access to
-the original archive in place.
+file, which byte offset, how many bytes — in a chunk manifest, and returns a lazy
+`Zarr.ZGroup` over it. Indexing an array of the group fetches and decodes only the chunks the
+selection touches, straight from the original file.
 
 This package never decodes array data. It returns the source files' bytes untouched and lets
 Zarr.jl's codec pipeline do the decoding, which is what makes the result byte-for-byte
@@ -44,11 +44,10 @@ only way to get the patched Zarr.
 ## Quick start
 
 ```julia
-using ChunkManifests, Zarr
+using ChunkManifests
 
-cm = ChunkManifest("granule.h5")       # scan a source file
-z  = Zarr.zopen(cm)                    # a lazy ZArray tree
-z["gt1l/h_li"][1:100]                  # reads only the chunks it needs
+z = scan("granule.h5")      # the driver is chosen from the extension
+z["gt1l/h_li"][1:100]       # reads only the chunks it needs
 ```
 
 Run against the NetCDF4 file committed in this repository, that is:
@@ -56,17 +55,14 @@ Run against the NetCDF4 file committed in this repository, that is:
 ```jldoctest index
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
 
-julia> cm = ChunkManifest(path)
-ChunkManifest(4 arrays, 1 files)
+julia> z = scan(path);
 
-julia> sort(collect(keys(arraysof(cm))))
+julia> sort(collect(keys(z.arrays)))
 4-element Vector{String}:
  "grounded"
  "mapping"
  "x"
  "y"
-
-julia> z = Zarr.zopen(cm);
 
 julia> size(z["grounded"]), eltype(z["grounded"])
 ((22896, 18392), UInt8)
@@ -82,9 +78,9 @@ julia> z["grounded"][1:4, 1]
 That last read touched one chunk of a 22896×18392 array, and the bytes it returned came out
 of the NetCDF4 file unaltered.
 
-Downstream packages need no knowledge that the data is virtual — a `ChunkManifest` is a Zarr
-store, so anything that consumes one works. See [Downstream packages](@ref) for Zarr.jl,
-ZarrDatasets.jl, YAXArrays.jl and Rasters.jl.
+Downstream packages need no knowledge that the data is virtual — `scan` and `load` return a
+plain `Zarr.ZGroup`, so anything that consumes one works. See [Downstream packages](@ref) for
+Zarr.jl, ZarrDatasets.jl, YAXArrays.jl and Rasters.jl.
 
 ## Scope
 

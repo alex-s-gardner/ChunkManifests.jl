@@ -92,38 +92,35 @@ end
 # What the workload does, in `dir`.
 function _precompile_run(dir)
     path = _precompile_source(joinpath(dir, "source.h5"))
-    cm = scan(path, HDF5Driver())
-    z = Zarr.zopen(cm)
+    z = scan(path)
     for key in ("v", "packed", "mask", "x")
         z[key][:]
     end
-    for (_, a) in Zarr.zopen(cm)["types"].arrays
+    for (_, a) in z["types"].arrays
         a[1:4]
         ndims(a) == 2 && a[:, :]
     end
-    scan(path, HDF5Driver(); group = "v")
+    scan(path; group = "v")
 
-    native = save(joinpath(dir, "native"), cm, ZarrManifest())
-    Zarr.zopen(ChunkManifest(native))["v"][:, :]
-    json = joinpath(dir, "manifest.json")
-    save(json, cm, KerchunkJSON())
-    Zarr.zopen(ChunkManifest(json))["v"][1:16, 1:8]
+    native = save(joinpath(dir, "source.manifest"), z)
+    load(native)["v"][:, :]
+    json = save(joinpath(dir, "source.json"), z)
+    load(json)["v"][1:16, 1:8]
 
-    _rangevfdsupported() && _precompile_remote(z -> z["v"][:, :], read(path), "source.h5", HDF5Driver())
+    _rangevfdsupported() && _precompile_remote(z -> z["v"][:, :], read(path), "source.h5")
     return nothing
 end
 
-# Scans `bytes` with `driver` as an object on a local HTTP server, through the
+# Scans `bytes` as an object named `name` on a local HTTP server, through the
 # range driver and transports a remote scan uses, and calls `readwith` on the
-# Zarr group of the result.
-function _precompile_remote(readwith, bytes::Vector{UInt8}, name::AbstractString, driver)
+# group it returns.
+function _precompile_remote(readwith, bytes::Vector{UInt8}, name::AbstractString; kwargs...)
     http = HTTPTransport()
     server = _precompile_server(bytes)
     try
         url = "http://127.0.0.1:$(HTTP.port(server))/$name"
         transport = TransportContainers(["http://127.0.0.1" => http])
-        remote = scan(url, driver; access = RangeAccess(; transport))
-        readwith(Zarr.zopen(ChunkManifest(remote; transport)))
+        readwith(scan(url; transport, kwargs...))
     finally
         close(server)
         HTTP.close_idle_connections!(http.client)

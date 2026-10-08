@@ -24,9 +24,7 @@ const _YX_DD = YAXArrays.DD
     end
 
     counting = FetchCountingTransport()
-    cm = ChunkManifest(
-        path; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)
-    )
+    cm = _manifest(scan(path; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)))
 
     counting.count[] = 0
     ds = YAXArrays.open_dataset(Zarr.zopen(cm))
@@ -51,9 +49,9 @@ const _YX_DD = YAXArrays.DD
     @testset "a merged manifest's member group opens like the file itself" begin
         # A multi-array input becomes a group; a single-array one would become
         # that array, with no group to open.
-        nested = ChunkManifest([ITSLIVE_PATH, ITSLIVE_PATH]; name = ["a", "b"])
-        member = YAXArrays.open_dataset(Zarr.zopen(nested)["b"])
-        whole = YAXArrays.open_dataset(Zarr.zopen(ChunkManifest(ITSLIVE_PATH)))
+        nested = merge(scan([ITSLIVE_PATH, ITSLIVE_PATH]); names = ["a", "b"])
+        member = YAXArrays.open_dataset(nested["b"])
+        whole = YAXArrays.open_dataset(scan(ITSLIVE_PATH))
         @test sort(collect(keys(member.cubes))) == sort(collect(keys(whole.cubes)))
         @test collect(member["grounded"][x = 1501:1600, y = 5601:5700].data) ==
             collect(whole["grounded"][x = 1501:1600, y = 5601:5700].data)
@@ -61,9 +59,7 @@ const _YX_DD = YAXArrays.DD
 
     @testset "real NetCDF4 file: axes, a window and a reduction match HDF5.jl" begin
         counting = FetchCountingTransport()
-        real = ChunkManifest(
-            ITSLIVE_PATH; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)
-        )
+        real = _manifest(scan(ITSLIVE_PATH; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)))
         g = YAXArrays.open_dataset(Zarr.zopen(real))["grounded"]
         # Inside one 3816×3066 chunk, and across the grounding line so the
         # values vary within it.
@@ -84,7 +80,7 @@ const _YX_DD = YAXArrays.DD
     end
 
     @testset "a GeoTIFF level group opens as a dataset with coordinate axes" begin
-        z = Zarr.zopen(ChunkManifests.scan(GEOTIFF_JUNK_PATH, GeoTIFFDriver()))["0"]
+        z = Zarr.zopen(_scan(GEOTIFF_JUNK_PATH, GeoTIFFDriver()))["0"]
         lds = YAXArrays.open_dataset(z)
         @test collect(keys(lds.cubes)) == [:data]
         c = lds["data"]

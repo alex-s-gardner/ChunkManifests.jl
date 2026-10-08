@@ -59,7 +59,7 @@ end
 
         mktempdir() do dir
             root = joinpath(dir, "out.parq")
-            ChunkManifests.save(root, group, fmt)
+            _save(root, group, fmt)
             fielddir = joinpath(root, "air")
 
             gridsize = (3, 3, 3)
@@ -156,7 +156,7 @@ end
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
 
             out = joinpath(dir, "asym.parq")
-            ChunkManifests.save(out, group, KerchunkParquet(; recordsize = 8))
+            _save(out, group, KerchunkParquet(; recordsize = 8))
 
             # Independent of the writer: read each row back and require that the
             # chunk at flat position p carries the offset we assigned it.
@@ -178,7 +178,7 @@ end
         va = ManifestArray{Float64}(manifest, (1,), (1,); dimnames = ["x"])
         group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
         mktempdir() do dir
-            @test_throws "whole-object sentinel" ChunkManifests.save(
+            @test_throws "whole-object sentinel" _save(
                 joinpath(dir, "z.parq"), group, KerchunkParquet()
             )
         end
@@ -191,7 +191,7 @@ end
         va = ManifestArray{Float64}(manifest, (), (); dimnames = String[])
         group = ChunkManifest(; arrays = Dict{String, ManifestArray}("scalar" => va))
         mktempdir() do dir
-            @test_throws "zero-dimensional" ChunkManifests.save(
+            @test_throws "zero-dimensional" _save(
                 joinpath(dir, "s.parq"), group, KerchunkParquet()
             )
         end
@@ -207,7 +207,7 @@ end
             )
             fmt = KerchunkParquet(; recordsize = 4)
             root = joinpath(dir, "layout.parq")
-            ChunkManifests.save(root, group, fmt)
+            _save(root, group, fmt)
 
             @test isdir(joinpath(root, "air"))
             @test isfile(joinpath(root, "air", "refs.0.parq"))
@@ -248,8 +248,8 @@ end
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = KerchunkParquet(; recordsize = 4)
             root = joinpath(dir, "roundtrip.parq")
-            ChunkManifests.save(root, group, fmt)
-            group2 = ChunkManifest(root, fmt)
+            _save(root, group, fmt)
+            group2 = _load(root, fmt)
             va2 = arraysof(group2)["a"]
 
             @testset "manifest contents agree chunk by chunk" begin
@@ -266,15 +266,18 @@ end
         end
     end
 
-    @testset "load: recordsize mismatch and missing .zmetadata fail fast" begin
+    @testset "load reads the recorded record_size; a missing .zmetadata fails fast" begin
         mktempdir() do dir
             va = _pq2_contig_va(dir, 4; fname = "m.bin")
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
-            root = joinpath(dir, "mismatch.parq")
-            ChunkManifests.save(root, group, KerchunkParquet(; recordsize = 4))
+            root = joinpath(dir, "recorded.parq")
+            _save(root, group, KerchunkParquet(; recordsize = 4))
 
-            @test_throws "record_size=4" ChunkManifest(root, KerchunkParquet(; recordsize = 5))
-            @test_throws "no .zmetadata" ChunkManifest(joinpath(dir, "nope.parq"), KerchunkParquet())
+            # Loading by extension passes the default format, so the directory's
+            # own record_size has to be the one that counts.
+            loaded = _manifest(load(root))
+            @test chunkgridsize(chunkmapof(arraysof(loaded)["a"])) == chunkgridsize(chunkmapof(va))
+            @test_throws "no .zmetadata" _load(joinpath(dir, "nope.parq"), KerchunkParquet())
         end
     end
 
@@ -284,7 +287,7 @@ end
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = KerchunkParquet(; recordsize = 4)
             root = joinpath(dir, "whole.parq")
-            ChunkManifests.save(root, group, fmt)
+            _save(root, group, fmt)
 
             # Hand-edit refs.0.parq to a whole-object reference (offset=0,
             # size=0, non-null path, null raw): a valid kerchunk state this
@@ -299,11 +302,11 @@ end
             )
             Parquet2.writefile(fpath, tbl; compression_codec = :zstd, compute_statistics = false)
 
-            @test_throws "whole-object reference" ChunkManifest(root, fmt)
+            @test_throws "whole-object reference" _load(root, fmt)
         end
     end
 
-    @testset "ChunkManifest(path) detects and reads a .parq directory" begin
+    @testset "load(path) reads a .parq directory" begin
         # The counterpart in frompath.jl runs before Parquet2 is loaded, so it
         # can only check that the directory is identified and the absent reader
         # reported. Here the round trip runs for real.
@@ -312,10 +315,10 @@ end
         va = _pq2_contig_va(dir, n)
         cm = ChunkManifest(; arrays = Dict{String, ManifestArray}("d" => va))
         root = joinpath(dir, "refs.parq")
-        ChunkManifests.save(root, cm, KerchunkParquet())
+        _save(root, cm, KerchunkParquet())
 
         @test ChunkManifests._savedformat(root) isa KerchunkParquet
-        back = ChunkManifest(root)
+        back = _manifest(load(root))
         @test back isa ChunkManifest
         @test sort(collect(keys(arraysof(back)))) == ["d"]
         @test Array(Zarr.zopen(back)["d"][:]) == collect(Float64, 1:n)

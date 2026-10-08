@@ -10,6 +10,20 @@ No version has been released yet. `0.1.0` will be the first, and the
 
 ### Breaking
 
+- The public API is `scan`, `load` and `save`, each returning or taking the `Zarr.ZGroup` of a
+  manifest, plus `concat`, `merge`, `replace_prefix!` and `validate` on such groups.
+  `scan(path)` chooses the driver from the extension, and `save`/`load` choose the format from
+  it, defaulting to `ZarrManifest`; `load` also scans a source file. Reading needs no
+  `Zarr.zopen`.
+- `ChunkManifest` and the types and accessors beneath it (`ManifestArray`, `PathTable`, chunk
+  maps and chunk states, `arraysof`, `chunkmapof`, …) are internal. `ChunkManifest(path)`,
+  `ChunkManifest(paths)`, `ChunkManifest(members; name)`, `ManifestSeries`, `combine`,
+  `membersof`, `dimnameof`, group-level `concat(gs; dims)`, `candrive`, `sniff_driver` and
+  `DRIVER_REGISTRY` are removed: `merge` takes a set of groups, and `concat(groups, dim)`
+  concatenates along a named dimension.
+- `Raster` and `RasterStack` take a group, including a subgroup such as a COG level.
+- `register_driver!(ext => driver)` registers a driver for an extension.
+- Loading a `KerchunkParquet` directory uses the `record_size` it records.
 - The native format is version 3: one path table and one set of reference columns for the
   whole manifest, rather than one per array. Version 2 manifests are still read; manifests
   are written as version 3.
@@ -18,9 +32,8 @@ No version has been released yet. `0.1.0` will be the first, and the
 
 ### Added
 
-- `scan(paths, driver)` scans several files concurrently and returns their manifests in
-  order. `ManifestSeries(paths, dim)` and `ChunkManifest(paths)` load or scan their paths
-  the same way.
+- `scan(paths)` and `load(paths)` work on several files concurrently and return their groups
+  in order.
 - `RangeAccess(; tailread)`: the last bytes of an object, fetched together with its head.
 - `HTTPTransport(; connect_timeout, read_idle_timeout)`, on by default.
 

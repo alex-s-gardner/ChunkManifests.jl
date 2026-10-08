@@ -9,15 +9,17 @@
 _isremote(uri::AbstractString) = occursin(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", uri)
 
 """
-    resolve_access(access::SourceAccess, driver, uri) -> SourceAccess
+    resolve_access(access::SourceAccess, driver, uri; transport=TransportContainers()) -> SourceAccess
 
 The concrete mechanism `access` stands for when scanning `uri` with `driver`.
+[`AutoAccess`](@ref) resolves a remote `uri` to a mechanism reading through
+`transport`.
 
-Every mechanism except [`AutoAccess`](@ref) resolves to itself, so a caller
-who names one gets it or gets an error — never a quieter substitute that
-transfers more than they asked for.
+Every mechanism except [`AutoAccess`](@ref) resolves to itself, keeping its
+own transport, so a caller who names one gets it or gets an error — never a
+quieter substitute that transfers more than they asked for.
 """
-resolve_access(access::SourceAccess, driver, uri::AbstractString) = access
+resolve_access(access::SourceAccess, driver, uri::AbstractString; transport = nothing) = access
 
 # The transport a scan read through, which the manifest it produces then reads
 # its chunks with. A manifest built through a transport that is authenticated,
@@ -28,15 +30,18 @@ _scantransport(::SourceAccess) = TransportContainers()
 _scantransport(access::DownloadAccess) = access.transport
 _scantransport(access::RangeAccess) = access.transport
 
-function resolve_access(::AutoAccess, driver, uri::AbstractString)
+function resolve_access(
+        ::AutoAccess, driver, uri::AbstractString;
+        transport::AbstractTransport = TransportContainers(),
+    )
     _isremote(uri) || return LocalAccess()
-    return _remoteaccess(driver, uri)
+    return _remoteaccess(driver, uri, transport)
 end
 
 # Drivers that can read a remote object in place override this. The default is
 # to fetch it, which works everywhere at the cost of transferring the whole
 # object.
-_remoteaccess(driver, uri::AbstractString) = DownloadAccess()
+_remoteaccess(driver, uri::AbstractString, transport::AbstractTransport) = DownloadAccess(; transport)
 
 """
     withsourcepath(f, access::SourceAccess, uri) -> f(localpath)

@@ -4,32 +4,59 @@
 """
     HDF5Driver()
 
-[`AbstractDriver`](@ref) for HDF5 and NetCDF4 files. [`scan`](@ref) reads
-chunk addresses, byte lengths and filter pipelines directly from libhdf5 and
-never decompresses a chunk; Zarr.jl's codec pipeline does that on read.
+[`AbstractDriver`](@ref) for HDF5 and NetCDF4 files, chosen by [`scan`](@ref)
+for `.h5`, `.hdf5`, `.he5`, `.nc` and `.nc4`. It reads chunk addresses, byte
+lengths and filter pipelines directly from libhdf5 and never decompresses a
+chunk; Zarr.jl's codec pipeline does that on read.
+
+Keywords to [`scan`](@ref):
+
+  - `group = "/"`: the group to start from. Array keys are the HDF5 paths of
+    its datasets relative to `group`; a `group` naming a dataset gives that one
+    array, keyed by its own name.
+  - `siblings = true`: also take the variables the scanned ones cannot be
+    interpreted without — dimension scales, `coordinates` and `grid_mapping`
+    variables — even when they lie outside `group`.
+
+[`AutoAccess`](@ref) opens a local path directly and reads a remote one
+(`http(s)://`, `s3://`) in place through [`RangeAccess`](@ref), or through
+[`DownloadAccess`](@ref) on a libhdf5 whose driver layout is unverified.
+
+Chunked datasets are recorded chunk by chunk and contiguous ones as a single
+block. A chunk HDF5 never allocated reads as the array's fill value. Every
+filter in a dataset's pipeline is mapped to a Zarr v2 codec; a filter with no
+byte-compatible Zarr v2 codec, a chunk with a nonzero `filter_mask`, or a
+multi-byte dataset whose last-applied filter is shuffle or fletcher32 each raise
+an `ArgumentError` naming the file and the offending dataset. A NetCDF classic
+(NetCDF3) file is not HDF5 and is refused by name.
 """
 struct HDF5Driver <: AbstractDriver end
 
 const HDF5_MAGIC = UInt8[0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a]
 
-function candrive(::HDF5Driver, path)
-    isfile(path) || return false
-    try
-        return open(path, "r") do io
-            magic = read(io, length(HDF5_MAGIC))
-            magic == HDF5_MAGIC
-        end
-    catch
-        return false
-    end
+# NetCDF classic files begin "CDF" and a format byte (1, 2 or 5). They are often
+# named `.nc` like NetCDF4, but are not HDF5 and have no chunks to record.
+# `head` is the object's leading bytes, however they were read.
+function _refuseclassic(head::AbstractVector{UInt8}, recorded::AbstractString)
+    length(head) >= 4 && view(head, 1:3) == codeunits("CDF") && head[4] in (0x01, 0x02, 0x05) &&
+        throw(
+        ArgumentError(
+            "scan: $(repr(recorded)) is a NetCDF classic (NetCDF3) file, which is not " *
+                "HDF5-based and has no chunks for HDF5Driver to record",
+        )
+    )
+    return nothing
 end
+
+_refuseclassic(path::AbstractString, recorded::AbstractString) =
+    _refuseclassic(open(io -> read(io, 4), path, "r"), recorded)
 
 """
     HDF5_IO
 
 Guards every call into libhdf5 made while scanning: libhdf5 is not
-thread-safe. Reading a scanned [`ChunkManifest`](@ref) through a
-Reading a [`ChunkManifest`](@ref) never touches libhdf5, so no lock is needed there.
+thread-safe. Reading a manifest never touches libhdf5, so no lock is needed
+there.
 """
 const HDF5_IO = ReentrantLock()
 
@@ -565,36 +592,9 @@ function _walk!(arrays, table, fileindex, f, group, prefix::AbstractString, file
     return nothing
 end
 
-"""
-    scan(path::AbstractString, driver::HDF5Driver;
-         group::AbstractString="/", siblings::Bool=true, access::SourceAccess=AutoAccess()) -> ChunkManifest
-
-Scan the HDF5 or NetCDF4 file at `path`, starting from `group` (the file
-root, `"/"`, by default). Returns a [`ChunkManifest`](@ref) whose array keys
-are the HDF5 paths of its datasets relative to `group`, joined with `"/"`,
-and whose manifests point into `path` without reading or decoding any
-chunk's bytes. If `group` names a dataset rather than a group, the result
-holds that one array, keyed by its own name.
-
-With `siblings=true`, the result also holds the variables the scanned ones
-cannot be interpreted without — dimension scales, `coordinates` and
-`grid_mapping` variables — even when they lie outside `group`.
-
-`access` decides how the file's metadata bytes are reached. The default,
-[`AutoAccess`](@ref), opens a local path directly and reads a remote one
-(`http(s)://`, `s3://`) in place through [`RangeAccess`](@ref), or through
-[`DownloadAccess`](@ref) on a libhdf5 whose driver layout is unverified.
-
-Chunked datasets become a [`ExplicitChunkMap`](@ref); contiguous datasets
-become an [`AffineChunkMap`](@ref) of one block. A chunk HDF5 never
-allocated is recorded as [`MISSING_CHUNK`](@ref) so a read returns the
-array's fill value for it. Every filter in a dataset's pipeline is mapped to
-a Zarr v2 codec; a filter with no byte-compatible Zarr v2 codec, a chunk with
-a nonzero `filter_mask`, or a multi-byte dataset whose last-applied filter is
-shuffle or fletcher32 each raise an `ArgumentError` naming `path` and the
-offending dataset.
-"""
-function scan(
+# Chunked datasets become an ExplicitChunkMap and contiguous ones an
+# AffineChunkMap of one block; a chunk HDF5 never allocated is MISSING_CHUNK.
+function _scan(
         path::AbstractString, driver::HDF5Driver;
         group::AbstractString = "/", access::SourceAccess = AutoAccess(),
         siblings::Bool = true,
@@ -612,6 +612,7 @@ function _scan_hdf5(
     )
     return withsourcepath(access, uri) do localpath
         recorded = _isremote(uri) ? String(uri) : abspath(localpath)
+        _refuseclassic(localpath, recorded)
         _scan_hdf5_open(
             driver, localpath, recorded, filesize(localpath), nothing;
             group, siblings, transport = _scantransport(access)
@@ -629,8 +630,8 @@ end
 #
 # It falls back to fetching only where the virtual file driver cannot be
 # registered, which is a libhdf5 whose struct layout has not been verified.
-_remoteaccess(::HDF5Driver, ::AbstractString) =
-    _rangevfdsupported() ? RangeAccess() : DownloadAccess()
+_remoteaccess(::HDF5Driver, ::AbstractString, transport::AbstractTransport) =
+    _rangevfdsupported() ? RangeAccess(; transport) : DownloadAccess(; transport)
 function _scan_hdf5_open(
         driver::HDF5Driver,
         openloc::AbstractString,
@@ -677,6 +678,7 @@ function _scan_hdf5(
         group::AbstractString, siblings::Bool,
     )
     source = _rangesource(access, uri)
+    _refuseclassic(source.prefix, uri)
     table = PathTable()
     arrays = Dict{String, ManifestArray}()
     groupattrs = Dict{String, Any}()

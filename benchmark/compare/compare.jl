@@ -57,28 +57,27 @@ const GOES_CMI = (; group = "CMI", siblings = false)
 function main()
     granule, goes, mosaic, big = localcopy(:granule), localcopy(:goes), localcopy(:mosaic), bigfile()
 
-    case(() -> scan(granule, HDF5Driver()), "scan local granule")
-    case(() -> scan(goes, HDF5Driver(); GOES_CMI...), "scan local goes CMI")
-    case(() -> scan(mosaic, HDF5Driver()), "scan local mosaic")
-    case(() -> scan(big, HDF5Driver()), "scan local 250k chunks")
+    case(() -> scan(granule; driver = HDF5Driver()), "scan local granule")
+    case(() -> scan(goes; driver = HDF5Driver(), GOES_CMI...), "scan local goes CMI")
+    case(() -> scan(mosaic; driver = HDF5Driver()), "scan local mosaic")
+    case(() -> scan(big; driver = HDF5Driver()), "scan local 250k chunks")
 
-    case(() -> scan(URL.granule, HDF5Driver()), "scan https granule")
-    case(() -> scan(URL.goes, HDF5Driver(); GOES_CMI...), "scan https goes CMI")
-    case(() -> scan(URL.mosaic, HDF5Driver()), "scan https mosaic")
-    case(() -> scan(URL.cog, GeoTIFFDriver()), "scan https cog")
+    case(() -> scan(URL.granule; driver = HDF5Driver()), "scan https granule")
+    case(() -> scan(URL.goes; driver = HDF5Driver(), GOES_CMI...), "scan https goes CMI")
+    case(() -> scan(URL.mosaic; driver = HDF5Driver()), "scan https mosaic")
+    case(() -> scan(URL.cog; driver = GeoTIFFDriver()), "scan https cog")
 
     # Twelve consecutive GOES-16 full-disk band 1 files.
     series = readlines(joinpath(@__DIR__, "goes_series.txt"))
-    case(() -> scan(series, HDF5Driver(); GOES_CMI...), "scan https 12 goes CMI"; runs = 2)
+    case(() -> scan(series; driver = HDF5Driver(), GOES_CMI...), "scan https 12 goes CMI"; runs = 2)
 
     json = joinpath(DATA, "big.json")
-    ChunkManifests.save(json, scan(big, HDF5Driver()), KerchunkJSON())
-    case(() -> Zarr.zopen(ChunkManifest(json))["v"], "open kerchunk json 250k chunks")
-    native = ChunkManifests.save(joinpath(mktempdir(), "big.manifest"), scan(big, HDF5Driver()), ZarrManifest())
-    case(() -> Zarr.zopen(ChunkManifest(native))["v"], "open native 250k chunks")
+    save(json, scan(big; driver = HDF5Driver()))
+    case(() -> load(json)["v"], "open kerchunk json 250k chunks")
+    native = save(joinpath(mktempdir(), "big.manifest"), scan(big; driver = HDF5Driver()))
+    case(() -> load(native)["v"], "open native 250k chunks")
 
-    remote = scan(URL.goes, HDF5Driver(); GOES_CMI...)
-    cmi = Zarr.zopen(ChunkManifest(remote; readahead = ReadaheadCache(; maxbytes = 0)))["CMI"]
+    cmi = scan(URL.goes; driver = HDF5Driver(), readahead = ReadaheadCache(; maxbytes = 0), GOES_CMI...)["CMI"]
     case(() -> cmi[1:226, :], "read https goes 48 scattered chunks")
     case(() -> cmi[:, :], "read https goes all 2304 chunks"; runs = 2)
     return nothing

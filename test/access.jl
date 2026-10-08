@@ -72,7 +72,7 @@ end
 
     @testset "scans a remote source and records the remote URI" begin
         _acc_withserver(read(src), "src.h5") do url
-            cm = ChunkManifests.scan(url, HDF5Driver(); access = DownloadAccess())
+            cm = _scan(url, HDF5Driver(); access = DownloadAccess())
             @test sort(collect(keys(arraysof(cm)))) == ["data"]
 
             # The manifest has to be valid for a reader that never saw the
@@ -94,13 +94,13 @@ end
         cache = joinpath(dir, "cache")
         _acc_withserver(read(src), "src.h5") do url
             acc = DownloadAccess(; cachedir = cache, keep = true)
-            cm1 = ChunkManifests.scan(url, HDF5Driver(); access = acc)
+            cm1 = _scan(url, HDF5Driver(); access = acc)
             files = readdir(cache)
             @test length(files) == 1
             stamp = mtime(joinpath(cache, only(files)))
 
             # A second scan finds the copy already there rather than fetching.
-            cm2 = ChunkManifests.scan(url, HDF5Driver(); access = acc)
+            cm2 = _scan(url, HDF5Driver(); access = acc)
             @test readdir(cache) == files
             @test mtime(joinpath(cache, only(files))) == stamp
             @test chunklocation(chunkmapof(arraysof(cm2)["data"]), CartesianIndex(1))[1] ==
@@ -134,7 +134,7 @@ end
                 DownloadAccess(; transport = FetchCountingTransport()),
                 RangeAccess(; transport = FetchCountingTransport()),
             )
-            cm = scan(src, HDF5Driver(); access)
+            cm = _scan(src, HDF5Driver(); access)
             @test transportof(cm) === access.transport
             before = access.transport.count[]
             @test Array(Zarr.zopen(cm)["data"][:]) == expected
@@ -143,7 +143,7 @@ end
         end
 
         # A mechanism that carries no transport leaves the manifest its own.
-        @test transportof(scan(src, HDF5Driver(); access = LocalAccess())) isa
+        @test transportof(_scan(src, HDF5Driver(); access = LocalAccess())) isa
             TransportContainers
     end
 
@@ -152,7 +152,7 @@ end
         # driver is exercised with no network: the mechanism under test is the
         # driver, not where the bytes came from.
         if ChunkManifests._rangevfdsupported()
-            reference = scan(src, HDF5Driver(); access = LocalAccess())
+            reference = _scan(src, HDF5Driver(); access = LocalAccess())
             refkeys = sort(collect(keys(arraysof(reference))))
 
             @testset "matches a local scan however reads are gathered" begin
@@ -168,7 +168,7 @@ end
                             transport = LocalTransport(), initialread, tailread, blocksize,
                             pagebuffer = 0,
                         )
-                        cm = scan(src, HDF5Driver(); access)
+                        cm = _scan(src, HDF5Driver(); access)
                         @test sort(collect(keys(arraysof(cm)))) == refkeys
                         # Assembled bytes must decode, not merely arrive.
                         @test Array(Zarr.zopen(cm)["data"][:]) == expected
@@ -176,8 +176,15 @@ end
                 end
             end
 
+            @testset "a NetCDF classic file is refused from its leading bytes" begin
+                classic = joinpath(dir, "classic.nc")
+                write(classic, vcat(codeunits("CDF"), UInt8[0x02], zeros(UInt8, 60)))
+                access = RangeAccess(; transport = LocalTransport())
+                @test_throws "NetCDF classic (NetCDF3)" _scan(classic, HDF5Driver(); access)
+            end
+
             @testset "records the URI it was given" begin
-                cm = scan(src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport()))
+                cm = _scan(src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport()))
                 @test length(tableof(cm)) == 1
                 @test tableof(cm)[1].uri == src
                 # The size had to be known to address the object at all.
@@ -185,7 +192,7 @@ end
             end
 
             @testset "points at the chunks rather than reading them" begin
-                cm = scan(
+                cm = _scan(
                     src, HDF5Driver(); access = RangeAccess(; transport = LocalTransport())
                 )
                 m = chunkmapof(arraysof(cm)["data"])
@@ -210,7 +217,7 @@ end
                         write(d, rand(Float32, shape))
                     end
                 end
-                reference = scan(many, HDF5Driver(); access = LocalAccess())
+                reference = _scan(many, HDF5Driver(); access = LocalAccess())
                 memberheaders = HDF5.h5open(many) do f
                     addrs = UInt64[]
                     HDF5.API.h5l_iterate(f, HDF5.API.H5_INDEX_NAME, HDF5.API.H5_ITER_INC) do _, _, info
@@ -229,7 +236,7 @@ end
                     transport = recording, initialread = 0, tailread = 0, blocksize = 0,
                     pagebuffer = 0,
                 )
-                cm = scan(many, HDF5Driver(); access)
+                cm = _scan(many, HDF5Driver(); access)
 
                 for key in ("a", "b", "c")
                     a, b = chunkmapof(arraysof(reference)[key]), chunkmapof(arraysof(cm)[key])
@@ -282,11 +289,11 @@ end
                         write(d, rand(Float32, 600))
                     end
                 end
-                local_ = scan(many, HDF5Driver(); access = LocalAccess())
+                local_ = _scan(many, HDF5Driver(); access = LocalAccess())
                 _acc_withserver(read(many), "concurrent.h5") do url
                     access = RangeAccess(; initialread = 1024, tailread = 0, blocksize = 1024)
                     for _ in 1:3
-                        cms = scan(fill(url, 12), HDF5Driver(); access)
+                        cms = map(_manifest, scan(fill(url, 12); access))
                         @test all(cms) do cm
                             all(
                                 chunklocation(chunkmapof(arraysof(cm)[k]), I)[2:3] ==
@@ -313,15 +320,5 @@ end
             @test_throws "blocksize must be nonnegative" RangeAccess(; blocksize = -1)
             @test_throws "cachelimit must be positive" RangeAccess(; cachelimit = 0)
         end
-    end
-
-    @testset "ChunkManifest(path) sends a remote path to scan, not to detection" begin
-        msg = try
-            ChunkManifest("s3://bucket/granule.h5")
-            ""
-        catch e
-            sprint(showerror, e)
-        end
-        @test occursin("scan(\"s3://bucket/granule.h5\", HDF5Driver())", msg)
     end
 end
