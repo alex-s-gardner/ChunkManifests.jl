@@ -57,6 +57,21 @@ end
             end
         end
 
+        @testset "a large codestream read in place is walked from several places" begin
+            # Over 4 MiB of codestream, so the remote scan probes windows across it and walks the
+            # chains between the tile-parts it finds concurrently; the result must be the sequential
+            # walk's, tile for tile.
+            big = rand(UInt16, 1600, 1500)
+            bigpath = _j2k_fixture(joinpath(dir, "big.jp2"), big, "-t", "128,128", "-n", "3")
+            @test filesize(bigpath) > 4 * 2^20
+            sequential = arraysof(scan(bigpath).storage)["0/data"]
+            access = RangeAccess(; transport = LocalTransport(), initialread = 0, tailread = 0, blocksize = 0)
+            probed = arraysof(_scan(bigpath, JPEG2000Driver(); access))["0/data"]
+            grid = CartesianIndices(chunkgridsize(chunkmapof(sequential)))
+            @test length(grid) == 13 * 12
+            @test all(chunklocation(chunkmapof(probed), I) == chunklocation(chunkmapof(sequential), I) for I in grid)
+        end
+
         @testset "concurrent reads of overlapping windows agree" begin
             a = scan(path)["0"]["data"]
             windows = [(rand(1:100):150, rand(1:60):97) for _ in 1:32]

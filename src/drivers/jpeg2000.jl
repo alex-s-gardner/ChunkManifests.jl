@@ -152,25 +152,41 @@ function _j2k_mainheader(io::IO, cs::Integer, context::AbstractString)
     end
 end
 
-# Each tile's byte range, from the chain of tile-part headers: Psot is the
-# length of a tile-part, so each SOT locates the next.
-function _j2k_tileranges(io::IO, sot::Integer, csend::Integer, ntiles::Integer, context::AbstractString)
-    ranges = Vector{Union{Nothing, Tuple{Int, Int}}}(nothing, ntiles)
-    previous = -1
-    pos = sot
+# The tile-parts from `start` on, as `(position, tile, length)`, following the
+# chain of tile-part headers: Psot is the length of a tile-part, so each SOT
+# locates the next. `readsot(pos)` returns the up to 12 bytes at `pos`. The
+# walk ends at the EOC marker or a last tile-part, returning `done = true`, or
+# on reaching a position in `stops` other than `start`. A walk that is not
+# `strict` started from a guessed position, and returns `nothing` where it
+# finds no tile-part rather than throwing.
+function _j2k_walk(readsot, start::Integer, csend::Integer, ntiles::Integer, stops, context; strict::Bool)
+    parts = NTuple{3, Int}[]
+    pos = Int(start)
     while pos + 2 <= csend
-        seek(io, pos)
-        # One read per tile-part: the marker and the rest of the SOT segment.
-        h = _j2k_read(io, min(12, csend - pos))
+        pos != start && pos in stops && return (; parts, stop = pos, done = false)
+        h = readsot(pos)
         m = _j2k_u16(h, 1)
-        m == _J2K_EOC && break
-        m == _J2K_SOT && length(h) == 12 ||
-            throw(ArgumentError("$context: expected a tile-part (SOT) at byte $pos"))
-        isot = Int(_j2k_u16(h, 5))
+        m == _J2K_EOC && return (; parts, stop = pos, done = true)
+        if !(m == _J2K_SOT && length(h) == 12 && Int(_j2k_u16(h, 5)) < ntiles)
+            strict || return nothing
+            m == _J2K_SOT && length(h) == 12 || throw(ArgumentError("$context: expected a tile-part (SOT) at byte $pos"))
+            throw(ArgumentError("$context: tile-part at byte $pos names tile $(_j2k_u16(h, 5)) of $ntiles"))
+        end
         psot = Int(_j2k_u32(h, 7))
         # A zero Psot marks the last tile-part, running to the EOC marker.
         len = psot == 0 ? csend - 2 - pos : psot
-        isot < ntiles || throw(ArgumentError("$context: tile-part at byte $pos names tile $isot of $ntiles"))
+        push!(parts, (pos, Int(_j2k_u16(h, 5)), len))
+        psot == 0 && return (; parts, stop = pos + len, done = true)
+        pos += len
+    end
+    return (; parts, stop = pos, done = true)
+end
+
+# Each tile's byte range, from its tile-parts in codestream order.
+function _j2k_tileranges(parts, ntiles::Integer, context::AbstractString)
+    ranges = Vector{Union{Nothing, Tuple{Int, Int}}}(nothing, ntiles)
+    previous = -1
+    for (pos, isot, len) in parts
         r = ranges[isot + 1]
         if r === nothing
             ranges[isot + 1] = (pos, len)
@@ -185,15 +201,67 @@ function _j2k_tileranges(io::IO, sot::Integer, csend::Integer, ntiles::Integer, 
             ranges[isot + 1] = (first(r), r[2] + len)
         end
         previous = isot
-        psot == 0 && break
-        pos += len
     end
     absent = count(isnothing, ranges)
     absent == 0 || throw(ArgumentError("$context: $absent of $ntiles tiles have no tile-parts"))
     return Vector{Tuple{Int, Int}}(ranges)
 end
 
-function _j2k_build(path::AbstractString, filebytes, io::IO, transport::AbstractTransport)
+# The tile-parts of a codestream read through `io`, one SOT after another.
+_j2k_tileparts(io::IO, sot, csend, ntiles, context) =
+    _j2k_walk(pos -> (seek(io, pos); _j2k_read(io, min(12, csend - pos))), sot, csend, ntiles, (),
+              context; strict = true).parts
+
+# The first position in `window`, which starts at byte `start` of the file, holding
+# what reads as an SOT segment: the marker, `Lsot = 10`, a tile index below
+# `ntiles` and a length that ends inside the codestream.
+function _j2k_findsot(window::AbstractVector{UInt8}, start::Integer, csend::Integer, ntiles::Integer)
+    for i in 1:(length(window) - 11)
+        window[i] == 0xff && window[i + 1] == 0x90 && window[i + 2] == 0x00 && window[i + 3] == 0x0a || continue
+        isot, psot = Int(_j2k_u16(window, i + 4)), Int(_j2k_u32(window, i + 6))
+        tp, tn = window[i + 10], window[i + 11]
+        pos = start + i - 1
+        isot < ntiles && (psot == 0 || 14 <= psot <= csend - pos) && (tn == 0 || tp < tn) && return pos
+    end
+    return nothing
+end
+
+# The tile-parts of a remote codestream, walked from several places at once.
+#
+# Walking the chain one SOT at a time costs a round trip per tile-part, and a
+# Sentinel-2 band has 121. But no SOT marker can occur inside a tile's coded
+# data — bit stuffing keeps `0xFF` from being followed by a byte above `0x8F`
+# there — so windows fetched across the codestream at once show where some
+# tile-parts begin, and the chains between those places are walked
+# concurrently. A chain is used only where the walk from the first tile-part
+# lands exactly on its start, so a position that merely reads like an SOT is
+# never taken for one.
+function _j2k_tileparts(transport::AbstractTransport, uri::AbstractString, sot, csend, ntiles, context)
+    span = csend - sot
+    nprobes = clamp(span ÷ (4 * 2^20), 0, 64)
+    starts = [sot + k * span ÷ (nprobes + 1) for k in 1:nprobes]
+    windows = fetchranges(transport, uri, [ByteRange(p, min(512 * 1024, csend - p)) for p in starts])
+    stops = Set{Int}([sot])
+    for (p, w) in zip(starts, windows)
+        found = _j2k_findsot(w, p, csend, ntiles)
+        found === nothing || push!(stops, found)
+    end
+    readsot(pos) = fetchrange(transport, uri, ByteRange(pos, min(12, csend - pos)))
+    walks = Dict(p => Threads.@spawn(_j2k_walk(readsot, p, csend, ntiles, stops, context; strict = p == sot))
+                 for p in stops)
+    parts = NTuple{3, Int}[]
+    pos = sot
+    while true
+        walk = fetch(walks[pos])
+        walk === nothing && (walk = _j2k_walk(readsot, pos, csend, ntiles, (), context; strict = true))
+        append!(parts, walk.parts)
+        walk.done && return parts
+        pos = walk.stop
+    end
+end
+
+# `tileparts(sot, csend, ntiles, context)` lists the codestream's tile-parts.
+function _j2k_build(path::AbstractString, filebytes, io::IO, transport::AbstractTransport, tileparts)
     context = "$path"
     cs, cslen = _j2k_codestream(io, filebytes, context)
     header, sot = _j2k_mainheader(io, cs, context)
@@ -212,7 +280,7 @@ function _j2k_build(path::AbstractString, filebytes, io::IO, transport::Abstract
     )
     T = _j2k_eltype(comp.ssiz, context)
     ntx, nty = _j2k_ntiles(siz)
-    ranges = _j2k_tileranges(io, sot, cs + cslen, ntx * nty, context)
+    ranges = _j2k_tileranges(tileparts(sot, cs + cslen, ntx * nty, context), ntx * nty, context)
 
     table = PathTable()
     fileindex = push_uri!(table, path; size = filebytes)
@@ -246,21 +314,23 @@ end
 
 function _j2k_scan(uri::AbstractString, access::RangeAccess)
     io = RangeIO(access, uri)
-    return _j2k_build(String(uri), filesize(io), io, _scantransport(access))
+    tileparts(args...) = _j2k_tileparts(access.transport, uri, args...)
+    return _j2k_build(String(uri), filesize(io), io, _scantransport(access), tileparts)
 end
 
 function _j2k_scan(uri::AbstractString, access::SourceAccess)
     return withsourcepath(access, uri) do localpath
         recorded = _isremote(uri) ? String(uri) : abspath(localpath)
         open(localpath, "r") do io
-            _j2k_build(recorded, filesize(localpath), io, _scantransport(access))
+            tileparts(args...) = _j2k_tileparts(io, args...)
+            _j2k_build(recorded, filesize(localpath), io, _scantransport(access), tileparts)
         end
     end
 end
 
-# A remote object is read in place. Locating the tiles reads only the main
-# header and each tile-part's 12-byte SOT segment, one after another, so the
-# reads are made exactly as asked rather than rounded up to blocks, and
-# nothing is prefetched from the end of the object.
+# A remote object is read in place. Locating the tiles reads the main header,
+# a few windows across the codestream and each tile-part's 12-byte SOT
+# segment, so the header reads are made exactly as asked rather than rounded
+# up to blocks, and nothing is prefetched from the end of the object.
 _remoteaccess(::JPEG2000Driver, ::AbstractString, transport::AbstractTransport) =
     RangeAccess(; transport, initialread = 64 * 1024, tailread = 0, blocksize = 0)
