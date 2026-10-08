@@ -480,12 +480,30 @@ function _gt_eltype(ifd, nsp::Integer, context::AbstractString)
     bits = _gt_checkuniform(_gt_asvector(ifd[TiffImages.BITSPERSAMPLE].data), nsp, "BITSPERSAMPLE", context)
     sfvalues = TiffImages.SAMPLEFORMAT in ifd ? _gt_asvector(ifd[TiffImages.SAMPLEFORMAT].data) : UInt16[1]
     sampleformat = _gt_checkuniform(sfvalues, nsp, "SAMPLEFORMAT", context)
-    T = TiffImages.rawtype(TiffImages.SampleFormats(sampleformat), bits)
+    T = _gt_complextype(sampleformat, bits, context)
+    T === nothing && (T = TiffImages.rawtype(TiffImages.SampleFormats(sampleformat), bits))
     bits == sizeof(T) * 8 || throw(
         ArgumentError(
             "$context: BITSPERSAMPLE=$bits is not byte-aligned; packed sub-byte sample " *
                 "widths cannot be referenced without unpacking, which this package never does"
         )
+    )
+    return T
+end
+
+# SampleFormat 5 and 6 are complex integer and complex floating point, the
+# formats GDAL writes for CInt16/CInt32 and CFloat32/CFloat64, which
+# `TiffImages.rawtype` does not cover. BITSPERSAMPLE counts both parts, so a
+# Sentinel-1 SLC's CInt16 is 32. `nothing` for every other format.
+function _gt_complextype(sampleformat::Integer, bits::Integer, context::AbstractString)
+    sampleformat in (5, 6) || return nothing
+    T = if sampleformat == 5
+        get(Dict(16 => Complex{Int8}, 32 => Complex{Int16}, 64 => Complex{Int32}, 128 => Complex{Int64}), bits, nothing)
+    else
+        get(Dict(64 => ComplexF32, 128 => ComplexF64), bits, nothing)
+    end
+    T === nothing && throw(
+        ArgumentError("$context: complex SAMPLEFORMAT=$sampleformat with BITSPERSAMPLE=$bits has no Julia element type")
     )
     return T
 end

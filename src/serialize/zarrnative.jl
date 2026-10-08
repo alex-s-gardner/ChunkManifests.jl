@@ -456,7 +456,7 @@ function _load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManif
     arrays = Dict{String, ManifestArray}()
     for (arraydoc, manifest) in zip(doc["arrays"], maps)
         key = arraydoc["path"]::AbstractString
-        T = Zarr.typestr(arraydoc["dtype"]::AbstractString)
+        T = Zarr.typestr(arraydoc["dtype"]::Union{AbstractString, AbstractVector})
         shape = Tuple(arraydoc["shape"])
         chunkshape = Tuple(arraydoc["chunkshape"])
 

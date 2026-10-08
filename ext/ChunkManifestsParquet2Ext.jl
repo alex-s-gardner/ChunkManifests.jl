@@ -172,7 +172,7 @@ function _loadarray(
     # order against this package's Julia order); undo that here.
     shape = NTuple{N, Int}(reverse(Int.(zarraydoc["shape"])))
     chunkshape = NTuple{N, Int}(reverse(Int.(zarraydoc["chunks"])))
-    T = ChunkManifests.Zarr.typestr(zarraydoc["dtype"]::AbstractString)
+    T = ChunkManifests.Zarr.typestr(zarraydoc["dtype"]::Union{AbstractString, AbstractVector})
     gridsize = ntuple(d -> cld(shape[d], chunkshape[d]), N)
     gridaxes = map(Base.OneTo, gridsize)
     cis = CartesianIndices(gridaxes)

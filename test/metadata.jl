@@ -63,7 +63,8 @@ import Zarr
         @test ChunkManifests.zarr_dtype_string(UInt16) == "<u2"
         @test ChunkManifests.zarr_dtype_string(Bool) == "|b1"
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
-        @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(Complex{Int32})
+        @test ChunkManifests.zarr_dtype_string(Complex{Int32}) == [["r", "<i4"], ["i", "<i4"]]
+        @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(Complex{UInt16})
     end
 
     @testset "chunkkey verified mappings" begin

@@ -66,7 +66,7 @@ end
 function _juliadtype(dtype, path, key)
     dtype isa AbstractString || throw(
         ArgumentError(
-            "$path: $key: \"dtype\" must be a string, got $(typeof(dtype))"
+            "$path: $key: \"dtype\" must be a string or a structured-dtype list, got $(typeof(dtype))"
         )
     )
     T = try
@@ -103,6 +103,25 @@ function _juliadtype(dtype, path, key)
                 "Zarr.jl ignores the byte-order marker when decoding, so the values " *
                 "would be wrong rather than refused. Use $(repr(canonical)) for " *
                 "little-endian data.",
+        )
+    )
+    return T
+end
+
+# The one structured dtype read is a complex integer (see `zarr_dtype_string`),
+# whose fields each carry a byte order.
+function _juliadtype(dtype::AbstractVector, path, key)
+    T = try
+        Zarr.typestr(dtype)
+    catch e
+        e isa ArgumentError || rethrow()
+        throw(ArgumentError("$path: $key: $(e.msg)"))
+    end
+    fields = last.(dtype)
+    any(f -> startswith(f, '>'), fields) && sizeof(T) > 2 && throw(
+        ArgumentError(
+            "$path: $key: dtype $(JSON.json(dtype)) is big-endian, which cannot be served " *
+                "faithfully: Zarr.jl ignores the byte-order marker when decoding",
         )
     )
     return T
