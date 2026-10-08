@@ -345,8 +345,8 @@ group attributes and a record of which driver produced the scan.
 
 A `ChunkManifest` *is* a read-only `Zarr.AbstractStore`: it answers metadata
 keys from synthesized Zarr v2 documents and chunk keys with the source files'
-raw, still-encoded bytes, so `Zarr.zopen(manifest)` is all that stands between
-a scan and an array. Decoding is Zarr.jl's job — this store never
+raw, still-encoded bytes, so the `Zarr.ZGroup` that [`scan`](@ref) and
+[`load`](@ref) return is a plain Zarr group over it. Decoding is Zarr.jl's job — this store never
 decompresses, so the bytes it returns are byte-for-byte those of the original
 file.
 
@@ -363,6 +363,11 @@ struct ChunkManifest <: Zarr.AbstractStore
     provenance::Dict{String, Any}
     transport::AbstractTransport
     readahead::ReadaheadCache
+    # The sorted names directly under each group, keyed by group path, the root
+    # being "". Groups exist only because arrays live under them; opening a
+    # manifest probes every group, and deriving this from the array paths on
+    # each probe makes opening quadratic in the number of arrays.
+    groups::Dict{String, Vector{String}}
 
     function ChunkManifest(arrays, table, attrs, provenance, transport, readahead)
         for (key, array) in arrays
@@ -377,51 +382,32 @@ struct ChunkManifest <: Zarr.AbstractStore
                 )
             )
         end
-        return new(arrays, table, attrs, provenance, transport, readahead)
+        return new(arrays, table, attrs, provenance, transport, readahead, _grouptree(keys(arrays)))
     end
 end
 
-"""
-    ManifestSeries(members, dim)
-    ManifestSeries(paths, dim; access=AutoAccess())
-
-An ordered set of [`ChunkManifest`](@ref)s declared to lie along the dimension
-named `dim`, which `ChunkManifests.combine` concatenates into one manifest.
-
-The declaration is the whole point: which dimension a set of files is stacked
-along cannot be recovered from the files themselves without reading and
-ordering their coordinate values, which this package does not do. `dim` states
-it, and the members stay in the order given.
-
-Dimensions are named rather than numbered because one number cannot serve a
-whole group: `time` is dimension 3 of a data variable and dimension 1 of its
-own coordinate. Arrays that do not name `dim` at all are not concatenated —
-only one member's copy of `x` or `y` survives — which is what
-`combine`'s `check` keyword governs.
-"""
-struct ManifestSeries
-    members::Vector{ChunkManifest}
-    dimname::String
-
-    function ManifestSeries(members, dimname)
-        ms = collect(ChunkManifest, members)
-        isempty(ms) && throw(
-            ArgumentError(
-                "ManifestSeries: no manifests given; a series needs at least one member"
-            )
-        )
-        nm = String(string(dimname))
-        isempty(nm) && throw(ArgumentError("ManifestSeries: the dimension name is empty"))
-        return new(ms, nm)
+function _grouptree(paths)
+    tree = Dict{String, Set{String}}("" => Set{String}())
+    for path in paths
+        parent = ""
+        parts = split(path, '/')
+        for (i, part) in pairs(parts)
+            push!(tree[parent], String(part))
+            i == lastindex(parts) && break
+            parent = _joinkey(parent, part)
+            get!(Set{String}, tree, parent)
+        end
     end
+    return Dict{String, Vector{String}}(p => sort!(collect(c)) for (p, c) in tree)
 end
 
 """
     ManifestFormat
 
-An on-disk representation of a [`ChunkManifest`](@ref). Formats are types rather
-than flags so a new one is a new subtype plus [`save`](@ref) and
-[`ChunkManifest`](@ref) methods, never an edit to a central dispatch function.
+An on-disk representation of a manifest, chosen by [`save`](@ref) and
+[`load`](@ref) from the path's extension or given as their `format` keyword.
+Formats are types rather than flags so a new one is a new subtype plus `_save`
+and `_load` methods, never an edit to a central dispatch function.
 """
 abstract type ManifestFormat end
 
@@ -484,47 +470,41 @@ function KerchunkParquet(; recordsize::Integer = 10000)
     return KerchunkParquet(Int(recordsize))
 end
 
-# Not exported: FileIO.jl exports `save`, and `using FileIO, ChunkManifests`
-# would make the bare name ambiguous for anyone who also loads an image.
-# Reading has no such problem — it is a `ChunkManifest` constructor.
 function save end
+function load end
+function _save end
+function _load end
 
-# The package a format's methods arrive with, for formats whose
+# The package a format's or driver's methods arrive with, for those whose
 # implementation lives in an extension.
-const FORMAT_BACKEND = Dict{Symbol, String}(:KerchunkParquet => "Parquet2")
+const EXTENSION_BACKEND = Dict{Symbol, String}(
+    :KerchunkParquet => "Parquet2", :GeoTIFFDriver => "TiffImages",
+)
 
 # Reached only when no concrete method applies, which for an extension-gated
-# format means its triggering package is not loaded. A bare MethodError would
-# name no remedy.
-function _noformatmethod(fmt::ManifestFormat, verb::AbstractString)
-    name = nameof(typeof(fmt))
-    pkg = get(FORMAT_BACKEND, name, nothing)
-    pkg === nothing && throw(
-        ArgumentError(
-            "$verb is not implemented for format $name"
-        )
-    )
-    error("$pkg must be loaded to $verb a $name. Try `using $pkg`.")
+# format or driver means its triggering package is not loaded. A bare
+# MethodError would name no remedy.
+function _nobackendmethod(x, action::AbstractString)
+    pkg = get(EXTENSION_BACKEND, nameof(typeof(x)), nothing)
+    pkg === nothing && throw(ArgumentError("cannot $action: no method is implemented for it"))
+    error("$pkg must be loaded to $action. Try `using $pkg`.")
 end
 
-save(::Any, ::ChunkManifest, fmt::ManifestFormat; kwargs...) =
-    _noformatmethod(fmt, "save")
-ChunkManifest(::Any, fmt::ManifestFormat; kwargs...) = _noformatmethod(fmt, "read")
+_save(::Any, ::ChunkManifest, fmt::ManifestFormat; kwargs...) =
+    _nobackendmethod(fmt, "save a $(nameof(typeof(fmt)))")
+_load(::Any, fmt::ManifestFormat; kwargs...) = _nobackendmethod(fmt, "load a $(nameof(typeof(fmt)))")
 
 """
     AbstractDriver
 
-Reads a source format's chunk layout. Subtypes implement [`scan`](@ref), and
-optionally [`candrive`](@ref) to participate in format sniffing.
-
-Passing a driver explicitly is the supported way to scan a file. Sniffing is a
-convenience, and an unreliable one: inferring format, protocol and codec from a
-name or a few magic bytes misreads files that merely look conventional.
+Reads a source format's chunk layout. [`scan`](@ref) chooses one from the
+path's extension or takes it as its `driver` keyword. A subtype implements
+[`ChunkManifests._scan`](@ref) and is made the default for an extension with
+[`ChunkManifests.register_driver!`](@ref).
 """
 abstract type AbstractDriver end
 
 function scan end
-function candrive end
 
 """
     SourceAccess
@@ -535,8 +515,8 @@ Scanning reads a file's metadata — superblocks, chunk indexes, tag
 directories — which is a small fraction of a large file but is scattered
 through it, so how those bytes are reached decides whether scanning a remote
 object is cheap or expensive. Mechanisms are types rather than flags so a new
-one is a new subtype plus a [`scan`](@ref) method, never an edit to a central
-dispatch function.
+one is a new subtype plus a driver method, never an edit to a central dispatch
+function.
 
 Whichever mechanism is used, the manifest records the URI the caller asked
 for. A file fetched to a local cache is still recorded under its remote URI,
@@ -674,12 +654,59 @@ function withsourcepath end
 """
     GeoTIFFDriver(; chunkbytes=8 * 1024 * 1024)
 
-Reads the chunk layout of a TIFF or Cloud-Optimized GeoTIFF.
+Reads the chunk layout of a TIFF or Cloud-Optimized GeoTIFF. Chosen by
+[`scan`](@ref) for `.tif` and `.tiff`. Only the tag parsing needs `TiffImages`,
+so scanning is available once that extension loads. The TIFF predictor codec
+and the GeoTIFF tag semantics live in this package proper, because a saved
+manifest must stay decodable whether or not `TiffImages` is present when it is
+read.
 
-Only the tag parsing needs `TiffImages`, so `scan` is available once that
-extension loads. The TIFF predictor codec and the GeoTIFF tag semantics live in
-this package proper, because a saved manifest must stay decodable whether or
-not `TiffImages` is present when it is read.
+Each resolution level of the scanned TIFF becomes one Zarr group: `"0"` is the
+full-resolution image, `"1"` its first overview, and so on by decreasing size. A level's group holds
+
+- `"data"`, its pixels;
+- `"mask"`, when the file carries a transparency mask of that size;
+- `"x"` and `"y"`, the pixel-center coordinates, when the image is georeferenced.
+
+A TIFF holding several separate full-resolution images keys each under its
+0-based image index, as `"<image>/<level>/data"`. No strip or tile is read or
+decoded to do any of this.
+
+The `level` keyword to [`scan`](@ref): every level is scanned by default, and
+`level = k` keeps level `k` of each image and nothing else, an error when an
+image has no such level.
+
+Pages are placed from the `NewSubfileType` tag (254) and the `SubIFDs` tag
+(330), which is followed one level deep. Each full-resolution main-chain page
+starts an image; a reduced-resolution or mask page belongs to the most recent
+one, and a `SubIFDs` child to the page owning the tag. Overviews are ordered by
+size rather than by page order, and a mask joins the level of its own size. An
+overview or mask inherits its image's CRS and nodata fill value and — unless it
+carries its own `ModelPixelScale` / `ModelTiepoint` — a pixel scale derived from
+the image's extent (not an assumed resolution factor) and the image's tiepoint.
+
+Each array's attributes record the page it came from as `"tiff_page"` (the
+main-chain index, or `"<owner>.sub<i>"` for a `SubIFDs` child), the raw
+`"NewSubfileType"`, and its three bit flags as `"reduced_resolution"`, `"mask"`
+and `"multipage"`.
+
+`access` decides how the tag directories are reached; the default reads a
+remote object in place through [`RangeAccess`](@ref).
+
+Supported layouts: any `SAMPLESPERPIXEL`, both `PLANARCONFIG` values, and
+byte-aligned sample widths. A single band keeps a 2-D `(x, y)` array; multiple
+bands add a `"band"` dimension, ordered `(band, x, y)` for chunky data and
+`(x, y, band)` for planar data, since a chunk's bytes are served untouched and
+the dimension order has to match the order the file stores samples in.
+Rejected, by name, with an `ArgumentError`: sub-byte bit depths, `BITSPERSAMPLE`
+or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
+`PREDICTOR` values, a striped layout whose final strip is shorter than
+`ROWSPERSTRIP` when that layout cannot be re-chunked around the gap (see
+`chunkbytes` below for the uncompressed case, which can), a `SubIFDs`
+entry nesting deeper than one level, any IFD offset — main chain or `SubIFDs` —
+revisited while scanning, and pages that do not form a pyramid: an overview no
+smaller than the level above it, a mask matching no level's size, or two masks
+at one level.
 
 For an uncompressed source the chunk shape is not dictated by the file, so
 `chunkbytes` is the size this driver aims for when grouping strips.
@@ -724,14 +751,8 @@ download.
 """
 function objectsize end
 
-# Combining and integrity. `combine` is deliberately not exported: Rasters
-# exports a `combine` of its own, and `using Rasters, ChunkManifests` would
-# otherwise make the bare name ambiguous for exactly the pair of packages a
-# caller here is likely to have loaded.
+# Combining and integrity.
 function concat end
-function combine end
-function membersof end
-function dimnameof end
 function validate end
 function setchunk! end
 function coalesce_ranges end

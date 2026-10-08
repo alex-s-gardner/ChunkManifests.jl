@@ -28,27 +28,40 @@ Python, and neither `kerchunk` nor `fsspec` is a dependency.
 
 ## Writing and reading
 
-[`save`](@ref ChunkManifests.save) is deliberately **not** exported, so call it qualified.
-Loading needs no separate function: pass the path and the format to the
-[`ChunkManifest`](@ref) constructor.
+[`save`](@ref) and [`load`](@ref) are the exported entry points. `format` defaults to what
+the path's extension names; `save`'s default is [`ZarrManifest`](@ref).
 
 ```jldoctest manifests
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
 
-julia> cm = ChunkManifest(path)
-ChunkManifest(4 arrays, 1 files)
+julia> z = scan(path);
+
+julia> sort(collect(keys(z.arrays)))
+4-element Vector{String}:
+ "grounded"
+ "mapping"
+ "x"
+ "y"
 
 julia> dir = mktempdir();
 
-julia> ChunkManifests.save(joinpath(dir, "mask"), cm, ZarrManifest());
+julia> save(joinpath(dir, "mask.manifest"), z);
 
-julia> ChunkManifest(joinpath(dir, "mask"), ZarrManifest())
-ChunkManifest(4 arrays, 1 files)
+julia> sort(collect(keys(load(joinpath(dir, "mask.manifest")).arrays)))
+4-element Vector{String}:
+ "grounded"
+ "mapping"
+ "x"
+ "y"
 
-julia> ChunkManifests.save(joinpath(dir, "mask.json"), cm, KerchunkJSON());
+julia> save(joinpath(dir, "mask.json"), z);
 
-julia> ChunkManifest(joinpath(dir, "mask.json"), KerchunkJSON())
-ChunkManifest(4 arrays, 1 files)
+julia> sort(collect(keys(load(joinpath(dir, "mask.json")).arrays)))
+4-element Vector{String}:
+ "grounded"
+ "mapping"
+ "x"
+ "y"
 ```
 
 A dtype survives the round trip when this package can emit it again, which covers `Bool`,
@@ -57,8 +70,9 @@ being what a CF `grid_mapping` variable carries. Zarr.jl decodes `|S1` as a char
 rather than as a one-character string, so that variable comes back byte-compatible rather
 than as the same Julia type.
 
-`ChunkManifest(path)` with no format argument recognizes a saved manifest as well as a source
-file, so a reader that does not care which it was given need not say.
+[`load`](@ref) scans a path whose extension names a driver and opens any other path as a
+saved manifest, so a reader that does not care which it was given need not say. A local path
+whose extension names no format is recognized from its contents; pass `format` to state it.
 
 ## Object storage
 
@@ -68,8 +82,8 @@ all work by the same code that handles a local path. A producer can scan an arch
 publish the manifests next to the data for others to read:
 
 ```julia
-ChunkManifests.save("s3://bucket/manifests/granule", cm, ZarrManifest())
-cm = ChunkManifest("s3://bucket/manifests/granule", ZarrManifest())
+save("s3://bucket/manifests/granule", z)
+z = load("s3://bucket/manifests/granule")
 ```
 
 An `s3://` path needs AWS credentials at the point the store is constructed, before any
@@ -85,9 +99,15 @@ published on S3 may point at chunks on a web server, or the reverse; see
 A manifest is valid only as long as the URIs it records resolve. When an archive moves, the
 fix is a table edit rather than a rescan, because chunks reference files by index:
 
-- [`seturi!`](@ref) — repoint one file.
 - [`replace_prefix!`](@ref) — rewrite every URI sharing a prefix, which is the whole-archive
   case.
-- [`push_uri!`](@ref) — add a file to the table.
 - [`validate`](@ref) — check what the recorded files report now against what the scan
   recorded, one request per file.
+
+The edit changes the group in memory; [`save`](@ref) it again to keep it:
+
+```julia
+z = load("granule.manifest")
+replace_prefix!(z, "s3://old-bucket/" => "s3://new-bucket/")
+save("granule.manifest", z)
+```

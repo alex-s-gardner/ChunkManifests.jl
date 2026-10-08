@@ -4,25 +4,23 @@
 Read existing HDF5, NetCDF4 and GeoTIFF/COG files as Zarr arrays without copying or
 converting them.
 
-Scanning a source file records where each chunk's *compressed* bytes already live — which
-file, which byte offset, how many bytes — in a [`ChunkManifest`](@ref). A manifest is itself
-a `Zarr.AbstractStore`, so `Zarr.zopen` over one gives lazy, chunked, codec-decoded access
-to the original file in place.
+[`scan`](@ref) records where each chunk's *compressed* bytes already live in a source
+file — which file, which byte offset, how many bytes — and returns a lazy `Zarr.ZGroup`
+over that record, a chunk manifest. Reading an array of the group fetches only the chunks
+the selection touches, straight from the original file.
 
-Array data is never decoded here. A manifest serves the source files' bytes untouched and
-Zarr.jl's codec pipeline decodes them, which is what makes the result byte-for-byte
-identical to reading the original file.
+Array data is never decoded here. The source files' bytes are served untouched and Zarr.jl's
+codec pipeline decodes them, which is what makes the result byte-for-byte identical to
+reading the original file.
 
 ```julia
-using ChunkManifests, Zarr
+using ChunkManifests
 
-cm = ChunkManifest("granule.h5")   # scan a source file
-z = Zarr.zopen(cm)                 # a lazy ZArray tree
-z["gt1l/h_li"][1:100]              # reads only the chunks it needs
+z = scan("granule.h5")          # the driver is chosen from the extension
+z["gt1l/h_li"][1:100]           # reads only the chunks it needs
+save("granule.manifest", z)     # scanning is the expensive step; keep the result
+z = load("granule.manifest")
 ```
-
-Scanning is the expensive step, so the intended workflow is to scan once, save the manifest
-with [`save`](@ref ChunkManifests.save), and reuse it.
 
 Full documentation: <https://alex-s-gardner.github.io/ChunkManifests.jl>.
 """
@@ -63,28 +61,29 @@ include("drivers/geotiffmeta.jl")
 include("serialize/zarrnative.jl")
 include("serialize/kerchunkjson.jl")
 include("combine/combine.jl")
-include("frompath.jl")
 include("combine/merge.jl")
 include("combine/series.jl")
+include("entry.jl")
 include("precompile.jl")
 
-export AbstractChunkMap, ExplicitChunkMap, AffineChunkMap
-export AbstractTransport, LocalTransport, HTTPTransport, S3Transport
-export TransportContainers, resolve_transport
-export ByteRange, ReadaheadCache
-export AbstractDriver, HDF5Driver, GeoTIFFDriver, scan
-export SourceAccess, AutoAccess, LocalAccess, DownloadAccess, RangeAccess
+export scan, load, save, concat, replace_prefix!, validate
+export AbstractDriver, HDF5Driver, GeoTIFFDriver
 export ManifestFormat, ZarrManifest, KerchunkJSON, KerchunkParquet
-export ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK
-export FileEntry, PathTable, ManifestArray, ChunkManifest, ManifestSeries
-export chunkgridaxes, chunkgridsize, chunkstate, chunklocation, inlinebytes
-export manifestversion, tableof
-export uriof, push_uri!, seturi!, replace_prefix!
-export fetchrange, fetchranges, objectsize
-export concat, validate, setchunk!
-export chunkmapof, chunkshapeof, fillvalueof, compressorof, filtersof
-export attrsof, dimnamesof, arraysof, provenanceof, transportof
-export membersof, dimnameof
+export AbstractTransport, LocalTransport, HTTPTransport, S3Transport, TransportContainers
+export ReadaheadCache
+export SourceAccess, AutoAccess, LocalAccess, DownloadAccess, RangeAccess
+
+# The interfaces a new driver or transport implements, public but not exported.
+# `public` is a syntax error before Julia 1.11, even in a branch not taken.
+if VERSION >= v"1.11.0-DEV.469"
+    eval(
+        Meta.parse(
+            "public register_driver!, ByteRange, fetchrange, fetchranges, objectsize, " *
+                "maxgap, maxblock, concurrency, coalesce_ranges, RangeIO, rangecost, " *
+                "withrangefile, ValidationReport, ConsistencyIssue"
+        )
+    )
+end
 
 function __init__()
     # The precompile workload registers the range driver with the libhdf5 of
@@ -96,10 +95,6 @@ function __init__()
     # The workload probes the Zarr.jl it was precompiled against; probe again.
     _BYTE_FILTER_SUPPORT[] = nothing
     _register_tiff_predictor!()
-    # Registration belongs here rather than at top level: DRIVER_REGISTRY is
-    # populated at load time, and a top-level push! would be captured during
-    # precompilation and then lost.
-    register_driver!(HDF5Driver())
     return nothing
 end
 

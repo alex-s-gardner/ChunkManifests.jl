@@ -266,9 +266,8 @@ The transport `g` reads chunk bytes through.
 
 A [`TransportContainers`](@ref) routes each URI to the backend that can read
 it, which is what lets one manifest span local files and remote objects; a
-single transport reads every URI the same way. Use
-`ChunkManifest(g; transport=...)` to supply credentials or restrict what may
-be fetched.
+single transport reads every URI the same way. It is chosen by the `transport`
+keyword of [`scan`](@ref), [`load`](@ref), [`concat`](@ref) and `merge`.
 """
 transportof(g::ChunkManifest) = g.transport
 

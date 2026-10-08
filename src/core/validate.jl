@@ -234,41 +234,35 @@ function _validate_core(m::AbstractChunkMap, transport::AbstractTransport, stric
     return verified, unverifiable, missing_files, mismatched, consistency
 end
 
-"""
-    validate(m::AbstractChunkMap, transport=LocalTransport(); strict=false) -> ValidationReport
-
-Check `m`'s distinct files against live storage through `transport`, and
-check `m`'s internal consistency. Cost is one [`objectsize`](@ref) query per
-distinct file in `m`'s [`PathTable`](@ref) — independent of how many chunks
-reference each file — plus one pass over the chunk grid for the
-no-network consistency check.
-
-With `strict=true`, throws on the first inconsistency or file problem found
-instead of collecting a full report.
-"""
+# validate(m::AbstractChunkMap, transport=LocalTransport(); strict=false) -> ValidationReport
+#
+# Check `m`'s distinct files against live storage through `transport`, and
+# check `m`'s internal consistency. Cost is one `objectsize` query per
+# distinct file in `m`'s `PathTable` — independent of how many chunks
+# reference each file — plus one pass over the chunk grid for the
+# no-network consistency check.
+#
+# With `strict=true`, throws on the first inconsistency or file problem found
+# instead of collecting a full report.
 function validate(m::AbstractChunkMap, transport::AbstractTransport = LocalTransport(); strict::Bool = false)
     verified, unverifiable, missing_files, mismatched, consistency =
         _validate_core(m, transport, strict, nothing)
     return ValidationReport(verified, unverifiable, missing_files, mismatched, consistency)
 end
 
-"""
-    validate(a::ManifestArray, transport=LocalTransport(); strict=false) -> ValidationReport
-
-Equivalent to `validate(chunkmapof(a), transport; strict)`.
-"""
+# validate(a::ManifestArray, transport=LocalTransport(); strict=false) -> ValidationReport
+#
+# Equivalent to `validate(chunkmapof(a), transport; strict)`.
 function validate(a::ManifestArray, transport::AbstractTransport = LocalTransport(); strict::Bool = false)
     return validate(chunkmapof(a), transport; strict)
 end
 
-"""
-    validate(g::ChunkManifest, transport=LocalTransport(); strict=false) -> ValidationReport
-
-Validates every array's manifest in `g` and merges the results. Each array is
-checked independently, so a file shared by two arrays' manifests is queried
-once per array rather than once overall; [`ConsistencyIssue`](@ref) and file
-reasons carry the owning array's name.
-"""
+# validate(g::ChunkManifest, transport=LocalTransport(); strict=false) -> ValidationReport
+#
+# Validates every array's manifest in `g` and merges the results. Each array is
+# checked independently, so a file shared by two arrays' manifests is queried
+# once per array rather than once overall; `ConsistencyIssue` and file
+# reasons carry the owning array's name.
 function validate(g::ChunkManifest, transport::AbstractTransport = LocalTransport(); strict::Bool = false)
     verified = String[]
     unverifiable = FileCheck[]

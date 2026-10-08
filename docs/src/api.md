@@ -11,43 +11,39 @@ ChunkManifests
 ```@index
 ```
 
-## Manifests and arrays
+## Public API
 
-```@docs
-ChunkManifest
-ManifestArray
-PathTable
-FileEntry
-```
-
-## Chunk maps
-
-```@docs
-AbstractChunkMap
-ExplicitChunkMap
-AffineChunkMap
-```
-
-## Chunk states
-
-```@docs
-ChunkState
-VIRTUAL_CHUNK
-MISSING_CHUNK
-INLINE_CHUNK
-```
-
-## Scanning
+### Scanning, loading, saving
 
 ```@docs
 scan
+load
+save
+```
+
+### Combining groups
+
+```@docs
+concat(::AbstractVector{<:Zarr.ZGroup}, ::Union{AbstractString, Symbol})
+Base.merge(::AbstractVector{<:Zarr.ZGroup{ChunkManifest}})
+```
+
+### Editing and checking a manifest
+
+```@docs
+replace_prefix!(::Zarr.ZGroup, ::Pair{<:AbstractString, <:AbstractString})
+validate(::Zarr.ZGroup)
+```
+
+### Drivers
+
+```@docs
 AbstractDriver
 HDF5Driver
 GeoTIFFDriver
-ChunkManifests.register_driver!
 ```
 
-## Reaching a source's metadata
+### Reaching a source's metadata
 
 ```@docs
 SourceAccess
@@ -57,27 +53,16 @@ DownloadAccess
 RangeAccess
 ```
 
-## Saved formats
+### Saved formats
 
 ```@docs
 ManifestFormat
 ZarrManifest
 KerchunkJSON
 KerchunkParquet
-ChunkManifests.save
 ```
 
-## Byte access
-
-How the bytes a reader needs are fetched and reused, a layer below building a manifest.
-
-```@docs
-ChunkManifests.RangeIO
-ChunkManifests.rangecost
-ChunkManifests.withrangefile
-```
-
-## Transports
+### Transports
 
 ```@docs
 AbstractTransport
@@ -85,77 +70,7 @@ LocalTransport
 HTTPTransport
 S3Transport
 TransportContainers
-resolve_transport
-ByteRange
-fetchrange
-fetchranges
-objectsize
 ReadaheadCache
-```
-
-## Combining manifests
-
-```@docs
-ManifestSeries
-ChunkManifests.combine
-concat
-membersof
-```
-
-## Querying a manifest
-
-```@docs
-arraysof
-attrsof
-tableof
-transportof
-provenanceof
-```
-
-## Querying an array
-
-```@docs
-chunkmapof
-chunkshapeof
-fillvalueof
-compressorof
-filtersof
-dimnamesof
-dimnameof
-```
-
-## Querying a chunk grid
-
-```@docs
-chunkgridaxes
-chunkgridsize
-chunkstate
-chunklocation
-inlinebytes
-manifestversion
-```
-
-## The path table
-
-```@docs
-uriof
-push_uri!
-seturi!
-replace_prefix!
-```
-
-## Mutation
-
-```@docs
-setchunk!
-```
-
-## Validation
-
-```@docs
-validate
-ChunkManifests.ValidationReport
-ChunkManifests.ConsistencyIssue
 ```
 
 ## Extending
@@ -166,15 +81,15 @@ and the defaults it inherits by not implementing them.
 ### A new driver
 
 ```@docs
-ChunkManifests.candrive
-ChunkManifests.sniff_driver
-ChunkManifests.DRIVER_REGISTRY
+ChunkManifests.register_driver!
+ChunkManifests._scan
 ```
 
 ### A new transport
 
-A transport implements [`fetchrange`](@ref), [`fetchranges`](@ref) and
-[`objectsize`](@ref). Match these signatures exactly:
+A transport implements [`ChunkManifests.fetchrange`](@ref),
+[`ChunkManifests.fetchranges`](@ref) and [`ChunkManifests.objectsize`](@ref). Match these
+signatures exactly:
 
 ```julia
 fetchrange(t::MyTransport, uri::AbstractString, r::ByteRange) -> Vector{UInt8}
@@ -187,7 +102,14 @@ overriding it — more specific in the first argument, less in the rest, so neit
 failure surfaces from inside a concurrent read as a `TaskFailedException`, which is a long
 way from the cause.
 
-The three below have defaults, and exist so that a backend whose request costs differ from
+```@docs
+ChunkManifests.ByteRange
+ChunkManifests.fetchrange
+ChunkManifests.fetchranges
+ChunkManifests.objectsize
+```
+
+The four below have defaults, and exist so that a backend whose request costs differ from
 the defaults can say so.
 
 ```@docs
@@ -195,4 +117,119 @@ ChunkManifests.maxgap
 ChunkManifests.maxblock
 ChunkManifests.concurrency
 ChunkManifests.coalesce_ranges
+```
+
+## Internals
+
+Everything below is reached only through the accessors listed, never through its struct
+fields, and most of it is unexported. It is documented because another docstring on this
+page points at it.
+
+### Manifests and arrays
+
+```@docs
+ChunkManifest
+ManifestArray
+PathTable
+FileEntry
+```
+
+### Chunk maps
+
+```@docs
+AbstractChunkMap
+ExplicitChunkMap
+AffineChunkMap
+```
+
+### Chunk states
+
+```@docs
+ChunkManifests.ChunkState
+ChunkManifests.VIRTUAL_CHUNK
+ChunkManifests.MISSING_CHUNK
+ChunkManifests.INLINE_CHUNK
+```
+
+### Byte access
+
+How the bytes a reader needs are fetched and reused, a layer below building a manifest.
+
+```@docs
+ChunkManifests.RangeIO
+ChunkManifests.rangecost
+ChunkManifests.withrangefile
+```
+
+### Transport routing
+
+```@docs
+ChunkManifests.resolve_transport
+```
+
+### Reaching the manifest behind a group
+
+```@docs
+ChunkManifests._manifest
+```
+
+### Querying a manifest
+
+```@docs
+ChunkManifests.arraysof
+ChunkManifests.attrsof
+ChunkManifests.tableof
+ChunkManifests.transportof
+ChunkManifests.provenanceof
+```
+
+### Querying an array
+
+```@docs
+ChunkManifests.chunkmapof
+ChunkManifests.chunkshapeof
+ChunkManifests.fillvalueof
+ChunkManifests.compressorof
+ChunkManifests.filtersof
+ChunkManifests.dimnamesof
+```
+
+### Querying a chunk grid
+
+```@docs
+ChunkManifests.chunkgridaxes
+ChunkManifests.chunkgridsize
+ChunkManifests.chunkstate
+ChunkManifests.chunklocation
+ChunkManifests.inlinebytes
+ChunkManifests.manifestversion
+```
+
+### The path table
+
+```@docs
+replace_prefix!(::PathTable, ::Pair{<:AbstractString, <:AbstractString})
+ChunkManifests.uriof
+ChunkManifests.push_uri!
+ChunkManifests.seturi!
+```
+
+### Concatenating chunk maps and arrays
+
+```@docs
+concat(::Union{Tuple{Vararg{AbstractChunkMap}}, AbstractVector{<:AbstractChunkMap}})
+concat(::Union{Tuple{Vararg{ManifestArray}}, AbstractVector{<:ManifestArray}})
+```
+
+### Mutation
+
+```@docs
+ChunkManifests.setchunk!
+```
+
+### Validation
+
+```@docs
+ChunkManifests.ValidationReport
+ChunkManifests.ConsistencyIssue
 ```

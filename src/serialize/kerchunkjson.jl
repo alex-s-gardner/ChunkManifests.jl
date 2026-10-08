@@ -296,7 +296,7 @@ function _writechunks!(refs, arraypath, va::ManifestArray, fmt::KerchunkJSON, tr
 end
 
 """
-    save(path, group::ChunkManifest, fmt::KerchunkJSON; transport=LocalTransport())
+    _save(path, group::ChunkManifest, fmt::KerchunkJSON; transport=transportof(group))
 
 Write `group` as a kerchunk JSON reference-set document to `path`. `path`
 names one document, not a directory: it is resolved to a store through
@@ -312,26 +312,26 @@ read through `transport` and embedded as `"base64:..."` rather than kept as
 byte-range references; `inlinethreshold = 0` embeds nothing. No `templates`
 section is written, matching real kerchunk drivers.
 """
-function save(
+function _save(
         path::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
-        transport::AbstractTransport = LocalTransport(),
+        transport::AbstractTransport = transportof(group),
     )
     store, key = _resolvefilestore(path, true)
-    save(store, key, group, fmt; transport)
+    _save(store, key, group, fmt; transport)
     return nothing
 end
 
 """
-    save(store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON; transport=LocalTransport())
+    _save(store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON; transport=transportof(group))
 
 Write `group` as a kerchunk JSON reference-set document into `store` under
-`key`, exactly as `save(path, group, fmt)` does once it has resolved `path`
+`key`, exactly as `_save(path, group, fmt)` does once it has resolved `path`
 to a store. Not part of the public interface; exists so a manifest's
 store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
 """
-function save(
+function _save(
         store::Zarr.AbstractStore, key::AbstractString, group::ChunkManifest, fmt::KerchunkJSON;
-        transport::AbstractTransport = LocalTransport(),
+        transport::AbstractTransport = transportof(group),
     )
     arrays = arraysof(group)
     refs = Dict{String, Any}()
@@ -355,7 +355,7 @@ function save(
 end
 
 """
-    ChunkManifest(path, fmt::KerchunkJSON) -> ChunkManifest
+    _load(path, fmt::KerchunkJSON) -> ChunkManifest
 
 Read a kerchunk JSON reference-set document from `path` into a
 [`ChunkManifest`](@ref). `path` names one document, not a directory: it is
@@ -370,20 +370,20 @@ present in `refs` that does not parse against its array's chunk grid, and a
 `.zarray` dtype with no faithful Julia type, both throw naming the file and
 the offending key.
 """
-function ChunkManifest(path::AbstractString, fmt::KerchunkJSON)
+function _load(path::AbstractString, fmt::KerchunkJSON)
     store, key = _resolvefilestore(path, false)
     return _load_kerchunkjson(store, key, path, fmt)
 end
 
 """
-    ChunkManifest(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON) -> ChunkManifest
+    _load(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON) -> ChunkManifest
 
 Read a kerchunk JSON reference-set document from `store` under `key`,
-exactly as `ChunkManifest(path, fmt)` does once it has resolved `path` to a store.
+exactly as `_load(path, fmt)` does once it has resolved `path` to a store.
 Not part of the public interface; exists so a manifest's store-agnosticism
 can be exercised directly against any `Zarr.AbstractStore`.
 """
-function ChunkManifest(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON)
+function _load(store::Zarr.AbstractStore, key::AbstractString, fmt::KerchunkJSON)
     return _load_kerchunkjson(store, key, key, fmt)
 end
 

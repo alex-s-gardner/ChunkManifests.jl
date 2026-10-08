@@ -1,20 +1,6 @@
 using TiffImages
 
 @testset "geotiff" begin
-    @testset "candrive" begin
-        @test !ChunkManifests.candrive(GeoTIFFDriver(), joinpath(mktempdir(), "missing.tif"))
-        mktemp() do path, io
-            write(io, "not a tiff file")
-            close(io)
-            @test !ChunkManifests.candrive(GeoTIFFDriver(), path)
-        end
-        mktemp() do path, io
-            data = rand(UInt16, 4, 3)
-            _gt_striped(path; width = 4, height = 3, rowsperstrip = 3, bits = 16, payload = _gt_striprows(data, 3))
-            @test ChunkManifests.candrive(GeoTIFFDriver(), path)
-        end
-    end
-
     @testset "codec registry" begin
         @test ChunkManifests.lookup_codec(GeoTIFFDriver, 8) !== nothing
         @test ChunkManifests.lookup_codec(GeoTIFFDriver, 32946) !== nothing
@@ -37,7 +23,7 @@ using TiffImages
                 path; width, height, rowsperstrip, bits = 32, sampleformat = 3,
                 payload = _gt_striprows(data, rowsperstrip),
             )
-            reference = ChunkManifests.scan(path, GeoTIFFDriver())
+            reference = _scan(path, GeoTIFFDriver())
             refkeys = sort(collect(keys(arraysof(reference))))
 
             # `initialread` 0 seeks to exactly what the reader asked for; a
@@ -49,7 +35,7 @@ using TiffImages
                     access = RangeAccess(;
                         transport = LocalTransport(), initialread, blocksize
                     )
-                    cm = ChunkManifests.scan(path, GeoTIFFDriver(); access)
+                    cm = _scan(path, GeoTIFFDriver(); access)
                     @test sort(collect(keys(arraysof(cm)))) == refkeys
                     va = arraysof(cm)["0/data"]
                     @test size(va) == (width, height)
@@ -62,7 +48,7 @@ using TiffImages
             # The transport a scan read through is the manifest's, so reading
             # it does not fall back to a default one.
             counting = FetchCountingTransport()
-            cmt = ChunkManifests.scan(
+            cmt = _scan(
                 path, GeoTIFFDriver(); access = RangeAccess(; transport = counting)
             )
             @test transportof(cmt) === counting
@@ -72,7 +58,7 @@ using TiffImages
 
             # The URI is recorded as given, and a remote one is read in place.
             @test tableof(
-                ChunkManifests.scan(
+                _scan(
                     path, GeoTIFFDriver();
                     access = RangeAccess(; transport = LocalTransport()),
                 )
@@ -97,7 +83,7 @@ using TiffImages
 
             # rowbytes = 7*4 = 28; chunkbytes=112 targets 4 rows/chunk, and
             # 12 is divisible by 4 — unrelated to the 5-row strips on disk.
-            group = ChunkManifests.scan(path, GeoTIFFDriver(; chunkbytes = 112))
+            group = _scan(path, GeoTIFFDriver(; chunkbytes = 112))
             va = ChunkManifests.arraysof(group)["0/data"]
 
             @test size(va) == (width, height)
@@ -125,7 +111,7 @@ using TiffImages
                 payload = rows, gapbefore = [0, 16],
             )
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test chunkmapof(va) isa ExplicitChunkMap
             @test chunkshapeof(va) == (width, rowsperstrip)
@@ -143,13 +129,13 @@ using TiffImages
             fakecompressed = [rand(UInt8, 20), rand(UInt8, 14)]
             path = joinpath(dir, "shortstrip.tif")
             _gt_striped(path; width, height, rowsperstrip, bits = 16, compression = 8, payload = fakecompressed)
-            @test_throws "not a multiple of ROWSPERSTRIP" ChunkManifests.scan(path, GeoTIFFDriver())
+            @test_throws "not a multiple of ROWSPERSTRIP" _scan(path, GeoTIFFDriver())
         end
 
         @testset "a short, unpadded final chunk is not a valid Zarr chunk (empirical check)" begin
             # Reproduces, directly against the manifest/store API (no TIFF
             # involved), exactly the failure a short final strip would cause
-            # if scan() did not reject it above: Zarr.jl requires every
+            # if _scan() did not reject it above: Zarr.jl requires every
             # decoded chunk, edge chunks included, to equal the full declared
             # chunk shape.
             width, rowsperchunk, height = 4, 3, 5
@@ -187,7 +173,7 @@ using TiffImages
             path = joinpath(dir, "tiled_deflate.tif")
             _gt_tiled(path; width, height, tilewidth, tilelength, bits = 16, compression = 8, payload)
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test size(va) == (width, height)
             @test chunkshapeof(va) == (tilewidth, tilelength)
@@ -207,7 +193,7 @@ using TiffImages
                 path; width, height, rowsperstrip, bits = 16, compression = 8, predictor = 2,
                 payload = [Zarr.zcompress(data, Zarr.ZlibCompressor())],
             )
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test length(filtersof(va)) == 1
             @test filtersof(va)[1]["id"] == "tiff_predictor"
@@ -222,7 +208,7 @@ using TiffImages
                 path; width, height, rowsperstrip, bits = 32, sampleformat = 3, compression = 1, predictor = 3,
                 payload = _gt_striprows(rand(Float32, width, height), rowsperstrip),
             )
-            @test_throws "Predictor 3" ChunkManifests.scan(path, GeoTIFFDriver())
+            @test_throws "Predictor 3" _scan(path, GeoTIFFDriver())
         end
 
         @testset "unsupported compressions rejected by name" begin
@@ -233,7 +219,7 @@ using TiffImages
                     path; width, height, rowsperstrip, bits = 16, compression = comp,
                     payload = [rand(UInt8, 32)],
                 )
-                @test_throws needle ChunkManifests.scan(path, GeoTIFFDriver())
+                @test_throws needle _scan(path, GeoTIFFDriver())
             end
         end
 
@@ -245,7 +231,7 @@ using TiffImages
                 path; width, height, rowsperstrip, bits = 16, samplesperpixel = 1, planarconfig = 2,
                 payload = _gt_striprows(data, rowsperstrip),
             )
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test size(va) == (width, height)
             @test dimnamesof(va) == ["x", "y"]
@@ -269,7 +255,7 @@ using TiffImages
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             attrs = attrsof(va)
             @test length(attrs["GeoTransform"]) == 16
@@ -309,7 +295,7 @@ using TiffImages
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test attrsof(va)["crs"] == "EPSG:4326"
         end
@@ -327,7 +313,7 @@ using TiffImages
                 ],
             )
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test fillvalueof(va) == -9999
         end
@@ -344,7 +330,7 @@ using TiffImages
             )
             path = joinpath(dir, "page.tif")
             _gt_writetiff(path, tags1, 273, [rand(UInt8, width * height * 2)])
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             @test collect(keys(arraysof(group))) == ["0/data"]
         end
 
@@ -361,7 +347,7 @@ using TiffImages
                 payload = [Vector{UInt8}(reinterpret(UInt8, vec(data3)))],
             )
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test size(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, width, height)
@@ -400,7 +386,7 @@ using TiffImages
                 samplesperpixel = nsp, planarconfig = 1, photometric = 2, payload,
             )
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test size(va) == (nsp, width, height)
             @test chunkshapeof(va) == (nsp, tilewidth, tilelength)
@@ -432,7 +418,7 @@ using TiffImages
                 payload = [compressed],
             )
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test length(filtersof(va)) == 1
             @test filtersof(va)[1]["samplesperpixel"] == nsp
@@ -454,7 +440,7 @@ using TiffImages
                 payload = _gt_planarpayload(data3, rowsperstrip),
             )
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test size(va) == (width, height, nsp)
             @test chunkshapeof(va) == (width, rowsperstrip, 1)
@@ -487,7 +473,7 @@ using TiffImages
                 _gt_entry(279, _GT_LONG, UInt32[width * height * nsp * 2]),
             ]
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * nsp * 2)])
-            @test_throws "BITSPERSAMPLE must be the same for every band" ChunkManifests.scan(path, GeoTIFFDriver())
+            @test_throws "BITSPERSAMPLE must be the same for every band" _scan(path, GeoTIFFDriver())
         end
 
         # A full-resolution page (width 9, height 4) plus two reduced-resolution
@@ -512,7 +498,7 @@ using TiffImages
             pixeldata = [_gt_pyramidpixels(9, 4), _gt_pyramidpixels(5, 2), _gt_pyramidpixels(3, 1)]
             _gt_buildpyramid(path, [p0, p1, p2], [2, 3, 0], pixeldata)
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             # One group per level, each with its own coordinates: dimensions of
             # one name share one length within a group, as CF readers require.
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) ==
@@ -592,7 +578,7 @@ using TiffImages
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(overwidth, overheight)]
             _gt_buildpyramid(path, [p0, p1], [2, 0], pixeldata)
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             vaover = ChunkManifests.arraysof(group)["1/data"]
             expected = ChunkManifests.geotransform_from_scale_tiepoint(ownscale, owntiepoint)
             @test attrsof(vaover)["GeoTransform"] == collect(expected.matrix)
@@ -618,7 +604,7 @@ using TiffImages
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(subwidth, subheight)]
             _gt_buildpyramid(path, [p0, p1], [0, 0], pixeldata)
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) ==
                 ["$l/$v" for l in 0:1 for v in ("data", "x", "y")]
             vasub = ChunkManifests.arraysof(group)["1/data"]
@@ -638,7 +624,7 @@ using TiffImages
             p0 = vcat(_gt_pyramidtags(width, height, 0), Any[(330, _GT_LONG, [_GTPageRef(1)])])  # points at itself
             _gt_buildpyramid(path, [p0], [0], [_gt_pyramidpixels(width, height)])
 
-            task = @async ChunkManifests.scan(path, GeoTIFFDriver())
+            task = @async _scan(path, GeoTIFFDriver())
             status = timedwait(() -> istaskdone(task), 10.0)
             @test status === :ok  # must terminate well within the timeout, not hang
             status === :ok && @test_throws "revisits" fetch(task)
@@ -652,7 +638,7 @@ using TiffImages
             pixeldata = [_gt_pyramidpixels(width, height), _gt_pyramidpixels(width, height)]
             _gt_buildpyramid(path, [p0, pmask], [2, 0], pixeldata)
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             @test sort(collect(keys(arraysof(group)))) == ["0/data", "0/mask"]
             vamask = ChunkManifests.arraysof(group)["0/mask"]
             @test attrsof(vamask)["mask"] == true
@@ -669,7 +655,7 @@ using TiffImages
             pixeldata = [_gt_pyramidpixels(w, h) for (w, h, _) in sizes]
             _gt_buildpyramid(path, pages, [2, 3, 4, 5, 0], pixeldata)
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             a = arraysof(group)
             @test sort(collect(keys(a))) == ["0/data", "0/mask", "1/data", "1/mask", "2/data"]
             @test [attrsof(a[k])["tiff_page"] for k in ("0/data", "0/mask", "1/data", "1/mask", "2/data")] ==
@@ -684,7 +670,7 @@ using TiffImages
                 pages = [_gt_pyramidtags(w, h, sft) for (w, h, sft) in sizes]
                 nexts = [i < length(sizes) ? i + 1 : 0 for i in eachindex(sizes)]
                 _gt_buildpyramid(path, pages, nexts, [_gt_pyramidpixels(w, h) for (w, h, _) in sizes])
-                @test_throws msg ChunkManifests.scan(path, GeoTIFFDriver())
+                @test_throws msg _scan(path, GeoTIFFDriver())
             end
             refuse("same_size_overview.tif", [(4, 3, 0), (4, 3, 1)], "overview page \"1\" (4×3) is not smaller than page \"0\" (4×3)")
             refuse("stray_mask.tif", [(4, 3, 0), (2, 2, 4)], "mask page \"1\" (2×2) matches the size of no level")
@@ -698,14 +684,14 @@ using TiffImages
             pages = [_gt_pyramidtags(w, h, sft) for (w, h, sft) in sizes]
             _gt_buildpyramid(path, pages, [2, 3, 0], [_gt_pyramidpixels(w, h) for (w, h, _) in sizes])
 
-            group = ChunkManifests.scan(path, GeoTIFFDriver())
+            group = _scan(path, GeoTIFFDriver())
             @test sort(collect(keys(arraysof(group)))) == ["0/0/data", "0/1/data", "1/0/data"]
             @test size(arraysof(group)["1/0/data"]) == (6, 5)
             @test Array(Zarr.zopen(group; path = "1/0/data")[:, :]) == _gt_pyramidmatrix(6, 5)
 
-            @test sort(collect(keys(arraysof(ChunkManifests.scan(path, GeoTIFFDriver(); level = 0))))) ==
+            @test sort(collect(keys(arraysof(_scan(path, GeoTIFFDriver(); level = 0))))) ==
                 ["0/0/data", "1/0/data"]
-            @test_throws "has no level 1 in image 1; it has levels 0 to 0" ChunkManifests.scan(
+            @test_throws "has no level 1 in image 1; it has levels 0 to 0" _scan(
                 path, GeoTIFFDriver(); level = 1
             )
         end
@@ -713,8 +699,8 @@ using TiffImages
         @testset "level keeps one level, still inheriting from the unbuilt image" begin
             # The main-chain pyramid above: georeferenced, EPSG:32610, nodata 9999.
             path = joinpath(dir, "pyramid.tif")
-            full = ChunkManifests.scan(path, GeoTIFFDriver())
-            one = ChunkManifests.scan(path, GeoTIFFDriver(); level = 1)
+            full = _scan(path, GeoTIFFDriver())
+            one = _scan(path, GeoTIFFDriver(); level = 1)
             @test sort(collect(keys(arraysof(one)))) == ["1/data", "1/x", "1/y"]
             va = arraysof(one)["1/data"]
             @test attrsof(va)["crs"] == "EPSG:32610"
@@ -723,14 +709,14 @@ using TiffImages
             @test Array(Zarr.zopen(one)["1"]["x"]) == Array(Zarr.zopen(full)["1"]["x"])
             @test Array(Zarr.zopen(one; path = "1/data")[:, :]) == _gt_pyramidmatrix(5, 2)
 
-            @test_throws "has no level 3; it has levels 0 to 2" ChunkManifests.scan(path, GeoTIFFDriver(); level = 3)
-            @test_throws "level must be nonnegative, got -1" ChunkManifests.scan(path, GeoTIFFDriver(); level = -1)
+            @test_throws "has no level 3; it has levels 0 to 2" _scan(path, GeoTIFFDriver(); level = 3)
+            @test_throws "level must be nonnegative, got -1" _scan(path, GeoTIFFDriver(); level = -1)
         end
     end
 
     @testset "real file: $_GT_JUNK_PATH" begin
         if isfile(_GT_JUNK_PATH)
-            group = ChunkManifests.scan(_GT_JUNK_PATH, GeoTIFFDriver())
+            group = _scan(_GT_JUNK_PATH, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
             @test size(va) == (720, 360)
             @test chunkshapeof(va) == (720, 1)
@@ -759,7 +745,7 @@ using TiffImages
         end
 
         err = try
-            scan(fn, GeoTIFFDriver())
+            _scan(fn, GeoTIFFDriver())
             nothing
         catch e
             e

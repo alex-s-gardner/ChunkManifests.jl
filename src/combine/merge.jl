@@ -1,15 +1,17 @@
-# Merging several manifests into one, a layer per input.
+# Merging several groups into one, a layer per input.
 #
 # Mirrors `RasterStack(filenames; name)`: each input contributes its own
 # array(s) under a name taken from its path, and nothing is concatenated.
-# Inputs that are successive slices of one dataset belong in a
-# [`ManifestSeries`](@ref) instead, which is what a repeated name reports.
+# Inputs that are successive slices of one dataset belong in `concat` instead,
+# which is what a repeated name reports.
+
+# The last component of a path, a directory's included: two of the three
+# saved-manifest formats are directories, so a path may end in a separator.
+_lastcomponent(path::AbstractString) = basename(rstrip(c -> c in ('/', '\\'), path))
 
 # Layer name for a path: the basename without its extension, so
-# "/data/2001/h_li.h5" names a layer "h_li". Two of the three saved-manifest
-# formats are directories, hence the trailing-separator strip.
-_defaultname(path::AbstractString) =
-    first(splitext(basename(rstrip(c -> c in ('/', '\\'), path))))
+# "/data/2001/h_li.h5" names a layer "h_li".
+_defaultname(path::AbstractString) = first(splitext(_lastcomponent(path)))
 
 # The key an input's array takes in the merged manifest. An input holding one
 # array is that layer, keyed by the input's name, which is what makes a set of
@@ -22,7 +24,7 @@ function _layerkeys!(
     src = arraysof(m)
     isempty(src) && throw(
         ArgumentError(
-            "ChunkManifest: input $i, named $(repr(nm)), holds no arrays"
+            "merge: input $i, named $(repr(nm)), holds no arrays"
         )
     )
     single = length(src) == 1
@@ -34,7 +36,7 @@ function _layerkeys!(
         else
             isempty(k) && throw(
                 ArgumentError(
-                    "ChunkManifest: input $i, named $(repr(nm)), holds several arrays and one of " *
+                    "merge: input $i, named $(repr(nm)), holds several arrays and one of " *
                         "them has an empty key, which has no place under $(repr(nm))",
                 )
             )
@@ -51,7 +53,7 @@ end
 function _checknames(names::AbstractVector{String}, nmembers::Integer)
     length(names) == nmembers || throw(
         ArgumentError(
-            "ChunkManifest: name has $(length(names)) entries but $nmembers manifests were given"
+            "merge: names has $(length(names)) entries but $nmembers groups were given"
         )
     )
     byname = Dict{String, Int}()
@@ -59,23 +61,23 @@ function _checknames(names::AbstractVector{String}, nmembers::Integer)
         nm = names[i]
         isempty(nm) && throw(
             ArgumentError(
-                "ChunkManifest: input $i has an empty name, so its arrays have nothing to be " *
+                "merge: input $i has an empty name, so its arrays have nothing to be " *
                     "keyed under",
             )
         )
         occursin('/', nm) && throw(
             ArgumentError(
-                "ChunkManifest: name $(repr(nm)) for input $i contains \"/\", which would make it " *
+                "merge: the name $(repr(nm)) for input $i contains \"/\", which would make it " *
                     "a nested group path rather than one layer",
             )
         )
         prev = get(byname, nm, 0)
         prev == 0 || throw(
             ArgumentError(
-                "ChunkManifest: inputs $prev and $i are both named $(repr(nm)), so one would " *
+                "merge: inputs $prev and $i are both named $(repr(nm)), so one would " *
                     "shadow the other. Merging keys one layer per input and never concatenates, so " *
-                    "inputs that are successive slices of the same dataset belong in a series: " *
-                    "ChunkManifests.combine(ManifestSeries(paths, :time))",
+                    "inputs that are successive slices of the same dataset belong in " *
+                    "concat(groups, :time)",
             )
         )
         byname[nm] = i
@@ -83,18 +85,9 @@ function _checknames(names::AbstractVector{String}, nmembers::Integer)
     return names
 end
 
-# Both public constructors run `_checknames` themselves: the path-taking one
-# has to do it before scanning, which is the expensive step a colliding name
-# would waste.
 function _mergemanifests(
-        members::AbstractVector{ChunkManifest},
-        names::AbstractVector{String},
-        attrs,
-        transport::AbstractTransport,
-        readahead::ReadaheadCache,
+        members::AbstractVector{ChunkManifest}, names::AbstractVector{String}, attrs,
     )
-    isempty(members) && throw(ArgumentError("ChunkManifest: no manifests given"))
-
     arrays = Dict{String, ManifestArray}()
     for i in eachindex(members, names)
         _layerkeys!(arrays, members[i], names[i], i)
@@ -103,80 +96,64 @@ function _mergemanifests(
     mergedattrs = _groupattrs(
         length(members),
         i -> attrsof(members[i]),
-        i -> "ChunkManifest: input $i, named $(repr(names[i])), has a group",
+        i -> "merge: input $i, named $(repr(names[i])), has a group",
         attrs, "merged",
     )
 
     provenance = Dict{String, Any}("driver" => "merge", "ninputs" => length(members))
-    return ChunkManifest(; arrays, attrs = mergedattrs, provenance, transport, readahead)
+    return ChunkManifest(; arrays, attrs = mergedattrs, provenance)
 end
 
 """
-    ChunkManifest(members::AbstractVector{<:ChunkManifest}; name, attrs=nothing,
-                  transport=TransportContainers(), readahead=ReadaheadCache())
+    merge(zs; names, attrs=nothing, transport=nothing, readahead=nothing) -> Zarr.ZGroup
+    merge(z, zs...; kwargs...) -> Zarr.ZGroup
 
-Merge `members` into one manifest holding a layer per member, keyed under
-`name`.
+Merge the groups `zs` — files holding different variables, such as one band
+per file — into one group holding a layer per input, keyed by `names`.
 
-A member holding a single array becomes that one layer, keyed by its name. A
-member holding several keeps its own keys beneath its name as a group, since
-only one of them could take the name itself — so a set of single-band files
-merges to exactly `name`, while a set of multi-variable granules merges to
-`"name/variable"`.
+`names` defaults to each group's file name without its extension, as recorded
+by [`scan`](@ref) or [`load`](@ref), so `["elevation.tif", "slope.tif"]` merge
+to layers `"elevation"` and `"slope"`, as `RasterStack(filenames)` names them.
+A group holding a single array becomes that one layer; a group holding several
+keeps its own keys beneath its name, as `"name/variable"`.
 
-Nothing is concatenated: two members named the same thing is an error rather
-than a silent overwrite, and members that are successive slices of one dataset
-belong in a [`ManifestSeries`](@ref) instead. A name must be non-empty and must
-not contain `"/"`.
+Nothing is concatenated: two inputs with the same name is an error rather than
+a silent overwrite, and inputs that are successive slices of one dataset belong
+in [`concat`](@ref) instead. A name must be non-empty and must not contain
+`"/"`.
 
-Group attributes merge across members, erroring if the same key carries
-differing values — which granule-specific attributes routinely do. Pass `attrs`
-to set the merged manifest's group attributes outright instead.
+A group attribute present in several inputs with different values is an error,
+which granule-specific attributes routinely are; pass `attrs` to set the result's
+group attributes outright. The result reads through the inputs' transport when
+they share one, and otherwise through a fresh [`TransportContainers`](@ref);
+pass `transport` to choose it.
 """
-function ChunkManifest(
-        members::Union{AbstractVector{<:ChunkManifest}, Tuple{ChunkManifest, Vararg{ChunkManifest}}};
-        name,
+function Base.merge(
+        zs::AbstractVector{<:Zarr.ZGroup{ChunkManifest}};
+        names = nothing,
         attrs = nothing,
-        transport::AbstractTransport = TransportContainers(),
-        readahead::ReadaheadCache = ReadaheadCache(),
+        transport::Union{Nothing, AbstractTransport} = nothing,
+        readahead::Union{Nothing, ReadaheadCache} = nothing,
     )
-    return _mergemanifests(
-        collect(ChunkManifest, members),
-        _checknames(collect(String, map(string, name)), length(members)),
-        attrs, transport, readahead,
-    )
+    isempty(zs) && throw(ArgumentError("merge: no groups given"))
+    ms = ChunkManifest[_rootmanifest(z, "merge") for z in zs]
+    nms = names === nothing ? map(_recordedname, ms, eachindex(ms)) : collect(String, map(string, names))
+    m = _mergemanifests(ms, _checknames(nms, length(ms)), attrs)
+    return _open(_withbackend(m, ms, transport, readahead), "")
 end
 
-"""
-    ChunkManifest(paths::AbstractVector{<:AbstractString}; name=map(basename-without-extension, paths),
-                  attrs=nothing, transport=TransportContainers(),
-                  readahead=ReadaheadCache(), access=AutoAccess())
+Base.merge(z::Zarr.ZGroup{ChunkManifest}, zs::Zarr.ZGroup{ChunkManifest}...; kwargs...) =
+    merge(Zarr.ZGroup{ChunkManifest}[z, zs...]; kwargs...)
 
-Build a manifest holding a layer per path, each path resolved the way
-[`ChunkManifest`](@ref)`(path)` resolves it — a saved manifest is loaded, a
-source file is scanned.
-
-Mirrors `RasterStack(filenames; name)`: `name` defaults to each path's basename
-without its extension, so `["elevation.tif", "slope.tif"]` keys layers
-`"elevation"` and `"slope"`.
-
-Two paths yielding the same name is an error. A directory of granules differing
-only by date names them all alike, which is the signal that they are slices of
-one dataset rather than separate layers; concatenate those with
-`ChunkManifests.combine(`[`ManifestSeries`](@ref)`(paths, :time))`.
-"""
-function ChunkManifest(
-        paths::Union{AbstractVector{<:AbstractString}, Tuple{AbstractString, Vararg{AbstractString}}};
-        name = map(_defaultname, paths),
-        attrs = nothing,
-        transport::AbstractTransport = TransportContainers(),
-        readahead::ReadaheadCache = ReadaheadCache(),
-        access::SourceAccess = AutoAccess(),
+# A merged layer's default name: the file name the group was scanned or loaded
+# from, without its extension.
+function _recordedname(m::ChunkManifest, i::Integer)
+    path = get(provenanceof(m), "path", nothing)
+    path === nothing && throw(
+        ArgumentError(
+            "merge: input $i records no path it was scanned or loaded from, so it has no " *
+                "default name; pass names",
+        )
     )
-    isempty(paths) && throw(ArgumentError("ChunkManifest: no paths given"))
-    # Names are checked before anything is read: scanning is the expensive
-    # step, and a name collision is settled from the paths alone.
-    names = _checknames(collect(String, map(string, name)), length(paths))
-    members = _frompaths(paths, access)
-    return _mergemanifests(members, names, attrs, transport, readahead)
+    return _defaultname(path)
 end

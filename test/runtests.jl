@@ -1,4 +1,12 @@
 using ChunkManifests
+# The suite tests the internals behind the public API as well as the API itself,
+# so the unexported names it uses are brought into scope once, here.
+using ChunkManifests: AbstractChunkMap, ExplicitChunkMap, AffineChunkMap, ByteRange,
+    ChunkState, VIRTUAL_CHUNK, MISSING_CHUNK, INLINE_CHUNK, PathTable, ManifestArray,
+    ChunkManifest, chunkgridaxes, chunkgridsize, chunkstate, chunklocation,
+    inlinebytes, manifestversion, tableof, uriof, push_uri!, seturi!, fetchrange, fetchranges,
+    objectsize, setchunk!, chunkmapof, chunkshapeof, fillvalueof, compressorof, filtersof,
+    attrsof, dimnamesof, arraysof, provenanceof, transportof, _scan, _save, _load, _manifest
 using Test
 
 include("fixtures.jl")
@@ -20,7 +28,7 @@ include("fixtures.jl")
     include("transport.jl")
     include("http.jl")
     include("containers.jl")
-    include("frompath.jl")
+    include("entry.jl")
     include("access.jl")
     include("metadata.jl")
     include("store.jl")

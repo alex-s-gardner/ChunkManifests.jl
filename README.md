@@ -16,10 +16,10 @@ then reads and decompresses only the chunks that window touches, rather than the
 
 A chunk manifest is a table of where those chunks are: for every chunk, which file holds it,
 where in that file it starts, and how many bytes it takes. ChunkManifests.jl builds that
-table by reading a file's metadata, and presents it to [Zarr.jl](https://github.com/JuliaIO/Zarr.jl)
-as if it were a Zarr store. You can then select data by dimension — a range of rows and
-columns, a time slice — and Zarr.jl fetches and decompresses just the chunks it needs,
-straight from the original file, wherever it lives: on disk, on a web server or in S3.
+table by reading a file's metadata and returns it as a lazy [Zarr.jl](https://github.com/JuliaIO/Zarr.jl)
+group. You can then select data by dimension — a range of rows and columns, a time slice —
+and Zarr.jl fetches and decompresses just the chunks it needs, straight from the original
+file, wherever it lives: on disk, on a web server or in S3.
 
 Knowing where every chunk is also lifts limits that a format's own reader places on parallel
 access. libhdf5, the library behind HDF5 and NetCDF4, is not thread-safe, so every read of a
@@ -35,9 +35,9 @@ idea is often called *virtual Zarr*.
 ## How it works
 
 Scanning a source file records where each chunk's *compressed* bytes already live — which
-file, which byte offset, how many bytes — in a **chunk manifest**. That manifest is itself a
-`Zarr.AbstractStore`, so handing it to Zarr.jl gives lazy, chunked, codec-decoded access to
-the original file in place.
+file, which byte offset, how many bytes — in a chunk manifest, and returns a lazy
+`Zarr.ZGroup` over it. Indexing an array of the group fetches and decodes only the chunks the
+selection touches.
 
 This package never decodes array data. It returns the source files' bytes untouched and lets
 Zarr.jl's codec pipeline decode them, so the result is byte-for-byte identical to reading the
@@ -66,33 +66,33 @@ Julia 1.10 or later.
 Every example below reads public data and runs as written.
 
 ```julia
-using ChunkManifests, Zarr
+using ChunkManifests
 
 # An ITS_LIVE glacier-velocity granule (NetCDF4) in a public AWS Open Data bucket
 url = "https://its-live-data.s3.us-west-2.amazonaws.com/NSIDC/velocity_image_pair_sample/landsatOLI/v02/N80E010/LC09_L1TP_013243_20230801_20230802_02_T1_X_LC08_L1TP_013243_20240811_20240815_02_T1_G0120V02_P028.nc"
 
-cm = scan(url, HDF5Driver())     # reads the file's metadata in place, not the file
-z  = Zarr.zopen(cm)              # a lazy ZArray tree
-z["v"][1:100, 1:100]             # fetches only the chunks this window needs
+z = scan(url)          # reads the file's metadata in place, not the file
+z["v"][1:100, 1:100]    # fetches only the chunks this window needs
 ```
 
-A local file needs no driver: `ChunkManifest("granule.nc")` recognizes it from its leading
-bytes.
+A local file needs no driver either: `load("granule.nc")` scans it, since `.nc`'s extension
+names a driver rather than a saved manifest format.
 
 Scanning is the expensive step, so save the manifest and reuse it. Kerchunk JSON is also
 readable from Python through fsspec:
 
 ```julia
-ChunkManifests.save("itslive.manifest", cm, ZarrManifest())
-ChunkManifests.save("itslive.json", cm, KerchunkJSON())
-cm = ChunkManifest("itslive.manifest")
+save("itslive.manifest", z)
+save("itslive.json", z)       # kerchunk JSON, chosen by the extension
+z = load("itslive.manifest")
 ```
 
-A manifest is a Zarr store, so packages that read Zarr read it, Rasters.jl included:
+A group `scan` or `load` returns is a plain `Zarr.ZGroup`, so packages that read Zarr read it,
+Rasters.jl included:
 
 ```julia
 using Rasters, ZarrDatasets
-Raster(cm, "v")
+Raster(z, "v")
 ```
 
 Released Rasters does not yet turn a CF `grid_mapping` into a CRS
@@ -106,9 +106,9 @@ TIFF's EPSG code becomes the raster's CRS:
 ```julia
 using TiffImages
 cog = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/1/C/CV/2018/10/S2B_1CCV_20181004_0_L2A/B01.tif"
-cm = scan(cog, GeoTIFFDriver())          # or level = 2 for one overview alone
-Zarr.zopen(cm)["0"]["data"][1:100, 1:100]
-Raster(cm, "0/data")                     # EPSG:32701
+z = scan(cog)                 # or level = 2 for one overview alone
+z["0"]["data"][1:100, 1:100]
+Raster(z, "0/data")           # EPSG:32701
 ```
 
 ## What it does
@@ -118,14 +118,14 @@ Raster(cm, "0/data")                     # EPSG:32701
   `grid_mapping` variables needed to interpret it.
 - **Reads remote sources in place**: a scan of an `http(s)://` or `s3://` object fetches only
   the byte ranges holding its metadata, fetching chunk indexes ahead of libhdf5. A 453 MiB
-  NetCDF4 mosaic scans over HTTPS from 5.6 MB in 24 requests, and `scan(urls, driver)`
-  scans many files at once.
+  NetCDF4 mosaic scans over HTTPS from 5.6 MB in 24 requests, and `scan(urls)` scans many
+  files at once.
 - **Saves** manifests in its own Zarr-based format or as kerchunk JSON/Parquet, to a local
   directory or to object storage.
 - **Fetches** chunk bytes from local paths, `http(s)://` and `s3://` (with `using AWSS3`),
   routed by URI prefix, with readahead coalescing and an `authorize` hook for untrusted
   manifests.
-- **Merges** files holding different variables into one store, and **concatenates** files
+- **Merges** files holding different variables into one group, and **concatenates** files
   that are successive slices of one dataset.
 
 Zarr **v2** metadata only. Big-endian sources, and source features with no Zarr v2 codec

@@ -1,6 +1,9 @@
 module ChunkManifestsParquet2Ext
 
 using ChunkManifests
+using ChunkManifests: ChunkManifest, ExplicitChunkMap, INLINE_CHUNK,
+    ManifestArray, PathTable, VIRTUAL_CHUNK, arraysof, attrsof, chunkgridaxes, chunklocation,
+    chunkmapof, chunkstate, inlinebytes, push_uri!
 import Parquet2
 import PooledArrays
 
@@ -129,7 +132,7 @@ function _writearrayrefs(dir::AbstractString, key::AbstractString, va::ManifestA
 end
 
 """
-    save(path, group::ChunkManifest, fmt::KerchunkParquet) -> String
+    _save(path, group::ChunkManifest, fmt::KerchunkParquet) -> String
 
 Write `group` to the directory `path` (created if needed) as kerchunk's
 Parquet reference-set format: one `<path>/<field>/refs.N.parq` file per
@@ -142,7 +145,7 @@ Zarr v2 metadata and `fmt.recordsize` itself.
 recognize this format. Throws for a zero-dimensional array, which this
 format cannot address. Returns `path`.
 """
-function ChunkManifests.save(
+function ChunkManifests._save(
         path::AbstractString, group::ChunkManifest, fmt::ChunkManifests.KerchunkParquet
     )
     mkpath(path)
@@ -256,10 +259,9 @@ function _loadarray(
 end
 
 """
-    ChunkManifest(path, fmt::KerchunkParquet) -> ChunkManifest
+    _load(path, fmt::KerchunkParquet) -> ChunkManifest
 
-Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
-the directory `path`. Every array comes back as a [`ExplicitChunkMap`](@ref):
+Read a manifest previously written by [`save`](@ref) to the directory `path`. Every array comes back as a [`ExplicitChunkMap`](@ref):
 this format records one explicit reference per chunk, so an
 [`AffineChunkMap`](@ref)'s closed-form relationship between chunk index and
 byte offset cannot be recovered, only reproduced chunk by chunk.
@@ -268,11 +270,11 @@ Not implemented: a kerchunk whole-object reference (`offset == 0 == size`
 with a non-null `path`) throws rather than being read, since this package's
 manifest has no way to express "the chunk is this entire file" without
 first determining that file's length, which this function has no transport
-to do. `fmt.recordsize` must match the directory's own recorded
-`record_size`; group `provenance` is not part of the kerchunk schema and
+to do. The directory's own recorded `record_size` is used, whatever
+`fmt.recordsize` is; group `provenance` is not part of the kerchunk schema and
 comes back empty.
 """
-function ChunkManifests.ChunkManifest(path::AbstractString, fmt::ChunkManifests.KerchunkParquet)
+function ChunkManifests._load(path::AbstractString, ::ChunkManifests.KerchunkParquet)
     zmetapath = joinpath(path, ".zmetadata")
     isfile(zmetapath) || throw(
         ArgumentError(
@@ -282,13 +284,6 @@ function ChunkManifests.ChunkManifest(path::AbstractString, fmt::ChunkManifests.
     doc = ChunkManifests.JSON.parse(read(zmetapath, String))
     metadata = doc["metadata"]
     recordsize = Int(doc["record_size"])
-    recordsize == fmt.recordsize || throw(
-        ArgumentError(
-            "load: \"$zmetapath\" has record_size=$recordsize, but " *
-                "fmt.recordsize=$(fmt.recordsize); construct " *
-                "KerchunkParquet(; recordsize=$recordsize) to match",
-        )
-    )
 
     arrays = Dict{String, ManifestArray}()
     for k in keys(metadata)

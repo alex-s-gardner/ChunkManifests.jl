@@ -7,29 +7,35 @@ end
 
 # Scanning a source
 
-## Two entry points
+## Choosing the driver
 
-[`ChunkManifest(path)`](@ref ChunkManifest) is the one to reach for. It identifies what the
-path is — a source file one of the registered drivers recognizes, or a manifest this package
-previously saved — and does the right thing:
+[`scan`](@ref) chooses the driver from the path's extension, the same way for a local path
+and a URL:
 
 ```jldoctest scanning
 julia> path = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc");
 
-julia> ChunkManifest(path)
-ChunkManifest(4 arrays, 1 files)
+julia> z = scan(path);
+
+julia> sort(collect(keys(z.arrays)))
+4-element Vector{String}:
+ "grounded"
+ "mapping"
+ "x"
+ "y"
 ```
 
-[`scan`](@ref) is the explicit form, taking the driver as an argument. Use it to name the
-driver yourself, or to reach the per-driver keywords:
+Name the driver with the `driver` keyword when the extension says nothing useful:
 
 ```jldoctest scanning
-julia> scan(path, HDF5Driver())
-ChunkManifest(4 arrays, 1 files)
+julia> z2 = scan(path; driver = HDF5Driver());
+
+julia> sort(collect(keys(z2.arrays))) == sort(collect(keys(z.arrays)))
+true
 ```
 
-Naming the driver is also what you do when a path's extension says nothing useful, or when a
-file's contents and its name disagree.
+[`load`](@ref) scans a path whose extension names a driver too, so `load` opens a source
+file and a saved manifest alike.
 
 ## Drivers and the registry
 
@@ -38,21 +44,20 @@ file's contents and its name disagree.
 | [`HDF5Driver`](@ref) | HDF5 and NetCDF4 | the package itself |
 | [`GeoTIFFDriver`](@ref) | GeoTIFF, COG | `using TiffImages` |
 
-[`GeoTIFFDriver`](@ref) lives in a package extension, so scanning a TIFF requires TiffImages
-to be loaded. Until it is, the driver is not in the registry and a TIFF path is not
-recognized — which is reported, with the fix named, rather than guessed at:
+`.tif` and `.tiff` are registered to [`GeoTIFFDriver`](@ref) by the package itself, but the
+driver's own `_scan` method lives in a package extension, so scanning a TIFF requires
+TiffImages to be loaded. Until it is, scanning throws, naming the fix rather than guessing at
+one:
 
 ```julia
-julia> ChunkManifest("junk.tif")
-ERROR: ArgumentError: no registered driver recognizes "junk.tif", and it holds no saved
-manifest this package wrote. Registered drivers: HDF5Driver. Drivers for other formats
-arrive with their packages — scanning a TIFF or COG needs `using TiffImages`. To state the
-driver yourself, call scan("junk.tif", SomeDriver())
+julia> scan("junk.tif")
+ERROR: TiffImages must be loaded to scan with GeoTIFFDriver. Try `using TiffImages`.
 ```
 
 A driver is a type, so a format this package does not cover is a new
-[`AbstractDriver`](@ref) subtype plus a [`register_driver!`](@ref ChunkManifests.register_driver!)
-call, not an edit to a dispatch chain here.
+[`AbstractDriver`](@ref) subtype with a [`ChunkManifests._scan`](@ref) method, made the
+default for an extension by a [`ChunkManifests.register_driver!`](@ref) call — not an edit to
+a dispatch chain here.
 
 ## What one scan includes
 
@@ -62,7 +67,7 @@ variable. A single-variable scan is therefore georeferenced on its own, with no 
 the whole file:
 
 ```jldoctest scanning
-julia> sort(collect(keys(arraysof(scan(path, HDF5Driver(); group = "/grounded")))))
+julia> sort(collect(keys(scan(path; group = "/grounded").arrays)))
 4-element Vector{String}:
  "grounded"
  "mapping"
@@ -75,7 +80,7 @@ its `grid_mapping` variable. Pass `siblings=false` to take exactly the variable 
 nothing else:
 
 ```jldoctest scanning
-julia> sort(collect(keys(arraysof(scan(path, HDF5Driver(); group = "/grounded", siblings = false)))))
+julia> sort(collect(keys(scan(path; group = "/grounded", siblings = false).arrays)))
 1-element Vector{String}:
  "grounded"
 ```
@@ -102,19 +107,19 @@ separate full-resolution images adds the image index in front, as `"<image>/<lev
 
 ## Keywords
 
-`scan(path, HDF5Driver(); group, siblings, access)`:
+With [`HDF5Driver`](@ref):
 
 - `group` — the HDF5 path to scan, naming either a group or a single dataset. Defaults to the
   root.
 - `siblings` — whether to pull in the variables the named one depends on. Defaults to `true`.
 - `access` — how the file's metadata bytes are reached. See [Remote sources](@ref).
 
-`scan(path, GeoTIFFDriver(); level, access)`:
+With [`GeoTIFFDriver`](@ref):
 
 - `level` — keep one resolution level, `0` being full resolution. Defaults to every level.
 - `access` — as above.
 
-`ChunkManifest(path; access, transport, readahead)` additionally takes the two things that
-govern reading chunks afterwards rather than scanning now: `transport` resolves the URIs the
-manifest names (see [Fetching chunk bytes](@ref)), and `readahead` is the
-[`ReadaheadCache`](@ref) that coalesces nearby chunk requests.
+[`scan`](@ref) and [`load`](@ref) both also take the two things that govern reading chunks
+afterwards: `transport` resolves the URIs the manifest names (see
+[Fetching chunk bytes](@ref)), and `readahead` is the [`ReadaheadCache`](@ref) that
+coalesces nearby chunk requests.

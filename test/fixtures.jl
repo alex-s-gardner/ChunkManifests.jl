@@ -179,5 +179,9 @@ end
 dummy_manifestarray(shape, chunkshape, uri; kwargs...) =
     dummy_manifestarray(Float64, shape, chunkshape, uri; kwargs...)
 
+# A hand-built manifest opened as the group scan and load return. It records
+# no path, so merging it needs names.
+asgroup(m::ChunkManifest) = ChunkManifests._open(m, "")
+
 # Writers for hand-built TIFF fixtures, shared by the GeoTIFF and Rasters tests.
 include("tiffwriter.jl")

@@ -7,6 +7,7 @@ import ZarrDatasets
 const _RA_CDM = ZarrDatasets.CDM
 const _RA_DA = Zarr.DiskArrays
 
+
 const _RA_ITSLIVE_PATH = ITSLIVE_PATH
 
 const _RA_FILL = Int16(-9999)
@@ -56,7 +57,7 @@ _ra_decode(hv) = Union{Missing, Float64}[
         # carry no stability guarantee, so each is asserted here: a Rasters
         # upgrade that moves one fails loudly in this testset rather than
         # silently changing what a Raster over a manifest means.
-        ds = ZarrDatasets.ZarrDataset(ChunkManifest(path))
+        ds = ZarrDatasets.ZarrDataset(_scan(path, HDF5Driver()))
         var = _RA_CDM.variable(ds, "h")
         md = Rasters._metadata(var)
 
@@ -79,13 +80,11 @@ _ra_decode(hv) = Union{Missing, Float64}[
         @test Rasters._maybe_modify(var, mod) isa _RA_DA.AbstractDiskArray
     end
 
-    @testset "Raster(cm, name)" begin
+    @testset "Raster(z, name)" begin
         counting = FetchCountingTransport(; coalesce = false)
-        cm = ChunkManifest(
-            path; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)
-        )
+        cm = _manifest(scan(path; transport = counting, readahead = ReadaheadCache(; maxbytes = 0)))
         counting.count[] = 0
-        r = Rasters.Raster(cm, "h")
+        r = Rasters.Raster(asgroup(cm), "h")
         # Building the raster reads the x and time coordinate arrays, two
         # chunks each, because a Sampled lookup *is* those values. It reads no
         # chunk of h: that is what the window counts below establish.
@@ -127,29 +126,29 @@ _ra_decode(hv) = Union{Missing, Float64}[
     end
 
     @testset "scaled, missingval, raw mean what they mean in Rasters" begin
-        cm = ChunkManifest(path)
+        cm = _scan(path, HDF5Driver())
 
-        plain = Rasters.Raster(cm, "h")
+        plain = Rasters.Raster(asgroup(cm), "h")
         @test eltype(plain) == Union{Missing, Float64}
         @test plain[1, 2] == hv[1, 2] * 0.5 + 100.0
         @test ismissing(plain[1, 1])
 
-        unscaled = Rasters.Raster(cm, "h"; scaled = false)
+        unscaled = Rasters.Raster(asgroup(cm), "h"; scaled = false)
         @test eltype(unscaled) == Union{Missing, Int16}
         @test unscaled[1, 2] == hv[1, 2]
         @test ismissing(unscaled[1, 1])
 
-        replaced = Rasters.Raster(cm, "h"; missingval = -1.0)
+        replaced = Rasters.Raster(asgroup(cm), "h"; missingval = -1.0)
         @test eltype(replaced) == Float64
         @test Rasters.missingval(replaced) == -1.0
         @test replaced[1, 1] == -1.0
         @test replaced[1, 2] == hv[1, 2] * 0.5 + 100.0
 
-        kept = Rasters.Raster(cm, "h"; missingval = Rasters.missingval)
+        kept = Rasters.Raster(asgroup(cm), "h"; missingval = Rasters.missingval)
         @test eltype(kept) == Float64
         @test kept[1, 1] == Float64(_RA_FILL)
 
-        rawr = Rasters.Raster(cm, "h"; raw = true, verbose = false)
+        rawr = Rasters.Raster(asgroup(cm), "h"; raw = true, verbose = false)
         @test eltype(rawr) == Int16
         @test rawr[1, 1] == _RA_FILL
         @test rawr[1, 2] == hv[1, 2]
@@ -160,11 +159,11 @@ _ra_decode(hv) = Union{Missing, Float64}[
         @test count(!, Rasters.boolmask(plain)) == count(ismissing, decoded)
     end
 
-    @testset "RasterStack(cm)" begin
+    @testset "RasterStack(z)" begin
         counting = FetchCountingTransport(; coalesce = false)
-        cm = ChunkManifest(path; transport = counting)
+        cm = _manifest(scan(path; transport = counting))
         counting.count[] = 0
-        st = Rasters.RasterStack(cm)
+        st = Rasters.RasterStack(asgroup(cm))
         # Building the stack reads the coordinate variables, which is what its
         # dimensions are, and none of the data.
         @test counting.count[] == 4
@@ -179,73 +178,77 @@ _ra_decode(hv) = Union{Missing, Float64}[
 
         # Counted on a manifest with readahead off, because readahead fetches a
         # run of byte-adjacent chunks on a miss by design.
-        exact = ChunkManifest(
-            path; transport = FetchCountingTransport(; coalesce = false), readahead = ReadaheadCache(; maxbytes = 0)
+        exact = _manifest(
+            scan(path; transport = FetchCountingTransport(; coalesce = false), readahead = ReadaheadCache(; maxbytes = 0))
         )
         exactcount = transportof(exact).count
-        exactstack = Rasters.RasterStack(exact)
+        exactstack = Rasters.RasterStack(asgroup(exact))
         exactcount[] = 0
         @test isequal(exactstack[:h][1:2, 1:3], decoded[1:2, 1:3])
         @test exactcount[] == 1
 
-        renamed = Rasters.RasterStack(cm; name = [:height])
+        renamed = Rasters.RasterStack(asgroup(cm); name = [:height])
         @test keys(renamed) == (:height,)
-        @test_throws "name has 2 entries but 1 layers lie at the manifest root: [\"h\"]" Rasters.RasterStack(
-            cm; name = [:a, :b]
+        @test_throws "name has 2 entries but 1 layers lie at the group's root: [\"h\"]" Rasters.RasterStack(asgroup(cm); name = [:a, :b]
         )
     end
 
     @testset "groups" begin
-        nested = ChunkManifest([path, path]; name = ["g1", "g2"])
+        nested = _manifest(merge(scan([path, path]); names = ["g1", "g2"]))
         @test sort(collect(keys(arraysof(nested)))) ==
             ["g1/h", "g1/time", "g1/x", "g2/h", "g2/time", "g2/x"]
 
         err = try
-            Rasters.RasterStack(nested)
+            Rasters.RasterStack(asgroup(nested))
             nothing
         catch e
             e
         end
         @test err isa ArgumentError
-        @test occursin("no array lies at the manifest root", err.msg)
+        @test occursin("no array lies at the group's root", err.msg)
         @test occursin("[\"g1\", \"g2\"]", err.msg)
 
         # A group's dimension variables are left out exactly as the root's are.
-        st = Rasters.RasterStack(nested; group = "g1")
+        st = Rasters.RasterStack(asgroup(nested); group = "g1")
         @test keys(st) == (:h,)
         @test isequal(st[:h][:, :], decoded)
         @test map(Rasters.name, Rasters.dims(st)) == (:X, :Ti)
 
         # A full manifest key reaches a nested array directly.
-        r = Rasters.Raster(nested, "g2/h")
+        r = Rasters.Raster(asgroup(nested), "g2/h")
         @test Rasters.name(r) == :h
         @test isequal(r[:, :], decoded)
 
         coordsonly = ChunkManifest(;
             arrays = Dict{String, ManifestArray}("g/x" => arraysof(nested)["g1/x"])
         )
-        @test_throws "is a dimension, bounds or grid-mapping variable, so none is a layer" Rasters.RasterStack(
-            coordsonly; group = "g"
+        @test_throws "is a dimension, bounds or grid-mapping variable, so none is a layer" Rasters.RasterStack(asgroup(coordsonly); group = "g"
         )
     end
 
     @testset "GeoTIFF: each level has coordinates and the file's CRS" begin
-        cm = ChunkManifests.scan(GEOTIFF_JUNK_PATH, GeoTIFFDriver())
+        cm = _scan(GEOTIFF_JUNK_PATH, GeoTIFFDriver())
         z = Zarr.zopen(cm)["0"]
-        r = Rasters.Raster(cm, "0/data")
+        r = Rasters.Raster(asgroup(cm), "0/data")
         @test map(Rasters.name, Rasters.dims(r)) == (:X, :Y)
         @test collect(Rasters.lookup(r, Rasters.X)) == Array(z["x"])
         @test collect(Rasters.lookup(r, Rasters.Y)) == Array(z["y"])
         epsg = attrsof(arraysof(cm)["0/data"])["crs"]
         @test Rasters.crs(r) == Rasters.EPSG(parse(Int, last(split(epsg, ':'))))
-        @test isequal(Array(Rasters.Raster(cm, "0/data"; raw = true)), Array(z["data"]))
+        @test isequal(Array(Rasters.Raster(asgroup(cm), "0/data"; raw = true)), Array(z["data"]))
 
         # An explicit crs wins over the recorded one.
-        @test Rasters.crs(Rasters.Raster(cm, "0/data"; crs = Rasters.EPSG(3031))) == Rasters.EPSG(3031)
+        @test Rasters.crs(Rasters.Raster(asgroup(cm), "0/data"; crs = Rasters.EPSG(3031))) == Rasters.EPSG(3031)
 
-        st = Rasters.RasterStack(cm; group = "0")
+        st = Rasters.RasterStack(asgroup(cm); group = "0")
         @test keys(st) == (:data,)
         @test Rasters.crs(st[:data]) == Rasters.crs(r)
+
+        # A level's subgroup is a group of its own: keys are relative to it.
+        level = scan(GEOTIFF_JUNK_PATH)["0"]
+        @test isequal(Array(Rasters.Raster(level, "data"; raw = true)), Array(z["data"]))
+        @test keys(Rasters.RasterStack(level)) == (:data,)
+        @test_throws "no array at \"0/data\"" Rasters.Raster(level, "0/data")
     end
 
     @testset "GeoTIFF: a multi-band level is one raster with a band dimension" begin
@@ -266,10 +269,10 @@ _ra_decode(hv) = Union{Missing, Float64}[
                 planarconfig = planar ? 2 : 1, extratags = geotags,
                 payload = planar ? _gt_planarpayload(data, height) : [Vector{UInt8}(reinterpret(UInt8, vec(data)))],
             )
-            cm = ChunkManifests.scan(tifpath, GeoTIFFDriver())
+            cm = _scan(tifpath, GeoTIFFDriver())
             @test sort(collect(keys(arraysof(cm)))) == ["0/data", "0/x", "0/y"]
 
-            r = Rasters.Raster(cm, "0/data")
+            r = Rasters.Raster(asgroup(cm), "0/data")
             @test map(Rasters.name, Rasters.dims(r)) == dims
             @test size(r, Rasters.Band) == nsp
             @test collect(Rasters.lookup(r, Rasters.X)) == 500015.0:30.0:500135.0
@@ -279,25 +282,25 @@ _ra_decode(hv) = Union{Missing, Float64}[
             # Bands select by dimension, whichever position the layout gives it.
             @test Array(r[Rasters.Band(2)]) == (planar ? data[:, :, 2] : data[2, :, :])
 
-            st = Rasters.RasterStack(cm; group = "0")
+            st = Rasters.RasterStack(asgroup(cm); group = "0")
             @test keys(st) == (:data,)
         end
     end
 
-    @testset "Raster(cm) needs exactly one array" begin
-        cm = ChunkManifest(path)
+    @testset "Raster(z) needs exactly one array" begin
+        cm = _scan(path, HDF5Driver())
         one = ChunkManifest(; arrays = Dict{String, ManifestArray}("h" => arraysof(cm)["h"]))
-        @test Rasters.name(Rasters.Raster(one)) == :h
+        @test Rasters.name(Rasters.Raster(asgroup(one))) == :h
 
-        @test_throws "the manifest holds 3 arrays" Rasters.Raster(cm)
-        @test_throws "no array at \"nope\"" Rasters.Raster(cm, "nope")
+        @test_throws "the group holds 3 arrays" Rasters.Raster(asgroup(cm))
+        @test_throws "no array at \"nope\"" Rasters.Raster(asgroup(cm), "nope")
     end
 
     if isfile(_RA_ITSLIVE_PATH)
         @testset "real NetCDF4 file: a window touches only the chunks it covers" begin
             counting = FetchCountingTransport(; coalesce = false)
             cm = ChunkManifest(
-                scan(_RA_ITSLIVE_PATH, HDF5Driver(); group = "/grounded");
+                _scan(_RA_ITSLIVE_PATH, HDF5Driver(); group = "/grounded");
                 transport = counting, readahead = ReadaheadCache(; maxbytes = 0),
             )
             va = arraysof(cm)["grounded"]
@@ -305,7 +308,7 @@ _ra_decode(hv) = Union{Missing, Float64}[
             @test total > 1
 
             counting.count[] = 0
-            r = Rasters.Raster(cm, "grounded")
+            r = Rasters.Raster(asgroup(cm), "grounded")
             # The scan brings x and y along with grounded, and each is one
             # chunk, so building the lookups costs those two reads and nothing
             # more. No chunk of grounded itself is touched, which is what the
@@ -345,10 +348,10 @@ _ra_decode(hv) = Union{Missing, Float64}[
             # on its fixed-length-string `mapping` variable.
             arrays = Dict{String, ManifestArray}()
             for k in ("grounded", "x", "y")
-                merge!(arrays, arraysof(scan(_RA_ITSLIVE_PATH, HDF5Driver(); group = "/$k")))
+                merge!(arrays, arraysof(_scan(_RA_ITSLIVE_PATH, HDF5Driver(); group = "/$k")))
             end
             cm = ChunkManifest(; arrays)
-            r = Rasters.Raster(cm, "grounded")
+            r = Rasters.Raster(asgroup(cm), "grounded")
 
             xv, yv = h5open(_RA_ITSLIVE_PATH, "r") do f
                 read(f["x"]), read(f["y"])
@@ -376,7 +379,7 @@ _ra_decode(hv) = Union{Missing, Float64}[
             # keyword reaches Rasters: what is missing is the file's CRS, not
             # the plumbing for it.
             @test Rasters.crs(r) === nothing
-            projected = Rasters.Raster(cm, "grounded"; crs = Rasters.EPSG(3031))
+            projected = Rasters.Raster(asgroup(cm), "grounded"; crs = Rasters.EPSG(3031))
             @test Rasters.crs(projected) == Rasters.EPSG(3031)
             @test collect(Rasters.lookup(Rasters.dims(projected, Rasters.X))) == xv
         end
@@ -387,7 +390,7 @@ _ra_decode(hv) = Union{Missing, Float64}[
             # would do it is `_dims(var, crs, mappedcrs)` — the one the
             # extension already calls — so a Raster built here picks a CRS up
             # with no change on this side once Rasters reads these keys.
-            cm = scan(_RA_ITSLIVE_PATH, HDF5Driver())
+            cm = _scan(_RA_ITSLIVE_PATH, HDF5Driver())
             ds = ZarrDatasets.ZarrDataset(cm)
 
             # The data variable names its grid-mapping variable, which is the

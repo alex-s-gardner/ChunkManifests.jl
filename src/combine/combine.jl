@@ -1,12 +1,11 @@
-# Concatenating manifests, arrays and groups along one dimension.
+# Concatenating chunk maps and arrays along one dimension, which the public
+# `concat` (src/combine/series.jl) applies per array of a set of groups.
 #
-# Three independent operations, each usable on its own: concat(::Manifest...)
-# does pure grid stacking with no knowledge of what the grid means; concat(::
-# ManifestArray...) validates that the arrays describe compatible Zarr
-# metadata and then calls the manifest-level operation; concat(::
-# ChunkManifest...) applies the array-level operation per array key. None of
-# the three orders inputs or inspects coordinates — a caller who wants files
-# in a particular order sorts them before calling.
+# concat(::AbstractChunkMap...) does pure grid stacking with no knowledge of
+# what the grid means; concat(::ManifestArray...) validates that the arrays
+# describe compatible Zarr metadata and then stacks their chunk maps. Neither
+# orders inputs or inspects coordinates — a caller who wants files in a
+# particular order sorts them before calling.
 
 _manifestndims(::AbstractChunkMap{N}) where {N} = N
 
@@ -294,81 +293,5 @@ function concat(
         filters = filtersof(ref),
         attrs = mergedattrs,
         dimnames = dimnamesof(ref),
-    )
-end
-
-"""
-    concat(gs; dims::Integer) -> ChunkManifest
-
-Concatenate [`ChunkManifest`](@ref)s `gs` (an `AbstractVector` or `Tuple`)
-along dimension `dims` by concatenating the arrays under each shared key, in
-the order given.
-
-Every input must have exactly the same set of array keys. Group attributes
-merge across inputs under the same conflict rule as array attributes, and the
-result's `provenance` records that it came from concatenation and how many
-inputs. A single input is returned unchanged; an empty collection throws.
-
-All of the result's arrays share one merged [`PathTable`](@ref), and its
-transport is a fresh [`TransportContainers`](@ref) that resolves each URI by
-scheme — concatenating a local scan with a remote one yields a manifest whose
-files span both. Use `ChunkManifest(result; transport=...)` to supply
-credentials or restrict what may be fetched.
-
-`dims` is a number here and a name in [`ManifestSeries`](@ref) because the two
-address different things. Every array under a shared key has the same
-dimension order, so one number identifies the same axis in all of them;
-across a whole group it would not, since `time` is dimension 3 of a data
-variable and dimension 1 of its own coordinate. Use
-`ChunkManifests.combine(ManifestSeries(…, :time))` when the arrays disagree on
-where the dimension sits, and this when they agree.
-"""
-function concat(
-        gs::Union{AbstractVector{<:ChunkManifest}, Tuple{Vararg{ChunkManifest}}};
-        dims::Integer,
-    )
-    isempty(gs) && throw(ArgumentError("concat: no groups given"))
-    length(gs) == 1 && return first(gs)
-
-    refkeys = Set(keys(arraysof(first(gs))))
-    for (i, g) in enumerate(gs)
-        i == 1 && continue
-        ks = Set(keys(arraysof(g)))
-        ks == refkeys || throw(
-            ArgumentError(
-                "concat: group $i has array keys $(sort(collect(ks))), expected " *
-                    "$(sort(collect(refkeys))) (from group 1); differs by " *
-                    "$(sort(collect(symdiff(ks, refkeys))))",
-            )
-        )
-    end
-
-    # One table for the whole result: every array of a ChunkManifest shares its
-    # path table, so a file that several arrays reference is one entry and one
-    # edit rather than one per array.
-    mergedtable = PathTable()
-    mergedarrays = Dict{String, ManifestArray}()
-    for k in sort(collect(refkeys))
-        try
-            mergedarrays[k] = concat([arraysof(g)[k] for g in gs]; dims, table = mergedtable)
-        catch e
-            e isa ArgumentError || rethrow()
-            throw(ArgumentError("concat: array \"$k\": $(e.msg)"))
-        end
-    end
-
-    mergedattrs = Dict{String, Any}()
-    for (i, g) in enumerate(gs)
-        _mergeattrs!(mergedattrs, attrsof(g), "concat: group $i's")
-    end
-
-    provenance = Dict{String, Any}("driver" => "concat", "ninputs" => length(gs))
-    # The result gets a fresh scheme-resolving transport rather than any one
-    # input's: concatenating a local scan with a remote one produces a manifest
-    # whose files span both, and carrying over a single input's transport would
-    # leave the other's chunks unreadable. A caller needing specific
-    # credentials rebuilds with ChunkManifest(result; transport=...).
-    return ChunkManifest(;
-        arrays = mergedarrays, table = mergedtable, attrs = mergedattrs, provenance,
     )
 end

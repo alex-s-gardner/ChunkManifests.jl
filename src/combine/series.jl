@@ -1,50 +1,7 @@
-# ManifestSeries and combine: concatenating a set of manifests along a named
-# dimension.
+# concat: concatenating a set of groups along a named dimension.
 #
-# Mirrors `RasterSeries(paths, Ti)` followed by `Rasters.combine`. The split
-# into two steps is what lets the concatenation dimension be *declared* rather
-# than inferred from coordinate values, which is the line this package does
-# not cross.
-
-"""
-    ManifestSeries(paths::AbstractVector{<:AbstractString}, dim; access=AutoAccess())
-
-Build a series from `paths`, each resolved the way
-[`ChunkManifest`](@ref)`(path)` resolves it — a saved manifest is loaded, a
-source file is scanned. Several are worked on at once.
-
-The paths stay in the order given. Nothing reorders them by coordinate value,
-so a series assembled from a directory listing is in whatever order the
-listing produced.
-"""
-function ManifestSeries(
-        paths::Union{AbstractVector{<:AbstractString}, Tuple{AbstractString, Vararg{AbstractString}}},
-        dim;
-        access::SourceAccess = AutoAccess(),
-    )
-    isempty(paths) && throw(ArgumentError("ManifestSeries: no paths given"))
-    return ManifestSeries(_frompaths(paths, access), dim)
-end
-
-"""
-    membersof(s::ManifestSeries) -> Vector{ChunkManifest}
-
-The series' manifests, in the order they were given.
-"""
-membersof(s::ManifestSeries) = s.members
-
-"""
-    dimnameof(s::ManifestSeries) -> String
-
-Name of the dimension `s`'s members lie along, as declared when `s` was built.
-"""
-dimnameof(s::ManifestSeries) = s.dimname
-
-Base.length(s::ManifestSeries) = length(s.members)
-
-function Base.show(io::IO, s::ManifestSeries)
-    return print(io, "ManifestSeries(", length(s.members), " manifests along ", repr(s.dimname), ")")
-end
+# The dimension is *declared* by the caller rather than inferred from
+# coordinate values, which is the line this package does not cross.
 
 # Which dimension of `a` the series' members lie along, or 0 when `a` does not
 # name that dimension and so is not concatenated.
@@ -54,7 +11,7 @@ function _seriesdim(a::ManifestArray, dimname::AbstractString, key::AbstractStri
     isempty(hits) && return 0
     length(hits) == 1 || throw(
         ArgumentError(
-            "combine: array \"$key\" names dimension $(repr(dimname)) at positions " *
+            "concat: array \"$key\" names dimension $(repr(dimname)) at positions " *
                 "$(hits) of its dimnames $(dn), so which axis the members lie along is ambiguous",
         )
     )
@@ -81,7 +38,7 @@ function _checkshared(
     check === :none && return nothing
     disagrees(i, detail) = throw(
         ArgumentError(
-            "combine: array \"$key\" has no dimension named $(repr(dimname)), so it is not " *
+            "concat: array \"$key\" has no dimension named $(repr(dimname)), so it is not " *
                 "concatenated and only member $(firstindex(ms))'s copy survives, but member $i's " *
                 "$detail. Concatenate along a dimension the array has, or pass check=:none to take " *
                 "member $(firstindex(ms))'s copy regardless",
@@ -112,56 +69,84 @@ function _checkshared(
 end
 
 """
-    ChunkManifests.combine(s::ManifestSeries; check=:shape, attrs=nothing) -> ChunkManifest
+    concat(zs, dim; check=:shape, attrs=nothing, transport=nothing, readahead=nothing)
+        -> Zarr.ZGroup
 
-Concatenate the members of `s` along the dimension `s` declares, producing one
-manifest.
+Concatenate the groups `zs` — successive slices of one dataset, such as daily
+granules — along the dimension named `dim` (a string or symbol), in the order
+given. Nothing is reordered by coordinate value, so sort `zs` first if their
+order matters.
 
-Every member must hold the same set of array keys. Each key is handled on its
-own: an array naming the series' dimension is concatenated along that
-dimension, while an array that does not name it — a coordinate like `x` or `y`
-when concatenating along `time` — is left as the first member's copy. At least
-one array must name the dimension.
+Every group must hold the same set of array keys. Each key is handled on its
+own: an array naming `dim` is concatenated along it, while an array that does
+not — a coordinate like `x` or `y` when concatenating along `time` — is left as
+the first group's copy. At least one array must name `dim`.
 
-`check` governs the arrays that are *not* concatenated, where only one member's
+`check` governs the arrays that are *not* concatenated, where only one group's
 copy survives:
 
-  - `:shape` (the default) requires every member to agree on element type,
-    shape, chunkshape and dimnames. Free, and it catches mismatched grids.
-  - `:values` additionally decodes each member's copy and requires the values
-    to match. This reads chunks, so it fails when a member's sources are
+  - `:shape` (the default) requires every group to agree on element type,
+    shape, chunk shape and dimension names. Free, and it catches mismatched
+    grids.
+  - `:values` additionally decodes each group's copy and requires the values
+    to match. This reads chunks, so it fails when a group's sources are
     unreachable.
-  - `:none` takes the first member's copy without comparison.
+  - `:none` takes the first group's copy without comparison.
 
-The arrays that *are* concatenated are always checked in full by
-[`concat`](@ref), including the rule that every member but the last must end on
-a chunk boundary along the concatenation dimension — Zarr permits a partial
-chunk only as a grid's last one, so a 10-long axis chunked by 4 cannot be
-followed by anything.
+Every group but the last must end on a chunk boundary along `dim`: Zarr permits
+a partial chunk only as a grid's last one, so a 10-long axis chunked by 4 cannot
+be followed by anything.
 
-Group attributes merge across members under [`concat`](@ref)'s conflict rule;
-pass `attrs` to set them outright, which granule-specific attributes usually
-require. The result's transport is a fresh [`TransportContainers`](@ref), so
-use `ChunkManifest(result; transport=...)` to supply credentials.
-
-Not exported: Rasters exports a `combine` of its own, and sharing the bare name
-would make it ambiguous for exactly the pair of packages a caller here is
-likely to have loaded.
+A group attribute present in several groups with different values is an
+error, which granule-specific attributes routinely are; pass `attrs` to set the
+result's group attributes outright. The result reads
+through the groups' transport when they share one, and otherwise through a fresh
+[`TransportContainers`](@ref); pass `transport` to choose it.
 """
-function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
+function concat(
+        zs::AbstractVector{<:Zarr.ZGroup}, dim::Union{AbstractString, Symbol};
+        check::Symbol = :shape, attrs = nothing,
+        transport::Union{Nothing, AbstractTransport} = nothing,
+        readahead::Union{Nothing, ReadaheadCache} = nothing,
+    )
+    isempty(zs) && throw(ArgumentError("concat: no groups given"))
+    dimname = String(string(dim))
+    isempty(dimname) && throw(ArgumentError("concat: the dimension name is empty"))
+    ms = ChunkManifest[_rootmanifest(z, "concat") for z in zs]
+    m = _combine(ms, dimname; check, attrs)
+    return _open(_withbackend(m, ms, transport, readahead), "")
+end
+
+concat(zs::Tuple{Vararg{Zarr.ZGroup}}, dim::Union{AbstractString, Symbol}; kwargs...) =
+    concat(collect(Zarr.ZGroup, zs), dim; kwargs...)
+
+# The transport and readahead cache of a manifest built from `members`: the
+# caller's if given, else the members' transport when they all share one, since
+# carrying over a single member's would leave the others' chunks unreadable.
+function _withbackend(m::ChunkManifest, members, transport, readahead)
+    t = if transport !== nothing
+        transport
+    else
+        t1 = transportof(first(members))
+        all(x -> transportof(x) === t1, members) ? t1 : TransportContainers()
+    end
+    return ChunkManifest(m; transport = t, readahead = something(readahead, ReadaheadCache()))
+end
+
+# Concatenates `ms`, in order, along the dimension named `dimname`. See the
+# public `concat` above for the rules.
+function _combine(ms::AbstractVector{ChunkManifest}, dimname::String; check::Symbol, attrs)
     check in (:shape, :values, :none) || throw(
         ArgumentError(
-            "combine: check=$(repr(check)) is not one of :shape, :values, :none"
+            "concat: check=$(repr(check)) is not one of :shape, :values, :none"
         )
     )
-    ms = membersof(s)
-    dimname = dimnameof(s)
 
     firstarrays = arraysof(first(ms))
     refkeys = Set(keys(firstarrays))
     isempty(refkeys) && throw(
         ArgumentError(
-            "combine: member $(firstindex(ms)) holds no arrays"
+            "concat: member $(firstindex(ms)) holds no arrays"
         )
     )
     for i in eachindex(ms)
@@ -169,7 +154,7 @@ function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
         ks = Set(keys(arraysof(ms[i])))
         ks == refkeys || throw(
             ArgumentError(
-                "combine: member $i has array keys $(sort(collect(ks))), expected " *
+                "concat: member $i has array keys $(sort(collect(ks))), expected " *
                     "$(sort(collect(refkeys))) (from member $(firstindex(ms))); differs by " *
                     "$(sort(collect(symdiff(ks, refkeys))))",
             )
@@ -183,7 +168,7 @@ function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
     dimindex = map(_seriesdim, refarrays, fill(dimname, length(arraykeys)), arraykeys)
     all(iszero, dimindex) && throw(
         ArgumentError(
-            "combine: no array names a dimension $(repr(dimname)), so there is nothing to " *
+            "concat: no array names a dimension $(repr(dimname)), so there is nothing to " *
                 "concatenate. The members' arrays have dimnames " *
                 "$(sort(unique(vcat(map(dimnamesof, refarrays)...))))",
         )
@@ -193,7 +178,7 @@ function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
     # metadata, and reporting it only after the whole concatenation would make
     # the caller pay for work that is then thrown away.
     mergedattrs = _groupattrs(
-        length(ms), i -> attrsof(ms[i]), i -> "combine: member $i's group",
+        length(ms), i -> attrsof(ms[i]), i -> "concat: member $i's group",
         attrs, "combined",
     )
 
@@ -214,7 +199,7 @@ function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
             e isa ArgumentError || rethrow()
             throw(
                 ArgumentError(
-                    "combine: array \"$key\" is concatenated along $(repr(dimname)), its " *
+                    "concat: array \"$key\" is concatenated along $(repr(dimname)), its " *
                         "dimension $d; member N appears as array N here. $(e.msg)",
                 )
             )
@@ -222,7 +207,7 @@ function combine(s::ManifestSeries; check::Symbol = :shape, attrs = nothing)
     end
 
     provenance = Dict{String, Any}(
-        "driver" => "combine", "ninputs" => length(ms), "dim" => dimname,
+        "driver" => "concat", "ninputs" => length(ms), "dim" => dimname,
     )
     return ChunkManifest(; arrays, table, attrs = mergedattrs, provenance)
 end

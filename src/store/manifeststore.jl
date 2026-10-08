@@ -21,27 +21,7 @@ end
 
 # True when `p` is a "/"-separated ancestor of some array's path, i.e. a
 # group that exists only implicitly because an array lives under it.
-function _isgrouppath(g::ChunkManifest, p::AbstractString)
-    return any(path -> startswith(path, p * "/"), keys(arraysof(g)))
-end
-
-# Direct children of `p` across every array path, the way a directory
-# listing would report both subgroups and array directories.
-function _children(g::ChunkManifest, p::AbstractString)
-    children = Set{String}()
-    for path in keys(arraysof(g))
-        if p == ""
-            rest = path
-        elseif startswith(path, p * "/")
-            rest = SubString(path, length(p) + 2)
-        else
-            continue
-        end
-        stop = findfirst('/', rest)
-        push!(children, stop === nothing ? String(rest) : String(rest[1:(stop - 1)]))
-    end
-    return children
-end
+_isgrouppath(g::ChunkManifest, p::AbstractString) = !isempty(p) && haskey(g.groups, p)
 
 function _arrayitem(
         va::ManifestArray, leaf::AbstractString, transport::AbstractTransport,
@@ -80,6 +60,26 @@ function Base.getindex(s::ChunkManifest, key::AbstractString)
 end
 
 """
+    Zarr.isinitialized(s::ChunkManifest, key::AbstractString) -> Bool
+
+Whether `getindex(s, key)` would return bytes, answered without producing them:
+opening a group asks this of every array's and group's metadata keys, and
+Zarr.jl's fallback would synthesize each document, or fetch a chunk, only to
+discard it.
+"""
+function Zarr.isinitialized(s::ChunkManifest, key::AbstractString)
+    prefix, leaf = _splitkey(key)
+    va = get(arraysof(s), prefix, nothing)
+    if va !== nothing
+        (leaf == ".zarray" || leaf == ".zattrs") && return true
+        I = parse_chunkkey(va, leaf)
+        return I !== nothing && chunkstate(chunkmapof(va), I) != MISSING_CHUNK
+    end
+    (prefix == "" || _isgrouppath(s, prefix)) || return false
+    return leaf == ".zgroup" || leaf == ".zattrs"
+end
+
+"""
     setindex!(s::ChunkManifest, v, key::AbstractString)
 
 Always throws: a [`ChunkManifest`](@ref) serves bytes from the files it
@@ -97,18 +97,15 @@ end
 """
     Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
 
-Always throws. A [`ChunkManifest`](@ref) is built from a path with
-`ChunkManifest(path)`, which detects whether `path` holds a saved manifest or a
-source file to scan; `Zarr.zopen` is then called on the resulting manifest
-object. Nothing registers a URL pattern for this store, so Zarr.jl never
-reaches this method on its own.
+Always throws. A manifest is opened with [`load`](@ref)`(path)`, which returns
+the Zarr group directly. Nothing registers a URL pattern for this store, so
+Zarr.jl never reaches this method on its own.
 """
 function Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
     throw(
         ArgumentError(
-            "ChunkManifest cannot be constructed from inside Zarr.zopen(\"$s\"); " *
-                "build it first with ChunkManifest(\"$s\") and pass that object, as in " *
-                "Zarr.zopen(ChunkManifest(\"$s\"))",
+            "a chunk manifest cannot be opened from inside Zarr.zopen(\"$s\"); use " *
+                "load(\"$s\"), which returns the Zarr group",
         )
     )
 end
@@ -153,7 +150,7 @@ Names of the groups and arrays directly under path `p`.
 function Zarr.subdirs(s::ChunkManifest, p::AbstractString)
     haskey(arraysof(s), p) && return String[]
     (p == "" || _isgrouppath(s, p)) || return String[]
-    return sort!(collect(_children(s, p)))
+    return copy(s.groups[p])
 end
 
 function _subkeys(va::ManifestArray)

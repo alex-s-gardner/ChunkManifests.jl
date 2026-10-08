@@ -34,21 +34,6 @@ const _GT_DOUBLE = UInt16(12)
 # Tag 34264 (ModelTransformationTag) has no name in TiffImages' enum.
 const _GT_MODELTRANSFORMATION = UInt16(34264)
 
-const _GT_MAGIC_LE = (UInt8[0x49, 0x49, 0x2a, 0x00], UInt8[0x49, 0x49, 0x2b, 0x00])
-const _GT_MAGIC_BE = (UInt8[0x4d, 0x4d, 0x00, 0x2a], UInt8[0x4d, 0x4d, 0x00, 0x2b])
-
-function ChunkManifests.candrive(::ChunkManifests.GeoTIFFDriver, path)
-    isfile(path) || return false
-    try
-        return open(path, "r") do io
-            magic = read(io, 4)
-            length(magic) == 4 && (magic in _GT_MAGIC_LE || magic in _GT_MAGIC_BE)
-        end
-    catch
-        return false
-    end
-end
-
 _gt_asvector(x::AbstractVector) = x
 _gt_asvector(x) = [x]
 
@@ -684,57 +669,8 @@ function _gt_layout(pages, path::AbstractString)
     return placed, primaries, nlevels
 end
 
-"""
-    scan(path::AbstractString, driver::GeoTIFFDriver;
-         level::Union{Nothing, Integer}=nothing, access::SourceAccess=AutoAccess()) -> ChunkManifest
-
-Scan the TIFF or Cloud-Optimized GeoTIFF at `path`. Each resolution level becomes
-one Zarr group: `"0"` is the full-resolution image, `"1"` its first overview, and
-so on by decreasing size. A level's group holds
-
-- `"data"`, its pixels;
-- `"mask"`, when the file carries a transparency mask of that size;
-- `"x"` and `"y"`, the pixel-center coordinates, when the image is georeferenced.
-
-A TIFF holding several separate full-resolution images keys each under its
-0-based image index, as `"<image>/<level>/data"`. No strip or tile is read or
-decoded to do any of this.
-
-Every level is scanned by default. `level = k` keeps level `k` of each image and
-nothing else, and is an error when an image has no such level.
-
-Pages are placed from the `NewSubfileType` tag (254) and the `SubIFDs` tag
-(330), which is followed one level deep. Each full-resolution main-chain page
-starts an image; a reduced-resolution or mask page belongs to the most recent
-one, and a `SubIFDs` child to the page owning the tag. Overviews are ordered by
-size rather than by page order, and a mask joins the level of its own size. An
-overview or mask inherits its image's CRS and nodata fill value and — unless it
-carries its own `ModelPixelScale` / `ModelTiepoint` — a pixel scale derived from
-the image's extent (not an assumed resolution factor) and the image's tiepoint.
-
-Each array's attributes record the page it came from as `"tiff_page"` (the
-main-chain index, or `"<owner>.sub<i>"` for a `SubIFDs` child), the raw
-`"NewSubfileType"`, and its three bit flags as `"reduced_resolution"`, `"mask"`
-and `"multipage"`.
-
-`access` decides how the tag directories are reached; the default reads a
-remote object in place through [`RangeAccess`](@ref).
-
-Supported layouts: any `SAMPLESPERPIXEL`, both `PLANARCONFIG` values, and
-byte-aligned sample widths. A single band keeps a 2-D `(x, y)` array; multiple
-bands add a `"band"` dimension, ordered `(band, x, y)` for chunky data and
-`(x, y, band)` for planar data (see the module docstring comment for why).
-Rejected, by name, with an `ArgumentError`: sub-byte bit depths, `BITSPERSAMPLE`
-or `SAMPLEFORMAT` that differ between bands, unsupported `COMPRESSION`/
-`PREDICTOR` values, a striped layout whose final strip is shorter than
-`ROWSPERSTRIP` when that layout cannot be re-chunked around the gap (see
-`GeoTIFFDriver`'s docstring for the uncompressed case, which can), a `SubIFDs`
-entry nesting deeper than one level, any IFD offset — main chain or `SubIFDs` —
-revisited while scanning, and pages that do not form a pyramid: an overview no
-smaller than the level above it, a mask matching no level's size, or two masks
-at one level.
-"""
-function ChunkManifests.scan(
+# The keywords and the layout of the result are documented on GeoTIFFDriver.
+function ChunkManifests._scan(
         path::AbstractString, driver::ChunkManifests.GeoTIFFDriver;
         level::Union{Nothing, Integer} = nothing,
         access::ChunkManifests.SourceAccess = ChunkManifests.AutoAccess(),
@@ -833,8 +769,9 @@ end
 # has to happen in __init__ rather than at top level.
 # A remote object is read in place by default: that is what a COG's layout is
 # for, and nothing here depends on a struct layout that might not match.
-ChunkManifests._remoteaccess(::ChunkManifests.GeoTIFFDriver, ::AbstractString) =
-    ChunkManifests.RangeAccess()
+ChunkManifests._remoteaccess(
+    ::ChunkManifests.GeoTIFFDriver, ::AbstractString, transport::ChunkManifests.AbstractTransport,
+) = ChunkManifests.RangeAccess(; transport)
 
 function __init__()
     ChunkManifests.register_codec!(
@@ -855,9 +792,6 @@ function __init__()
     ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 7, "JPEG has no byte-compatible Zarr v2 codec")
     ChunkManifests.register_rejection!(ChunkManifests.GeoTIFFDriver, 50001, "WebP has no byte-compatible Zarr v2 codec")
 
-    # Only reachable once this extension loads, which is also when scanning a
-    # TIFF becomes possible at all.
-    ChunkManifests.register_driver!(ChunkManifests.GeoTIFFDriver())
     return nothing
 end
 
@@ -933,16 +867,12 @@ ChunkManifests.PrecompileTools.@setup_workload begin
     ChunkManifests.PrecompileTools.@compile_workload begin
         mktempdir() do dir
             path = _precompile_geotiff(joinpath(dir, "cog.tif"))
-            driver = ChunkManifests.GeoTIFFDriver()
-            cm = ChunkManifests.scan(path, driver)
-            z = ChunkManifests.Zarr.zopen(cm)
+            z = ChunkManifests.scan(path)
             z["0"]["data"][:, :]
             z["0"]["x"][:]
-            ChunkManifests.scan(path, driver; level = 1)
+            ChunkManifests.scan(path; level = 1)
 
-            ChunkManifests._precompile_remote(
-                z -> z["0"]["data"][:, :], read(path), "cog.tif", driver
-            )
+            ChunkManifests._precompile_remote(z -> z["0"]["data"][:, :], read(path), "cog.tif")
         end
     end
 end

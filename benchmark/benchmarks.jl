@@ -77,12 +77,11 @@ const SLICES = series_files(DIR)
 # Results the benchmark must keep producing, so a faster run that changed an
 # answer is caught here rather than in review.
 function checksums()
-    many = scan(HDF5Driver(), MANY; siblings=false)
-    grid = scan(HDF5Driver(), GRID; siblings=false)
-    zm = Zarr.zopen(many)["v"]
-    zg = Zarr.zopen(grid)["g"]
-    combined = ChunkManifests.combine(ManifestSeries(SLICES, :time))
-    zc = Zarr.zopen(combined)["h"]
+    many = scan(MANY; siblings=false)
+    zm = many["v"]
+    zg = scan(GRID; siblings=false)["g"]
+    combined = concat(scan(SLICES), :time)
+    zc = combined["h"]
     return (
         many_sum = sum(zm[:]),
         many_window = sum(zm[1000:3000]),
@@ -91,30 +90,36 @@ function checksums()
         grid_shape = size(zg),
         combined_sum = sum(zc[:, :]),
         combined_shape = size(zc),
-        combined_keys = sort(collect(keys(arraysof(combined)))),
-        many_nfiles = length(pathtable(many)),
+        combined_keys = sort(collect(keys(combined.arrays))),
+        many_nfiles = length(ChunkManifests.tableof(ChunkManifests._manifest(many))),
     )
 end
 
 function suite()
     s = BenchmarkGroup()
 
-    s["scan"]["many chunks ($(NCHUNKS_1D))"] =
-        @benchmarkable scan(HDF5Driver(), $MANY; siblings=false)
-    s["scan"]["3-D grid"] = @benchmarkable scan(HDF5Driver(), $GRID; siblings=false)
+    s["scan"]["many chunks ($(NCHUNKS_1D))"] = @benchmarkable scan($MANY; siblings=false)
+    s["scan"]["3-D grid"] = @benchmarkable scan($GRID; siblings=false)
 
-    many = scan(HDF5Driver(), MANY; siblings=false)
-    grid = scan(HDF5Driver(), GRID; siblings=false)
     # Readahead off: it caches across the samples of one benchmark and would
     # measure the cache rather than the read path.
-    many0 = ChunkManifest(many; readahead=ReadaheadCache(; maxbytes=0))
-    grid0 = ChunkManifest(grid; readahead=ReadaheadCache(; maxbytes=0))
+    noreadahead() = ReadaheadCache(; maxbytes=0)
+    many = scan(MANY; siblings=false)
+    many0 = ChunkManifests._manifest(scan(MANY; siblings=false, readahead=noreadahead()))
+    grid0 = ChunkManifests._manifest(scan(GRID; siblings=false, readahead=noreadahead()))
 
     s["store"]["zopen"] = @benchmarkable Zarr.zopen($many0)
     s["store"]["metadata key"] = @benchmarkable $many0["v/.zarray"]
     s["store"]["one chunk key"] = @benchmarkable $many0["v/0"]
     s["store"]["subkeys (all chunks)"] = @benchmarkable Zarr.subkeys($many0, "v")
     s["store"]["storagesize"] = @benchmarkable Zarr.storagesize($many0, "v")
+    # Opening walks the group tree, probing the manifest's keys at every group,
+    # so a merge of many multi-array files is where that walk would grow.
+    slices = scan(SLICES)
+    wide = ChunkManifests._manifest(
+        merge(repeat(slices, 25); names=string.(1:(25 * length(slices))))
+    )
+    s["store"]["zopen 300 merged files"] = @benchmarkable Zarr.zopen($wide)
 
     zm = Zarr.zopen(many0)["v"]
     zg = Zarr.zopen(grid0)["g"]
@@ -124,19 +129,14 @@ function suite()
     s["read"]["3-D window"] = @benchmarkable $zg[3:20, 5:30, 7:40]
     s["read"]["1-D reduction"] = @benchmarkable sum($zm)
 
-    s["combine"]["12 slices"] =
-        @benchmarkable ChunkManifests.combine(ManifestSeries($SLICES, :time))
-    series = ManifestSeries(SLICES, :time)
-    s["combine"]["12 slices, prescanned"] =
-        @benchmarkable ChunkManifests.combine($series)
-    s["merge"]["12 files"] =
-        @benchmarkable ChunkManifest($SLICES; name=string.(1:12))
+    s["combine"]["12 slices"] = @benchmarkable concat(scan($SLICES), :time)
+    s["combine"]["12 slices, prescanned"] = @benchmarkable concat($slices, :time)
+    s["merge"]["12 files"] = @benchmarkable merge(scan($SLICES); names=string.(1:12))
 
-    s["serialize"]["save native"] = @benchmarkable ChunkManifests.save(
-        joinpath(mktempdir(), "m"), $many, ZarrManifest()
-    )
-    saved = ChunkManifests.save(joinpath(DIR, "saved"), many, ZarrManifest())
-    s["serialize"]["load native"] = @benchmarkable ChunkManifest($saved)
+    s["serialize"]["save native"] =
+        @benchmarkable save(joinpath(mktempdir(), "m.manifest"), $many)
+    saved = save(joinpath(DIR, "saved.manifest"), many)
+    s["serialize"]["load native"] = @benchmarkable load($saved)
 
     return s
 end
