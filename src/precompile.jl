@@ -123,7 +123,6 @@ function _precompile_remote(readwith, bytes::Vector{UInt8}, name::AbstractString
         readwith(scan(url; transport, kwargs...))
     finally
         close(server)
-        HTTP.close_idle_connections!(http.client)
     end
     return nothing
 end

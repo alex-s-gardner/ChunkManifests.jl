@@ -13,50 +13,88 @@ function _httpuri(uri::AbstractString)
     return uri
 end
 
-const _HTTP_IDLE_PER_HOST = 64
-
 """
     HTTPTransport(; retries=3, headers=Pair{String,String}[], connect_timeout=10,
-                  read_idle_timeout=60, kwargs...)
+                  read_idle_timeout=60)
 
-Reads byte ranges from an HTTP(S) server with ranged GET requests. Every
-[`fetchrange`](@ref) call made through one `HTTPTransport` shares the same
-underlying `HTTP.Client`, so TCP/TLS connections to a given host are reused
-across calls instead of being re-established per request. Up to
-$(_HTTP_IDLE_PER_HOST) idle connections per host are kept for reuse, since a
-scan or a read issues many requests at once and a new TLS connection costs
-several round trips.
+Reads byte ranges from an HTTP(S) server with ranged GET requests, made with
+libcurl through Downloads.jl. Every request made through one `HTTPTransport`
+shares one libcurl multi handle, so TCP/TLS connections to a host are reused
+across calls instead of being re-established per request, and requests from
+several tasks run concurrently on it. libcurl rather than HTTP.jl because of
+throughput: on one link, a 127 MB object came at 16 MB/s through libcurl with
+1, 8 or 32 requests in flight, and at 3 MB/s through HTTP.jl however many.
 
 `retries` bounds how many times a transiently failing request (a 5xx
-response, a request timeout, or a dropped connection) is retried, with
-exponential backoff, before giving up; a 4xx response is never retried.
-`headers` are attached to every request issued through this transport (for
-example an `Authorization` header for a private archive).
+response, a timeout, or a dropped connection) is retried, with exponential
+backoff, before giving up; a 4xx response is never retried. `headers` are
+attached to every request issued through this transport (for example an
+`Authorization` header for a private archive). Redirects are followed, and
+libcurl does not send a caller's `Authorization` header on to another host.
 
 `connect_timeout` bounds, in seconds, establishing a connection including its
 TLS handshake, and `read_idle_timeout` how long a response may stall; a
 handshake a server never answers would otherwise wait forever. `0` turns
-either off. Remaining keyword arguments are forwarded to `HTTP.Client`
-(`request_timeout`, `transport`, and so on).
+either off. Proxies are taken from the environment, as libcurl takes them.
 """
 struct HTTPTransport <: AbstractTransport
-    client::HTTP.Client
+    downloader::Downloads.Downloader
+    headers::Vector{Pair{String, String}}
     retries::Int
 end
 
 function HTTPTransport(;
         retries::Integer = 3, headers = Pair{String, String}[],
         connect_timeout::Real = 10, read_idle_timeout::Real = 60,
-        transport = HTTP.Transport(;
-            proxy = HTTP.ProxyFromEnvironment(), max_idle_per_host = _HTTP_IDLE_PER_HOST,
-        ),
-        kwargs...,
     )
     retries >= 0 || throw(ArgumentError("retries must be nonnegative, got $retries"))
-    client = HTTP.Client(;
-        default_headers = headers, connect_timeout, read_idle_timeout, transport, kwargs...,
-    )
-    return HTTPTransport(client, Int(retries))
+    connect_timeout >= 0 || throw(ArgumentError("connect_timeout must be nonnegative, got $connect_timeout"))
+    read_idle_timeout >= 0 || throw(ArgumentError("read_idle_timeout must be nonnegative, got $read_idle_timeout"))
+    downloader = Downloads.Downloader()
+    connectms = round(Int, 1000 * connect_timeout)
+    idle = ceil(Int, read_idle_timeout)
+    downloader.easy_hook = (easy, _) -> begin
+        connectms > 0 && Downloads.Curl.setopt(easy, LibCURL.CURLOPT_CONNECTTIMEOUT_MS, connectms)
+        # Fewer than one byte a second for `idle` seconds is a stalled response.
+        if idle > 0
+            Downloads.Curl.setopt(easy, LibCURL.CURLOPT_LOW_SPEED_LIMIT, 1)
+            Downloads.Curl.setopt(easy, LibCURL.CURLOPT_LOW_SPEED_TIME, idle)
+        end
+    end
+    return HTTPTransport(downloader, [String(first(h)) => String(last(h)) for h in headers], Int(retries))
+end
+
+# A ranged GET, retried while it fails transiently. Returns the final status,
+# the response's `Content-Range` (empty when it has none), and the body.
+#
+# `progress(total, now)` is Downloads.jl's: `total` is the response's
+# `Content-Length` as soon as its headers arrive, before the body has.
+function _httpget(t::HTTPTransport, uri::AbstractString, rangeheader::AbstractString;
+                  progress = nothing)
+    headers = [t.headers; "Range" => String(rangeheader)]
+    attempt = 0
+    while true
+        body = IOBuffer()
+        resp = try
+            Downloads.request(uri; output = body, headers, downloader = t.downloader, throw = false, progress)
+        catch err
+            throw(ErrorException("HTTP request failed fetching $rangeheader from $(repr(uri)): $err"))
+        end
+        transient = resp isa Downloads.RequestError || resp.status >= 500
+        if transient && attempt < t.retries
+            sleep(min(0.25 * 2.0^attempt, 8.0))
+            attempt += 1
+            continue
+        end
+        resp isa Downloads.RequestError && throw(
+            ErrorException("HTTP request failed fetching $rangeheader from $(repr(uri)): $(resp.message)")
+        )
+        contentrange = ""
+        for (k, v) in resp.headers
+            lowercase(k) == "content-range" && (contentrange = v)
+        end
+        return resp.status, contentrange, take!(body)
+    end
 end
 
 # See `concurrency` and `maxblock` for why these differ from the defaults.
@@ -83,36 +121,24 @@ function fetchrange(t::HTTPTransport, uri::AbstractString, r::ByteRange)
 
     lastbyte = r.offset + r.nbytes - 1
     rangeheader = "bytes=$(r.offset)-$(lastbyte)"
+    status, _, received = _httpget(t, uri, rangeheader)
 
-    resp = try
-        HTTP.get(
-            uri, ["Range" => rangeheader];
-            client = t.client, retries = t.retries, status_exception = false,
-        )
-    catch err
-        throw(
-            ErrorException(
-                "HTTP request failed fetching range $r ($rangeheader) from $(repr(uri)): $err"
-            )
-        )
-    end
-
-    body = if resp.status == 206
-        resp.body
-    elseif resp.status == 200
+    body = if status == 206
+        received
+    elseif status == 200
         stop = r.offset + r.nbytes
-        length(resp.body) >= stop || throw(
+        length(received) >= stop || throw(
             ErrorException(
                 "HTTP server at $(repr(uri)) ignored Range header $rangeheader and " *
-                    "returned only $(length(resp.body)) bytes with status 200, fewer " *
+                    "returned only $(length(received)) bytes with status 200, fewer " *
                     "than the $stop bytes needed to satisfy range $r",
             )
         )
-        resp.body[(r.offset + 1):stop]
+        received[(r.offset + 1):stop]
     else
         throw(
             ErrorException(
-                "HTTP $(resp.status) fetching range $r ($rangeheader) from $(repr(uri))"
+                "HTTP $status fetching range $r ($rangeheader) from $(repr(uri))"
             )
         )
     end
@@ -120,7 +146,7 @@ function fetchrange(t::HTTPTransport, uri::AbstractString, r::ByteRange)
     length(body) == r.nbytes || throw(
         ErrorException(
             "short read from $(repr(uri)): requested $(r.nbytes) bytes for range $r, " *
-                "got $(length(body)) bytes (HTTP status $(resp.status))",
+                "got $(length(body)) bytes (HTTP status $status)",
         )
     )
     return body
@@ -139,21 +165,11 @@ total it is serving.
 """
 function objectsize(t::HTTPTransport, uri::AbstractString)
     url = _httpuri(uri)
-    resp = try
-        HTTP.get(
-            url, ["Range" => "bytes=0-0"];
-            client = t.client, retries = t.retries, status_exception = false,
-        )
-    catch err
-        error("HTTP request failed sizing $(repr(uri)): $err")
-    end
-
-    resp.status == 206 || error(
-        "HTTP $(resp.status) sizing $(repr(uri)): expected 206 with a Content-Range " *
+    status, contentrange, _ = _httpget(t, url, "bytes=0-0")
+    status == 206 || error(
+        "HTTP $status sizing $(repr(uri)): expected 206 with a Content-Range " *
             "header; a server that ignores Range cannot report a total size this way",
     )
-
-    contentrange = HTTP.header(resp, "Content-Range", "")
     m = match(r"^bytes\s+\d+-\d+/(\d+)$", contentrange)
     m === nothing && error(
         "sizing $(repr(uri)): could not read a total from Content-Range " *
@@ -167,92 +183,61 @@ end
 # the object's size: a `206` states both in `Content-Range`, a `200` is a
 # server ignoring `Range` and sending the whole object, and a `416` is a range
 # holding no byte of an empty object, with the size in `Content-Range`.
-#
-# The response is streamed so that `onsize(total)` runs as soon as the headers
-# arrive, before the body has, which is how a second request can be started
-# on what the first reveals without waiting for its bytes.
-function _httpclipped(
-        t::HTTPTransport, uri::AbstractString, rangeheader::AbstractString;
-        onsize = Returns(nothing),
-    )
-    body = UInt8[]
-    start = total = UInt64(0)
-    status = 0
-    try
-        HTTP.open(
-            "GET", uri, ["Range" => rangeheader];
-            client = t.client, retries = t.retries, status_exception = false,
-        ) do stream
-            resp = HTTP.startread(stream)
-            status = resp.status
-            contentrange = HTTP.header(resp, "Content-Range", "")
-            if status == 206
-                start, total = _contentrange(contentrange, rangeheader, uri)
-                onsize(total)
-            elseif status == 416
-                m = match(r"^bytes\s+\*/(\d+)$", contentrange)
-                m === nothing && error(
-                    "HTTP 416 for $rangeheader from $(repr(uri)) carried no size in " *
-                        "Content-Range: $(repr(contentrange))",
-                )
-                total = parse(UInt64, m[1])
-                onsize(total)
-            end
-            body = read(stream)
-        end
-    catch err
-        throw(
-            ErrorException("HTTP request failed fetching $rangeheader from $(repr(uri)): $err")
-        )
-    end
+function _httpclipped(t::HTTPTransport, uri::AbstractString, rangeheader::AbstractString;
+                      progress = nothing)
+    status, contentrange, body = _httpget(t, uri, rangeheader; progress)
     status in (200, 206, 416) ||
         error("HTTP $status fetching $rangeheader from $(repr(uri))")
     status == 200 && return body, UInt64(0), UInt64(length(body))
-    status == 416 && return UInt8[], UInt64(0), total
+    if status == 416
+        m = match(r"^bytes\s+\*/(\d+)$", contentrange)
+        m === nothing && error(
+            "HTTP 416 for $rangeheader from $(repr(uri)) carried no size in " *
+                "Content-Range: $(repr(contentrange))",
+        )
+        return UInt8[], UInt64(0), parse(UInt64, m[1])
+    end
+    start, total = _contentrange(contentrange, rangeheader, uri)
     return body, start, total
 end
 
 """
     _fetchends(t::HTTPTransport, uri, head, tail) -> (headbytes, tailbytes, size)
 
-Both ends of `uri` without a request spent sizing it. The request for the
-head states the object's size in its response headers, and the request for
-the tail goes out as soon as they arrive, so the two overlap and the tail
-asks only for bytes the head does not hold.
+Both ends of `uri` without a request spent sizing it. The tail is a suffix
+range, requested as soon as the head's headers show a full head — an object
+no longer than the head is answered by the head request alone — so the two
+overlap, and each response states the object's size. On an object shorter
+than both together the tail repeats bytes the head holds, at most `tail` of
+them.
 """
 function _fetchends(t::HTTPTransport, uri::AbstractString, head::Integer, tail::Integer)
     _httpuri(uri)
+    head == 0 && tail == 0 && return UInt8[], UInt8[], objectsize(t, uri)
     if head == 0
-        tail == 0 && return UInt8[], UInt8[], objectsize(t, uri)
         body, start, total = _httpclipped(t, uri, "bytes=-$tail")
         tl = min(UInt64(tail), total)
         return UInt8[], _bodyspan(body, start, total - tl, tl, uri), total
     end
 
     tailtask = Ref{Union{Nothing, Task}}(nothing)
-    function starttail(total)
-        tl = min(UInt64(tail), total - min(UInt64(head), total))
-        tl == 0 && return nothing
-        tailtask[] = Threads.@spawn _httpclipped(t, uri, "bytes=$(total - tl)-$(total - 1)")
-        return nothing
+    lock = ReentrantLock()
+    starttail(length, _) = length == head && tail > 0 && @lock lock begin
+        tailtask[] === nothing && (tailtask[] = Threads.@spawn _httpclipped(t, uri, "bytes=-$tail"))
     end
-    body, start, total = _httpclipped(t, uri, "bytes=0-$(head - 1)"; onsize = starttail)
+    body, start, total = _httpclipped(t, uri, "bytes=0-$(head - 1)"; progress = starttail)
 
     h = min(UInt64(head), total)
     headbytes = h == 0 ? UInt8[] : _bodyspan(body, start, UInt64(0), h, uri)
     tl = min(UInt64(tail), total - h)
-    tailbytes = if tl == 0
-        UInt8[]
-    elseif tailtask[] === nothing
-        # The server sent the whole object in answer to the head request.
-        _bodyspan(body, start, total - tl, tl, uri)
-    else
-        tbody, tstart, ttotal = fetch(tailtask[])
-        ttotal == total || error(
-            "$(repr(uri)) reported sizes $total and $ttotal in two responses; it " *
-                "changed while being read",
-        )
-        _bodyspan(tbody, tstart, total - tl, tl, uri)
-    end
-    return headbytes, tailbytes, total
+    tl == 0 && return headbytes, UInt8[], total
+    task = @lock lock tailtask[]
+    # The head response held the whole object, as a server ignoring `Range` sends it.
+    task === nothing && return headbytes, _bodyspan(body, start, total - tl, tl, uri), total
+    tbody, tstart, ttotal = fetch(task)
+    ttotal == total || error(
+        "$(repr(uri)) reported sizes $total and $ttotal in two responses; it " *
+            "changed while being read",
+    )
+    return headbytes, _bodyspan(tbody, tstart, total - tl, tl, uri), total
 end
