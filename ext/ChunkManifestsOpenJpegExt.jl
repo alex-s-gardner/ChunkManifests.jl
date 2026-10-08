@@ -87,6 +87,10 @@ end
 # C function pointers are valid only in the process that made them.
 const _CALLBACKS = Ref{NTuple{4, Ptr{Cvoid}}}()
 
+# Decodes under way. A tile is decoded with a share of Julia's threads, so a read of one tile uses them
+# all and a read of many decodes its tiles side by side, one thread each, as Zarr.jl schedules them.
+const _INFLIGHT = Threads.Atomic{Int}(0)
+
 function _fail(d::_Decode, step::AbstractString)
     detail = isempty(d.errors) ? "" : ": " * join(d.errors, "; ")
     throw(ErrorException("libopenjp2 failed to $step a JPEG 2000 tile$detail"))
@@ -100,6 +104,7 @@ function _decode!(dest::AbstractArray{T}, codestream::Vector{UInt8}, bounds, chu
     codec = ccall((:opj_create_decompress, libopenjp2), Ptr{Cvoid}, (Cint,), _OPJ_CODEC_J2K)
     codec == C_NULL && throw(ErrorException("libopenjp2 could not create a decoder"))
     stream = C_NULL
+    Threads.atomic_add!(_INFLIGHT, 1)
     GC.@preserve d params begin
         try
             ccall((:opj_set_error_handler, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
@@ -107,6 +112,8 @@ function _decode!(dest::AbstractArray{T}, codestream::Vector{UInt8}, bounds, chu
             ccall((:opj_set_default_decoder_parameters, libopenjp2), Cvoid, (Ptr{UInt8},), params)
             ccall((:opj_setup_decoder, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{UInt8}), codec, params) == 1 ||
                 _fail(d, "set up the decoder for")
+            threads = max(1, Threads.nthreads() ÷ max(1, _INFLIGHT[]))
+            ccall((:opj_codec_set_threads, libopenjp2), Cint, (Ptr{Cvoid}, Cint), codec, threads)
             stream = ccall((:opj_stream_create, libopenjp2), Ptr{Cvoid}, (Csize_t, Cint),
                 Csize_t(max(length(codestream), 1)), Cint(1))
             stream == C_NULL && throw(ErrorException("libopenjp2 could not create a stream"))
@@ -128,6 +135,7 @@ function _decode!(dest::AbstractArray{T}, codestream::Vector{UInt8}, bounds, chu
             image[] == C_NULL || ccall((:opj_image_destroy, libopenjp2), Cvoid, (Ptr{_OpjImage},), image[])
             stream == C_NULL || ccall((:opj_stream_destroy, libopenjp2), Cvoid, (Ptr{Cvoid},), stream)
             ccall((:opj_destroy_codec, libopenjp2), Cvoid, (Ptr{Cvoid},), codec)
+            Threads.atomic_sub!(_INFLIGHT, 1)
         end
     end
     return dest

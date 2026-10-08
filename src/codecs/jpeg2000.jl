@@ -20,6 +20,50 @@ compressing a chunk throws.
 """
 struct JPEG2000Tile <: Zarr.Compressor
     header::Vector{UInt8}
+    # Names this compressor's tiles in `_J2K_TILES`: one per opened array, so two files never share an
+    # entry, and unlike `objectid` never reused.
+    id::Int
+end
+
+const _J2K_NEXTID = Threads.Atomic{Int}(0)
+
+JPEG2000Tile(header::AbstractVector{UInt8}) = JPEG2000Tile(Vector{UInt8}(header), Threads.atomic_add!(_J2K_NEXTID, 1) + 1)
+
+# Decoded tiles, kept so that windows sharing a tile decode it once. Decoding a 1024² tile costs hundreds
+# of times what copying it does, and a sweep of small windows over a scene touches each tile many times. Least
+# recently used first out, within `_J2K_TILE_BYTES`; keyed by compressor and tile index.
+const _J2K_TILE_BYTES = 512 * 1024^2
+const _J2K_TILES = Dict{Tuple{Int, Int}, Tuple{Vector{UInt8}, Int}}()
+const _J2K_TILES_LOCK = ReentrantLock()
+const _J2K_TICK = Ref(0)
+const _J2K_HELD = Ref(0)
+
+function _j2k_cached!(dest::AbstractArray{T}, key) where {T}
+    hit = @lock _J2K_TILES_LOCK begin
+        entry = get(_J2K_TILES, key, nothing)
+        entry === nothing || (_J2K_TILES[key] = (first(entry), _J2K_TICK[] += 1))
+        entry
+    end
+    hit === nothing && return false
+    bytes = first(hit)
+    length(bytes) == sizeof(T) * length(dest) || return false
+    copyto!(dest, reinterpret(T, bytes))
+    return true
+end
+
+function _j2k_keep!(key, dest::AbstractArray{T}) where {T}
+    bytes = copyto!(Vector{UInt8}(undef, sizeof(T) * length(dest)), reinterpret(UInt8, vec(dest)))
+    @lock _J2K_TILES_LOCK begin
+        haskey(_J2K_TILES, key) && return nothing
+        _J2K_TILES[key] = (bytes, _J2K_TICK[] += 1)
+        _J2K_HELD[] += length(bytes)
+        while _J2K_HELD[] > _J2K_TILE_BYTES && length(_J2K_TILES) > 1
+            oldest = argmin(k -> last(_J2K_TILES[k]), keys(_J2K_TILES))
+            _J2K_HELD[] -= length(first(_J2K_TILES[oldest]))
+            delete!(_J2K_TILES, oldest)
+        end
+    end
+    return nothing
 end
 
 jpeg2000tile_config(header::AbstractVector{UInt8}) =
@@ -41,8 +85,13 @@ function _j2k_decode!(dest::AbstractArray, compressed, c::JPEG2000Tile)
     length(dest) == siz.xtsiz * siz.ytsiz || throw(
         ArgumentError("a JPEG 2000 chunk holds $(siz.xtsiz)×$(siz.ytsiz) samples, not $(length(dest))")
     )
+    length(compressed) >= 6 || throw(ArgumentError("a JPEG 2000 chunk must start with an SOT marker"))
+    key = (c.id, Int(_j2k_u16(compressed, 5)))
+    _j2k_cached!(dest, key) && return dest
     codestream, bounds = _j2k_tilecodestream(c.header, compressed)
-    return decode(dest, codestream, bounds, (siz.xtsiz, siz.ytsiz))
+    decode(dest, codestream, bounds, (siz.xtsiz, siz.ytsiz))
+    _j2k_keep!(key, dest)
+    return dest
 end
 
 function Zarr.zuncompress(a, c::JPEG2000Tile, T)

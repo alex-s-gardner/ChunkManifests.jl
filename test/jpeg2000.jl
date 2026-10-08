@@ -73,6 +73,22 @@ end
             @test load(manifestpath)["0"]["data"][:, :] == data
         end
 
+        @testset "two files with the same header keep their own decoded tiles" begin
+            # The same size and tiling, so the same main header: decoded tiles are cached per opened array,
+            # and a cache keyed by the header alone would hand one file's tiles to the other.
+            other = rand(UInt16, 150, 97)
+            otherpath = _j2k_fixture(joinpath(dir, "grid_other.jp2"), other, "-t", "64,48")
+            a, b = scan(path)["0"]["data"], scan(otherpath)["0"]["data"]
+            @test a[:, :] == data
+            @test b[:, :] == other
+            @test a[:, :] == data
+        end
+
+        @testset "level 0 is the only level" begin
+            @test scan(path; level = 0)["0"]["data"][:, :] == data
+            @test_throws "has level 0 only" scan(path; level = 1)
+        end
+
         @testset "refused by name" begin
             offset = _j2k_fixture(joinpath(dir, "offset.jp2"), rand(UInt8, 30, 30), "-t", "16,16", "-n", "3", "-d", "5,5")
             @test_throws "a chunk grid has to start where the image does" scan(offset)

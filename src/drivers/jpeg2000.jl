@@ -234,7 +234,13 @@ function _j2k_build(path::AbstractString, filebytes, io::IO, transport::Abstract
     return ChunkManifest(; arrays = Dict{String, ManifestArray}("0/data" => va), provenance, transport)
 end
 
-function _scan(path::AbstractString, driver::JPEG2000Driver; access::SourceAccess = AutoAccess())
+function _scan(
+        path::AbstractString, driver::JPEG2000Driver;
+        level::Union{Nothing, Integer} = nothing, access::SourceAccess = AutoAccess(),
+    )
+    level === nothing || level == 0 || throw(
+        ArgumentError("scan: $path has level 0 only; its reduced resolutions are not read")
+    )
     return _j2k_scan(path, resolve_access(access, driver, path))
 end
 

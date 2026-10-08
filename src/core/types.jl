@@ -738,7 +738,8 @@ Decoding a chunk needs `libopenjp2`: load `OpenJpeg_jll` before reading. The
 scan itself needs nothing beyond this package.
 
 `access` decides how the file is reached; the default reads a remote object in
-place through [`RangeAccess`](@ref).
+place through [`RangeAccess`](@ref). `level = 0`, as [`GeoTIFFDriver`](@ref)
+takes it, is accepted; the codestream's reduced resolutions are not read.
 
 Rejected, by name, with an `ArgumentError`: more than one component, a
 subsampled component, a tile grid offset from the image origin, packed packet
