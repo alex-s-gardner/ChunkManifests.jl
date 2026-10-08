@@ -101,7 +101,7 @@ end
 # rather than re-typed, which would hand a consumer a string where it expects a
 # number. An array's own fill value is unaffected: `.zarray` carries it in the
 # spelling the Zarr v2 spec reserves for it.
-_hasnonfinite(v::AbstractFloat) = !isfinite(v)
+_hasnonfinite(v::Union{AbstractFloat, Complex{<:AbstractFloat}}) = !isfinite(v)
 _hasnonfinite(v::AbstractArray) = any(_hasnonfinite, v)
 _hasnonfinite(@nospecialize(v)) = false
 
