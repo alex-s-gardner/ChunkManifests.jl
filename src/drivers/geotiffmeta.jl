@@ -353,8 +353,10 @@ end
 
 """
     parse_gdal_nodata(::Type{T}, s::AbstractString) where {T<:Real} -> T
+    parse_gdal_nodata(::Type{Complex{T}}, s::AbstractString) where {T<:Real} -> Complex{T}
 
-Parse a `GDAL_NODATA` tag (42113) string into a value of element type `T`.
+Parse a `GDAL_NODATA` tag (42113) string into a value of element type `T`. For a complex element type
+the tag's number is the real part and the imaginary part is zero.
 Accepts integers, floats in any spelling `Base.tryparse(Float64, ...)`
 accepts, and the case-insensitive spellings `"nan"`, `"+nan"`, `"-nan"` when
 `T` is a float type.
@@ -375,3 +377,8 @@ function parse_gdal_nodata(::Type{T}, s::AbstractString) where {T <: Real}
     )
     return T(value)
 end
+
+# A complex band's tag holds one number, as GDAL's nodata is a single double: the fill value is that
+# number as the real part, with a zero imaginary part.
+parse_gdal_nodata(::Type{Complex{T}}, s::AbstractString) where {T <: Real} =
+    Complex{T}(parse_gdal_nodata(T, s), zero(T))
