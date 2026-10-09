@@ -11,14 +11,15 @@ module ChunkManifestsRastersExt
 # lazy DiskArray is its ordinary Raster(A, dims) path, not a special case.
 #
 # Everything above the data array is Rasters' own CommonDataModel machinery
-# applied to the same objects Rasters applies it to itself: dimensions and CRS
-# from `_dims`, attributes from `_metadata`, and CF scaling and fill-value
-# masking from a `ModifiedDiskArray` over the raw variable. A raster built from
-# a manifest is therefore the same object `Raster(path; lazy=true)` builds from
-# a real Zarr store, down to element type and `missingval`, and the `scaled`,
+# applied to the same objects Rasters applies it to itself: dimensions from
+# `_dims`, attributes from `_metadata`, and CF scaling and fill-value masking
+# from a `ModifiedDiskArray` over the raw variable. A raster built from a
+# manifest is therefore the same object `Raster(path; lazy=true)` builds from a
+# real Zarr store, down to element type and `missingval`, and the `scaled`,
 # `missingval`, `coerce` and `raw` keywords mean exactly what they mean there.
-# Nothing here reimplements coordinate, calendar, scaling or grid-mapping
-# handling.
+# Nothing here reimplements coordinate, calendar or scaling handling. The one
+# addition is the default CRS, read from a CF grid-mapping variable's
+# `spatial_epsg` or `crs_wkt`, which released Rasters does not read.
 #
 # Internals of Rasters used deliberately, each pinned by a test in
 # test/rasters.jl so that a Rasters upgrade moving one fails loudly rather than
@@ -103,25 +104,48 @@ function _nolayers(z::ManifestGroup, group::AbstractString)
     )
 end
 
-_epsg(s::AbstractString) = startswith(s, "EPSG:") ? Rasters.EPSG(s) : Rasters.nokw
-_epsg(_) = Rasters.nokw
+_cfepsgcode(x::Integer) = Int(x)
+_cfepsgcode(x::AbstractFloat) = isinteger(x) ? Int(x) : nothing
+_cfepsgcode(x::AbstractString) = tryparse(Int, x)
+# HDF5 hands a numeric attribute over as a one-element vector.
+_cfepsgcode(x::AbstractVector) = length(x) == 1 ? _cfepsgcode(only(x)) : nothing
+_cfepsgcode(_) = nothing
 
-# Build one lazy Raster over `var`, the raw CommonDataModel variable, following
-# the order `Rasters._raster` uses: read the attributes, settle the inner and
-# outer missing values from them, derive the scaling/masking modification, and
-# wrap the variable in it. `_maybe_modify` returns a lazy ModifiedDiskArray, so
-# no chunk is read for the data; `_dims` does read the coordinate variables,
-# because a Sampled or Projected lookup is those coordinate values.
+_wkt(s::AbstractString) =
+    occursin(r"^\s*(PROJCS|GEOGCS|GEOCCS|COMPD_CS|VERT_CS|LOCAL_CS)\[", s) ?
+    Rasters.WellKnownText(Rasters.GeoFormatTypes.CRS(), s) :
+    Rasters.WellKnownText2(Rasters.GeoFormatTypes.CRS(), s)
+
+# The CRS described by the CF grid-mapping variable of `ds` that `metadata`'s
+# `grid_mapping` names: its `spatial_epsg` as an `EPSG` code, else its
+# `crs_wkt`. `nokw` when there is no such variable or it carries neither.
+function _gridmappingcrs(ds, metadata)
+    gm = get(metadata, "grid_mapping", nothing)
+    (gm isa AbstractString && gm in CDM.varnames(ds)) || return Rasters.nokw
+    attrs = CDM.attribs(CDM.variable(ds, gm))
+    code = _cfepsgcode(get(attrs, "spatial_epsg", nothing))
+    code === nothing || return Rasters.EPSG(code)
+    wkt = get(attrs, "crs_wkt", nothing)
+    return wkt isa AbstractString ? _wkt(wkt) : Rasters.nokw
+end
+
+# Build one lazy Raster over `var`, the raw CommonDataModel variable of `ds`,
+# following the order `Rasters._raster` uses: read the attributes, settle the
+# inner and outer missing values from them, derive the scaling/masking
+# modification, and wrap the variable in it. `_maybe_modify` returns a lazy
+# ModifiedDiskArray, so no chunk is read for the data; `_dims` does read the
+# coordinate variables, because a Sampled or Projected lookup is those
+# coordinate values.
 #
-# The one step Rasters does not take itself is the CRS: GeoTIFFDriver records
-# a page's CRS as a `"crs" => "EPSG:<code>"` attribute, which Rasters' CF
-# handling does not read, so that form is turned into the default `crs` here.
+# The one step Rasters does not take itself is the CRS: released Rasters reads
+# no CRS from a CF grid-mapping variable, so the default `crs` is taken from it
+# here.
 function _raster(
-        var, name; crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
+        ds, var, name; crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
     )
     scaled1, missingval1 = Rasters._raw_check(raw, scaled, missingval, verbose)
     metadata = Rasters._metadata(var)
-    crs === Rasters.nokw && (crs = _epsg(get(metadata, "crs", nothing)))
+    crs === Rasters.nokw && (crs = _gridmappingcrs(ds, metadata))
     mvpair = Rasters._read_missingval_pair(var, metadata, missingval1)
     mod = Rasters._mod(eltype(var), metadata, mvpair; scaled = scaled1, coerce)
     return Rasters.Raster(
@@ -147,11 +171,13 @@ the chunks that window covers. Constructing one reads the *coordinate*
 variables, because a `Sampled` or `Projected` lookup is those coordinate
 values; it reads none of the data variable.
 
-Coordinates, CRS, calendars, CF scaling and fill-value masking all come from
-Rasters' own CommonDataModel machinery over the manifest's synthesized Zarr
-metadata, so the result matches what `Raster(path; lazy=true)` builds from a
-real Zarr store. `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce` and `raw`
-mean what they mean there.
+Coordinates, calendars, CF scaling and fill-value masking come from Rasters'
+own CommonDataModel machinery over the manifest's synthesized Zarr metadata,
+so the result matches what `Raster(path; lazy=true)` builds from a real Zarr
+store. The CRS comes from the CF grid-mapping variable the array's
+`grid_mapping` attribute names: its `spatial_epsg` as an `EPSG` code, else its
+`crs_wkt`. `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce` and `raw` mean
+what they mean there; an explicit `crs` overrides the grid-mapping variable.
 
 [`Rasters.RasterStack`](@extref)`(z)` opens one dataset and shares it across
 every layer, so that is the cheaper route to several arrays of one group.
@@ -175,7 +201,7 @@ function Rasters.Raster(
     group, leaf = _splitpath(key)
     ds = _groupof(z, group)
     return _raster(
-        CDM.variable(ds, leaf), leaf;
+        ds, CDM.variable(ds, leaf), leaf;
         crs, mappedcrs, missingval, scaled, coerce, raw, verbose, kw...,
     )
 end
@@ -260,7 +286,7 @@ function Rasters.RasterStack(
 
     layers = [
         _raster(
-            CDM.variable(ds, leaf), leaf;
+            ds, CDM.variable(ds, leaf), leaf;
             crs, mappedcrs, missingval, scaled, coerce, raw, verbose,
         )
             for leaf in layernames

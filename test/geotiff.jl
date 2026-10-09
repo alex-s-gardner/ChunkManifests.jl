@@ -293,7 +293,8 @@ using TiffImages
             va = ChunkManifests.arraysof(group)["0/data"]
             attrs = attrsof(va)
             @test length(attrs["GeoTransform"]) == 16
-            @test !haskey(attrs, "crs")
+            @test !haskey(attrs, "grid_mapping")
+            @test !haskey(ChunkManifests.arraysof(group), "0/spatial_ref")
 
             gt = ChunkManifests.geotransform_from_scale_tiepoint([0.5, 0.5, 0.0], [0.0, 0.0, 0.0, -180.0, 90.0, 0.0])
             @test attrs["GeoTransform"] == collect(gt.matrix)
@@ -331,7 +332,36 @@ using TiffImages
             _gt_writetiff(path, tags, 273, [rand(UInt8, width * height * 2)])
             group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
-            @test attrsof(va)["crs"] == "EPSG:4326"
+            @test attrsof(va)["grid_mapping"] == "spatial_ref"
+            @test !haskey(attrsof(va), "crs")
+
+            # The CRS is a CF grid-mapping variable: a scalar whose attributes
+            # describe it.
+            gm = ChunkManifests.arraysof(group)["0/spatial_ref"]
+            @test size(gm) == ()
+            @test dimnamesof(gm) == String[]
+            @test attrsof(gm)["spatial_epsg"] == 4326
+            @test attrsof(gm)["grid_mapping_name"] == "latitude_longitude"
+            @test startswith(attrsof(gm)["crs_wkt"], "GEOGCRS[\"WGS 84\"")
+            @test occursin("ID[\"EPSG\",4326]", attrsof(gm)["crs_wkt"])
+            zgm = Zarr.zopen(group)["0"]["spatial_ref"]
+            @test zgm.attrs["crs_wkt"] == attrsof(gm)["crs_wkt"]
+            @test zgm[] == 0
+        end
+
+        @testset "grid-mapping attributes come from PROJ" begin
+            ext = Base.get_extension(ChunkManifests, :ChunkManifestsTiffImagesExt)
+            polar = ext._gt_gridmapping("EPSG:3031", "ctx")
+            @test polar["grid_mapping_name"] == "polar_stereographic"
+            @test polar["spatial_epsg"] == 3031
+            @test startswith(polar["crs_wkt"], "PROJCRS[\"WGS 84 / Antarctic Polar Stereographic\"")
+            # CF names no pseudo-Mercator projection: the WKT describes it alone.
+            pseudo = ext._gt_gridmapping("EPSG:3857", "ctx")
+            @test !haskey(pseudo, "grid_mapping_name")
+            @test occursin("Pseudo-Mercator", pseudo["crs_wkt"])
+            @test_throws "ctx: PROJ does not define EPSG:9999" ext._gt_gridmapping("EPSG:9999", "ctx")
+            # Scans run on several threads; each call has its own PROJ context.
+            @test all(==(polar), fetch.([Threads.@spawn(ext._gt_gridmapping("EPSG:3031", "ctx")) for _ in 1:8]))
         end
 
         @testset "GDAL_NODATA becomes the fill value" begin
@@ -536,7 +566,7 @@ using TiffImages
             # One group per level, each with its own coordinates: dimensions of
             # one name share one length within a group, as CF readers require.
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) ==
-                ["$l/$v" for l in 0:2 for v in ("data", "x", "y")]
+                ["$l/$v" for l in 0:2 for v in ("data", "spatial_ref", "x", "y")]
             va0, va1, va2 = (ChunkManifests.arraysof(group)["$l/data"] for l in 0:2)
 
             @test size(va0) == (9, 4)
@@ -584,9 +614,13 @@ using TiffImages
         end
 
         @testset "CRS and nodata inherited by reduced-resolution overviews" begin
-            @test attrsof(va0)["crs"] == "EPSG:32610"
-            @test attrsof(va1)["crs"] == "EPSG:32610"
-            @test attrsof(va2)["crs"] == "EPSG:32610"
+            for (l, va) in pairs((va0, va1, va2))
+                @test attrsof(va)["grid_mapping"] == "spatial_ref"
+                gm = attrsof(ChunkManifests.arraysof(group)["$(l - 1)/spatial_ref"])
+                @test gm["spatial_epsg"] == 32610
+                @test gm["grid_mapping_name"] == "transverse_mercator"
+                @test occursin("WGS 84 / UTM zone 10N", gm["crs_wkt"])
+            end
             @test fillvalueof(va0) == UInt16(9999)
             @test fillvalueof(va1) == UInt16(9999)
             @test fillvalueof(va2) == UInt16(9999)
@@ -640,12 +674,13 @@ using TiffImages
 
             group = _scan(path, GeoTIFFDriver())
             @test sort(collect(keys(ChunkManifests.arraysof(group)))) ==
-                ["$l/$v" for l in 0:1 for v in ("data", "x", "y")]
+                ["$l/$v" for l in 0:1 for v in ("data", "spatial_ref", "x", "y")]
             vasub = ChunkManifests.arraysof(group)["1/data"]
             @test size(vasub) == (subwidth, subheight)
             @test attrsof(vasub)["reduced_resolution"] == true
             @test attrsof(vasub)["tiff_page"] == "0.sub1"
-            @test attrsof(vasub)["crs"] == "EPSG:32610"
+            @test attrsof(vasub)["grid_mapping"] == "spatial_ref"
+            @test attrsof(ChunkManifests.arraysof(group)["1/spatial_ref"])["spatial_epsg"] == 32610
             @test attrsof(vasub)["GeoTransform"][1] ≈ (width * 1.0) / subwidth
 
             store = group
@@ -735,9 +770,9 @@ using TiffImages
             path = joinpath(dir, "pyramid.tif")
             full = _scan(path, GeoTIFFDriver())
             one = _scan(path, GeoTIFFDriver(); level = 1)
-            @test sort(collect(keys(arraysof(one)))) == ["1/data", "1/x", "1/y"]
+            @test sort(collect(keys(arraysof(one)))) == ["1/data", "1/spatial_ref", "1/x", "1/y"]
             va = arraysof(one)["1/data"]
-            @test attrsof(va)["crs"] == "EPSG:32610"
+            @test attrsof(arraysof(one)["1/spatial_ref"])["spatial_epsg"] == 32610
             @test fillvalueof(va) == UInt16(9999)
             @test attrsof(va)["GeoTransform"] == attrsof(arraysof(full)["1/data"])["GeoTransform"]
             @test Array(Zarr.zopen(one)["1"]["x"]) == Array(Zarr.zopen(full)["1"]["x"])

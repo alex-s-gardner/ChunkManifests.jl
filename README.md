@@ -68,8 +68,8 @@ using Rasters, ZarrDatasets
 Raster(z, "v")
 ```
 
-Until [Rasters.jl#936](https://github.com/rafaqz/Rasters.jl/pull/936) is released, a CF
-`grid_mapping` does not become a CRS, so pass `crs` yourself.
+A CF grid-mapping variable becomes the raster's CRS when it carries `spatial_epsg` or
+`crs_wkt`. One that holds only projection parameters does not, so pass `crs` yourself.
 
 A cloud-optimized GeoTIFF has one group per resolution level, `"0"` being full resolution:
 

@@ -82,7 +82,9 @@ const _YX_DD = YAXArrays.DD
     @testset "a GeoTIFF level group opens as a dataset with coordinate axes" begin
         z = Zarr.zopen(_scan(GEOTIFF_JUNK_PATH, GeoTIFFDriver()))["0"]
         lds = YAXArrays.open_dataset(z)
-        @test collect(keys(lds.cubes)) == [:data]
+        # YAXArrays opens every variable but the coordinates as a cube, the
+        # scalar grid-mapping variable included.
+        @test sort(collect(keys(lds.cubes))) == [:data, :spatial_ref]
         c = lds["data"]
         @test collect(_YX_DD.lookup(c, :x)) == Array(z["x"])
         @test collect(_YX_DD.lookup(c, :y)) == Array(z["y"])

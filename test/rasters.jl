@@ -233,8 +233,8 @@ _ra_decode(hv) = Union{Missing, Float64}[
         @test map(Rasters.name, Rasters.dims(r)) == (:X, :Y)
         @test collect(Rasters.lookup(r, Rasters.X)) == Array(z["x"])
         @test collect(Rasters.lookup(r, Rasters.Y)) == Array(z["y"])
-        epsg = attrsof(arraysof(cm)["0/data"])["crs"]
-        @test Rasters.crs(r) == Rasters.EPSG(parse(Int, last(split(epsg, ':'))))
+        epsg = attrsof(arraysof(cm)["0/spatial_ref"])["spatial_epsg"]
+        @test Rasters.crs(r) == Rasters.EPSG(epsg)
         @test isequal(Array(Rasters.Raster(asgroup(cm), "0/data"; raw = true)), Array(z["data"]))
 
         # An explicit crs wins over the recorded one.
@@ -270,7 +270,7 @@ _ra_decode(hv) = Union{Missing, Float64}[
                 payload = planar ? _gt_planarpayload(data, height) : [Vector{UInt8}(reinterpret(UInt8, vec(data)))],
             )
             cm = _scan(tifpath, GeoTIFFDriver())
-            @test sort(collect(keys(arraysof(cm)))) == ["0/data", "0/x", "0/y"]
+            @test sort(collect(keys(arraysof(cm)))) == ["0/data", "0/spatial_ref", "0/x", "0/y"]
 
             r = Rasters.Raster(asgroup(cm), "0/data")
             @test map(Rasters.name, Rasters.dims(r)) == dims
@@ -284,6 +284,32 @@ _ra_decode(hv) = Union{Missing, Float64}[
 
             st = Rasters.RasterStack(asgroup(cm); group = "0")
             @test keys(st) == (:data,)
+        end
+    end
+
+    @testset "a grid-mapping variable's crs_wkt becomes the CRS" begin
+        table = ChunkManifests.PathTable()
+        inline(T, shape, values; kw...) =
+            ChunkManifests._inlinearray(T, table, shape, collect(reinterpret(UInt8, T.(values))); kw...)
+        for (wkt, type) in (
+                ("GEOGCRS[\"WGS 84\"]", Rasters.WellKnownText2), ("GEOGCS[\"WGS 84\"]", Rasters.WellKnownText),
+            )
+            cm = ChunkManifest(;
+                table,
+                arrays = Dict{String, ManifestArray}(
+                    "v" => inline(
+                        Float64, (2, 3), zeros(6);
+                        dimnames = ["x", "y"], attrs = Dict{String, Any}("grid_mapping" => "crs"),
+                    ),
+                    "x" => inline(Float64, (2,), [1.0, 2.0]; dimnames = ["x"]),
+                    "y" => inline(Float64, (3,), [1.0, 2.0, 3.0]; dimnames = ["y"]),
+                    "crs" => inline(Int32, (), [0]; dimnames = String[], attrs = Dict{String, Any}("crs_wkt" => wkt)),
+                ),
+            )
+            crs = Rasters.crs(Rasters.Raster(asgroup(cm), "v"))
+            @test crs isa type
+            @test Rasters.GeoFormatTypes.val(crs) == wkt
+            @test keys(Rasters.RasterStack(asgroup(cm))) == (:v,)
         end
     end
 
@@ -373,25 +399,22 @@ _ra_decode(hv) = Union{Missing, Float64}[
             @test Rasters.span(Rasters.lookup(xd)) == Rasters.Regular(240.0)
             @test Rasters.span(Rasters.lookup(yd)) == Rasters.Regular(-240.0)
 
-            # The CRS this file carries lives in the attributes of `mapping`,
-            # which cannot be scanned yet, so the lookups are Mapped with no
-            # projection attached. Supplying one explicitly shows that the crs
-            # keyword reaches Rasters: what is missing is the file's CRS, not
-            # the plumbing for it.
-            @test Rasters.crs(r) === nothing
-            projected = Rasters.Raster(asgroup(cm), "grounded"; crs = Rasters.EPSG(3031))
-            @test Rasters.crs(projected) == Rasters.EPSG(3031)
+            # The scan of `grounded` brings along the `mapping` variable its
+            # `grid_mapping` names, and the CRS comes from mapping's
+            # spatial_epsg. An explicit crs overrides it.
+            @test Rasters.crs(r) == Rasters.EPSG(3031)
+            projected = Rasters.Raster(asgroup(cm), "grounded"; crs = Rasters.EPSG(3413))
+            @test Rasters.crs(projected) == Rasters.EPSG(3413)
             @test collect(Rasters.lookup(Rasters.dims(projected, Rasters.X))) == xv
         end
 
         @testset "the projection parameters reach a CF reader" begin
-            # Delivering these faithfully is where this package's job ends.
-            # Turning them into a CRS is Rasters' side, and the method that
-            # would do it is `_dims(var, crs, mappedcrs)` — the one the
-            # extension already calls — so a Raster built here picks a CRS up
-            # with no change on this side once Rasters reads these keys.
             cm = _scan(_RA_ITSLIVE_PATH, HDF5Driver())
             ds = ZarrDatasets.ZarrDataset(cm)
+
+            # The extension reads the grid-mapping variable's spatial_epsg,
+            # which HDF5 hands over as the one-element vector [3031.0].
+            @test Rasters.crs(Rasters.Raster(asgroup(cm), "grounded")) == Rasters.EPSG(3031)
 
             # The data variable names its grid-mapping variable, which is the
             # link a CF reader follows.

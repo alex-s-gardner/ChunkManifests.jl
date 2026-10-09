@@ -123,17 +123,18 @@ CDM CRS if they are available in string form", open since 2025-04-10. Issue
 thing. The work sits on branch `as/cfcrs-again`.
 
 No released Rasters interprets CF `grid_mapping` attributes into a CRS; v0.15.0
-and `main` only copy them into layer metadata. So a `Raster` over a manifest
-has `crs === nothing` unless `crs` is passed explicitly, exactly as one over a
-real NetCDF file does.
+and `main` only copy them into layer metadata. `ext/ChunkManifestsRastersExt.jl`
+therefore reads the grid-mapping variable itself: its `spatial_epsg` (numeric,
+string or one-element vector) as an `EPSG`, else its `crs_wkt`. A `Raster` over
+a manifest has a CRS when its grid-mapping variable carries either; one over a
+real NetCDF file opened by Rasters does not.
 
-The PR patches `_dims(var, crs, mappedcrs)`, which is the method
-`ext/ChunkManifestsRastersExt.jl` already calls, so a `Raster` built from a
-manifest gains a CRS with no change on this side when it lands.
-
-Two defects would still prevent it working on
-`antarctic_grounded_ice.nc`, both independent of this package — HDF5.jl reads
-the same values from the file directly:
+The PR patches `_dims(var, crs, mappedcrs)`, which is the method the extension
+already calls, and leaves a `crs` passed to it alone. The extension's own
+lookup can be removed once a release reads both attributes correctly, which
+the two defects below prevent on `antarctic_grounded_ice.nc`. Both are
+independent of this package — HDF5.jl reads the same values from the file
+directly:
 
 - `_crs_from_cf_attr` does `EPSG(parse(Int, attr["spatial_epsg"]))`, but
   `spatial_epsg` is numeric, not a string: HDF5 stores it as a one-element
@@ -368,6 +369,15 @@ way.
 `test/aqua.jl` turns that one check off for this reason. Either Aqua skipping a
 manifest entry it cannot read, or AWSS3 dropping SymDict, restores it. Neither
 has been reported upstream.
+
+## YAXArrays.jl — a grid-mapping variable opens as a cube
+
+`YAXArrays.open_dataset` on a GeoTIFF level group lists the scalar
+`spatial_ref` grid-mapping variable as a cube beside `data`, where Rasters'
+`RasterStack` leaves grid-mapping variables out of its layers. The variable is
+standard CF, as rioxarray and GDAL write it, so this is how YAXArrays treats
+such a variable in any CF dataset rather than something this package can
+avoid without dropping it. Not reported.
 
 ## Version pins this forces
 

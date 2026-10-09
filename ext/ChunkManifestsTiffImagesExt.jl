@@ -1,6 +1,7 @@
 module ChunkManifestsTiffImagesExt
 
 using ChunkManifests
+import Proj
 import TiffImages
 
 # Dimension convention for every array this driver produces: Julia order is
@@ -204,6 +205,94 @@ function _gt_fillvalue(::Type{T}, ifd) where {T}
     return ChunkManifests.parse_gdal_nodata(T, s)
 end
 
+# Name of the CF grid-mapping variable in each level's group, and the value of
+# the `grid_mapping` attribute naming it on that level's arrays. GDAL and
+# rioxarray use the same name.
+const _GT_GRIDMAPPING = "spatial_ref"
+
+# CF `grid_mapping_name` of each EPSG coordinate-operation method that CF names.
+# A projection whose method is missing here gets no `grid_mapping_name`;
+# `crs_wkt` still describes it in full.
+const _GT_CF_METHODS = Dict(
+    "9801" => "lambert_conformal_conic",       # Lambert Conic Conformal (1SP)
+    "9802" => "lambert_conformal_conic",       # Lambert Conic Conformal (2SP)
+    "9804" => "mercator",                      # Mercator (variant A)
+    "9805" => "mercator",                      # Mercator (variant B)
+    "9807" => "transverse_mercator",
+    "9809" => "stereographic",                 # Oblique Stereographic
+    "9810" => "polar_stereographic",           # variant A
+    "9829" => "polar_stereographic",           # variant B
+    "9830" => "polar_stereographic",           # variant C
+    "9820" => "lambert_azimuthal_equal_area",
+    "9822" => "albers_conical_equal_area",
+    "9835" => "lambert_cylindrical_equal_area",
+    "9840" => "orthographic",
+)
+
+# The attributes of the CF grid-mapping variable for `crs`, an `"EPSG:<code>"`
+# string: `crs_wkt` (WKT2:2019), `spatial_epsg`, and `grid_mapping_name` when
+# CF names the CRS's projection method. Projection parameters are not written
+# as separate attributes; `crs_wkt` carries them.
+#
+# Each call uses its own PROJ context: files are scanned on several threads at
+# once, and a context must not be shared between threads.
+function _gt_gridmapping(crs::AbstractString, context::AbstractString)
+    ctx = Proj.proj_context_create()
+    pj = op = C_NULL
+    try
+        pj = try
+            Proj.proj_create(crs, ctx)
+        catch e
+            e isa Proj.PROJError || rethrow()
+            throw(ArgumentError("$context: PROJ does not define $crs ($(strip(sprint(showerror, e))))"))
+        end
+        attrs = Dict{String, Any}(
+            "crs_wkt" => Proj.proj_as_wkt(pj, Proj.PJ_WKT2_2019, C_NULL, ctx),
+            "spatial_epsg" => parse(Int, chopprefix(crs, "EPSG:")),
+        )
+        type = Proj.proj_get_type(pj)
+        if type == Proj.PJ_TYPE_GEOGRAPHIC_2D_CRS
+            attrs["grid_mapping_name"] = "latitude_longitude"
+        elseif type == Proj.PJ_TYPE_PROJECTED_CRS
+            op = Proj.proj_crs_get_coordoperation(pj, ctx)
+            name, auth, code = Ref{Cstring}(), Ref{Cstring}(), Ref{Cstring}()
+            Proj.proj_coordoperation_get_method_info(op, name, auth, code, ctx) == 1 ||
+                throw(ArgumentError("$context: PROJ reports no projection method for $crs"))
+            cfname = unsafe_string(auth[]) == "EPSG" ?
+                get(_GT_CF_METHODS, unsafe_string(code[]), nothing) : nothing
+            cfname === nothing || (attrs["grid_mapping_name"] = cfname)
+        end
+        return attrs
+    finally
+        op == C_NULL || Proj.proj_destroy(op)
+        pj == C_NULL || Proj.proj_destroy(pj)
+        Proj.proj_context_destroy(ctx)
+    end
+end
+
+# Grid-mapping attributes by CRS, kept for the life of the process: PROJ's
+# database does not change within one, and building them costs about as much
+# as scanning a small GeoTIFF. They are built outside the lock, so concurrent
+# scans do not wait on each other's PROJ queries; two scans meeting a new CRS at
+# once both build the same attributes.
+const _GT_GRIDMAPPINGS = Dict{String, Dict{String, Any}}()
+const _GT_GRIDMAPPINGS_LOCK = ReentrantLock()
+
+# A fresh copy, so that no two arrays share one attribute dictionary.
+function _gt_cachedgridmapping(crs::AbstractString, context::AbstractString)
+    attrs = @lock _GT_GRIDMAPPINGS_LOCK get(_GT_GRIDMAPPINGS, crs, nothing)
+    if attrs === nothing
+        attrs = _gt_gridmapping(crs, context)
+        @lock _GT_GRIDMAPPINGS_LOCK _GT_GRIDMAPPINGS[crs] = attrs
+    end
+    return copy(attrs)
+end
+
+# The scalar grid-mapping variable. Its one value is never read; what it
+# carries is its attributes.
+_gt_gridmappingarray(table, attrs) =
+    ChunkManifests._inlinearray(Int32, table, (), collect(reinterpret(UInt8, Int32[0])); attrs, dimnames = String[])
+
 # Raw GeoTIFF tag values, decoded by src/drivers/geotiffmeta.jl into a CRS
 # (when GeoKeyDirectoryTag identifies one) and a pixel-to-world affine
 # transform (when either ModelTransformationTag or the ModelPixelScaleTag +
@@ -214,10 +303,12 @@ end
 # `_gt_scanifd`): used only when this page has no geo tags of its own. Own
 # tags, when present, always take precedence over `inherit`.
 #
-# Returns `(attrs, owngeo, coords)`. `owngeo` is this page's own (uninherited)
+# Returns `(attrs, owngeo, coords, crs)`. `owngeo` is this page's own (uninherited)
 # `(; pixelscale, tiepoint, crs, rastertype)`, which its overviews inherit when
 # this page is a full-resolution primary. `coords` is `(; x, y)`, the pixel-center
-# coordinates along each axis, or `nothing` when no geotransform is known.
+# coordinates along each axis, or `nothing` when no geotransform is known. `crs`
+# is the page's CRS, own or inherited, as `"EPSG:<code>"`, or `nothing`; when it
+# is known, `attrs` names the level's grid-mapping variable that describes it.
 function _gt_geoattrs(ifd, shape, context::AbstractString; inherit = nothing)
     pixelscale = TiffImages.MODELPIXELSCALE in ifd ? _gt_asvector(ifd[TiffImages.MODELPIXELSCALE].data) : nothing
     tiepoint = TiffImages.MODELTIEPOINT in ifd ? _gt_asvector(ifd[TiffImages.MODELTIEPOINT].data) : nothing
@@ -238,7 +329,7 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit = nothing)
     ownrastertype = get(geokeys, ChunkManifests.GEOKEY_GTRasterTypeGeoKey, ChunkManifests.RASTER_PIXEL_IS_AREA)
 
     crs = owncrs !== nothing ? owncrs : (inherit === nothing ? nothing : inherit.crs)
-    crs !== nothing && (attrs["crs"] = crs)
+    crs !== nothing && (attrs["grid_mapping"] = _GT_GRIDMAPPING)
 
     width, height = shape
     gt, rastertype = if transformation !== nothing
@@ -273,7 +364,7 @@ function _gt_geoattrs(ifd, shape, context::AbstractString; inherit = nothing)
     gdalmetadata !== nothing && (attrs["GDALMetadata"] = gdalmetadata)
 
     owngeo = (; pixelscale, tiepoint, crs = owncrs, rastertype = ownrastertype)
-    return attrs, owngeo, coords
+    return attrs, owngeo, coords, crs
 end
 
 function _gt_scantiled(
@@ -519,13 +610,14 @@ function _gt_inheritance(ifd, path::AbstractString, key::AbstractString)
     context = "$path: page \"$key\""
     width, height = _gt_width(ifd), _gt_height(ifd)
     T = _gt_eltype(ifd, TiffImages.nsamples(ifd), context)
-    _, owngeo, _ = _gt_geoattrs(ifd, (width, height), context)
+    _, owngeo, _, _ = _gt_geoattrs(ifd, (width, height), context)
     return _gt_record(owngeo, width, height, _gt_fillvalue(T, ifd))
 end
 
 # One page as one array. Returns the array, its pixel-center coordinates
-# (`nothing` when the page has no geotransform, own or inherited), and the
-# record its overviews inherit should it be a primary.
+# (`nothing` when the page has no geotransform, own or inherited), its CRS
+# (`nothing` when none is known), and the record its overviews inherit should
+# it be a primary.
 function _gt_scanifd(
         driver::ChunkManifests.GeoTIFFDriver, table, fileindex, ifd, path::AbstractString, key::AbstractString;
         sft::Integer, inherit,
@@ -564,7 +656,7 @@ function _gt_scanifd(
         ((width, height), chunkshape2, manifest2, compressor, filters, ["x", "y"])
     end
 
-    attrs, owngeo, coords = _gt_geoattrs(ifd, (width, height), context; inherit)
+    attrs, owngeo, coords, crs = _gt_geoattrs(ifd, (width, height), context; inherit)
 
     # NewSubfileType (254): a bit field. Bit 0 marks a reduced-resolution
     # overview, bit 1 one page of an otherwise-ordinary multi-page image, bit
@@ -587,7 +679,7 @@ function _gt_scanifd(
         manifest, shape, chunkshape;
         fillvalue, compressor, filters, attrs, dimnames,
     )
-    return va, coords, _gt_record(owngeo, width, height, fillvalue)
+    return va, coords, crs, _gt_record(owngeo, width, height, fillvalue)
 end
 
 # Assigns every page to an image and a resolution level within it.
@@ -760,6 +852,7 @@ function _gt_build(
     # record is in place before an overview or mask needs it.
     inheritance = Dict{String, Any}()
     arrays = Dict{String, ChunkManifests.ManifestArray}()
+    groupcrs = Dict{String, String}()
     for p in placed
         primary = p.parent === nothing
         if !(level === nothing || p.level == level)
@@ -767,7 +860,7 @@ function _gt_build(
             continue
         end
         inherit = primary ? nothing : inheritance[p.parent]
-        va, coords, record = _gt_scanifd(driver, table, fileindex, p.ifd, path, p.key; p.sft, inherit)
+        va, coords, crs, record = _gt_scanifd(driver, table, fileindex, p.ifd, path, p.key; p.sft, inherit)
         primary && (inheritance[p.key] = record)
         group = multi ? "$(p.image)/$(p.level)" : string(p.level)
         arrays["$group/$(p.mask ? "mask" : "data")"] = va
@@ -775,6 +868,16 @@ function _gt_build(
             arrays["$group/x"] = _gt_coordinate(table, coords.x, "x")
             arrays["$group/y"] = _gt_coordinate(table, coords.y, "y")
         end
+        crs === nothing && continue
+        # A level's data and mask share the level's one grid-mapping variable.
+        get!(groupcrs, group, crs) == crs || throw(
+            ArgumentError(
+                "$path: page \"$(p.key)\" has CRS $crs but another page of group \"$group\" " *
+                    "has $(groupcrs[group]), and a group has one grid-mapping variable",
+            )
+        )
+        gm = _gt_cachedgridmapping(crs, "$path: page \"$(p.key)\"")
+        arrays["$group/$_GT_GRIDMAPPING"] = _gt_gridmappingarray(table, gm)
     end
 
     provenance = Dict{String, Any}("driver" => "GeoTIFFDriver", "scanned_at" => time())
