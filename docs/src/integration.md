@@ -61,8 +61,13 @@ The raster is lazy: a windowed read fetches only the chunks it covers. Rasters' 
 keywords — `crs`, `mappedcrs`, `missingval`, `scaled`, `coerce`, `raw` — work as they do for
 any NetCDF file. Dimension and `grid_mapping` variables are not stack layers.
 
-A GeoTIFF level gets its coordinates and the file's EPSG code as its CRS; a `crs` keyword
-overrides it:
+The CRS comes from the CF grid-mapping variable an array's `grid_mapping` attribute names:
+its `spatial_epsg` as an `EPSG` code, else its `crs_wkt`. A grid-mapping variable holding
+only projection parameters gives no CRS, so pass `crs` for one. A `crs` keyword always
+overrides the grid-mapping variable.
+
+A GeoTIFF level gets its coordinates and a `spatial_ref` grid-mapping variable for the
+file's EPSG code:
 
 ```julia
 using TiffImages

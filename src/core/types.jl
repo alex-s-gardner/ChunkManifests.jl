@@ -666,7 +666,11 @@ full-resolution image, `"1"` its first overview, and so on by decreasing size. A
 
 - `"data"`, its pixels;
 - `"mask"`, when the file carries a transparency mask of that size;
-- `"x"` and `"y"`, the pixel-center coordinates, when the image is georeferenced.
+- `"x"` and `"y"`, the pixel-center coordinates, when the image is georeferenced;
+- `"spatial_ref"`, a CF grid-mapping variable, when the GeoKeys name an EPSG code. The
+  level's arrays name it in their `grid_mapping` attribute. Its attributes are
+  `crs_wkt` (WKT2:2019, from PROJ), `spatial_epsg`, and `grid_mapping_name` when CF names the
+  projection; projection parameters are not written separately, as `crs_wkt` carries them.
 
 A TIFF holding several separate full-resolution images keys each under its
 0-based image index, as `"<image>/<level>/data"`. No strip or tile is read or

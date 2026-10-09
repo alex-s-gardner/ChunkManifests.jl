@@ -160,6 +160,25 @@ _sr_concat(members, dim; kw...) = _manifest(concat([_sr_group(x) for x in member
         @test size(arraysof(lenient)["x"]) == (4,)
         @test size(arraysof(lenient)["h"]) == (8,)
 
+        # Differing attributes are caught by the default too: a GeoTIFF's CRS
+        # lives in the attributes of its scalar grid-mapping variable, which is
+        # never concatenated.
+        function _mapped(uri, epsg)
+            return ChunkManifest(;
+                arrays = Dict{String, ManifestArray}(
+                    "h" => dummy_manifestarray((4,), (2,), uri; dimnames = ["time"]),
+                    "spatial_ref" => dummy_manifestarray(
+                        Int32, (), (), uri; dimnames = String[], attrs = Dict{String, Any}("spatial_epsg" => epsg),
+                    ),
+                ),
+            )
+        end
+        @test_throws "has different values of attributes [\"spatial_epsg\"]" _sr_concat(
+            [_mapped("f1.bin", 32610), _mapped("f2.bin", 32611)], :time,
+        )
+        @test attrsof(arraysof(_sr_concat([_mapped("f1.bin", 32610), _mapped("f2.bin", 32610)], :time))["spatial_ref"]) ==
+            Dict{String, Any}("spatial_epsg" => 32610)
+
         @test_throws "check=:bogus is not one of" _sr_concat(ser, :time; check = :bogus)
     end
 

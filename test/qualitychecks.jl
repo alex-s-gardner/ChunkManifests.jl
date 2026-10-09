@@ -14,6 +14,9 @@ import JSON
         # Aqua walks the test manifest and throws on SymDict, an AWSS3
         # dependency carrying only a REQUIRE file. Recorded in UPSTREAM.md.
         persistent_tasks = false,
+        # Proj is loaded only by the GeoTIFF extension, so that only a session
+        # scanning GeoTIFFs pays for loading it.
+        stale_deps = (; ignore = [:Proj]),
         # Aqua leaves this off by default. On here, an undocumented exported
         # name fails the suite. It has teeth only on Julia 1.11 and later,
         # where Docs.undocumented_names exists.

@@ -25,6 +25,9 @@ function _membervalues(m::ChunkManifest, key::AbstractString)
     return collect(Zarr.zopen(m; path = key))
 end
 
+_differingkeys(a::AbstractDict, b::AbstractDict) =
+    sort!([k for k in union(keys(a), keys(b)) if !isequal(get(a, k, missing), get(b, k, missing))])
+
 # Verifies that the members agree about an array the series does not
 # concatenate. Only one member's copy of such an array survives, and the
 # inputs cannot be reconciled afterwards: two granules' `x` arrays legitimately
@@ -56,6 +59,9 @@ function _checkshared(
             disagrees(i, "has chunkshape $(chunkshapeof(a)), not $(chunkshapeof(ref))")
         dimnamesof(a) == dimnamesof(ref) ||
             disagrees(i, "has dimnames $(dimnamesof(a)), not $(dimnamesof(ref))")
+        isequal(attrsof(a), attrsof(ref)) || disagrees(
+            i, "has different values of attributes $(_differingkeys(attrsof(a), attrsof(ref)))",
+        )
     end
 
     check === :values || return nothing
@@ -86,8 +92,8 @@ the first group's copy. At least one array must name `dim`.
 copy survives:
 
   - `:shape` (the default) requires every group to agree on element type,
-    shape, chunk shape and dimension names. Free, and it catches mismatched
-    grids.
+    shape, chunk shape, dimension names and attributes. Free, and it catches
+    mismatched grids and CRSs.
   - `:values` additionally decodes each group's copy and requires the values
     to match. This reads chunks, so it fails when a group's sources are
     unreachable.
