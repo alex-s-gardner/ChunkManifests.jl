@@ -140,5 +140,7 @@ using ChunkManifests:
         @test isnan(parse_gdal_nodata(Float64, "NaN"))
         @test isnan(parse_gdal_nodata(Float32, "-nan"))
         @test_throws "not a number" parse_gdal_nodata(Float64, "banana")
+        @test parse_gdal_nodata(Complex{Int16}, "0") === Complex{Int16}(0, 0)
+        @test parse_gdal_nodata(ComplexF32, "-9999") === ComplexF32(-9999, 0)
     end
 end
