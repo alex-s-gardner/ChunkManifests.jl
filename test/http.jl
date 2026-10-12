@@ -8,19 +8,22 @@ import Zarr
 # (when nonzero) always answers with that status regardless of Range, and
 # `ignorerange` always answers 200 with the whole body even when a Range
 # header is present, modeling a server or CDN that drops Range support. A
-# route with a `location` redirects there with a 307.
+# route with a `location` redirects there with a 307, and `forbidden` answers
+# its next requests 403, as an expired pre-signed URL does.
 mutable struct _Route
     bytes::Vector{UInt8}
     fails::Threads.Atomic{Int}
     ignorerange::Bool
     forcestatus::Int
     location::String
+    forbidden::Threads.Atomic{Int}
 end
 function _Route(
         bytes::Vector{UInt8}; fails::Integer = 0, ignorerange::Bool = false, forcestatus::Integer = 0,
-        location::AbstractString = ""
+        location::AbstractString = "", forbidden::Integer = 0
     )
-    return _Route(bytes, Threads.Atomic{Int}(fails), ignorerange, Int(forcestatus), String(location))
+    return _Route(bytes, Threads.Atomic{Int}(fails), ignorerange, Int(forcestatus), String(location),
+                  Threads.Atomic{Int}(forbidden))
 end
 
 struct _TestServer
@@ -50,6 +53,10 @@ function _handle(ts::_TestServer, req::HTTP.Request)
     if route.fails[] > 0
         Threads.atomic_sub!(route.fails, 1)
         return HTTP.Response(500, "injected failure")
+    end
+    if route.forbidden[] > 0
+        Threads.atomic_sub!(route.forbidden, 1)
+        return HTTP.Response(403, "Request has expired")
     end
 
     len = length(route.bytes)
@@ -420,6 +427,53 @@ end
                   [(206, base * "/final.bin"), (202, base * "/pending"), (404, base * "/absent")]
             @test _hits(ts, "/final.bin") == 1
             @test_throws "not an HTTP" ChunkManifests.http_resolve(["/local/path"])
+        end
+    end
+
+    @testset "resolve = true follows a redirect once, and again when its target expires" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/signed.bin", content)
+            _addroute!(ts, "/download", UInt8[]; location = "/signed.bin")
+            t = HTTPTransport(; resolve = true)
+            uri = base * "/download"
+            @test objectsize(t, uri) == nbytes
+            @test fetchrange(t, uri, ByteRange(10, 5)) == content[11:15]
+            @test fetchranges(t, uri, [ByteRange(0, 4), ByteRange(200, 8)]) == [content[1:4], content[201:208]]
+            @test ChunkManifests.fetchall(t, uri) == content
+            @test _hits(ts, "/download") == 1
+
+            # The pre-signed URL expires: the next read is refused, and the original is followed again.
+            ts.routes["/signed.bin"].forbidden[] = 1
+            @test fetchrange(t, uri, ByteRange(100, 3)) == content[101:103]
+            @test _hits(ts, "/download") == 2
+
+            # Refused again after following the original anew: that is not expiry, and it says so.
+            ts.routes["/signed.bin"].forbidden[] = 2
+            @test_throws "HTTP 403" fetchrange(t, uri, ByteRange(0, 1))
+
+            # A plain transport follows the redirect on every request.
+            before = _hits(ts, "/download")
+            plain = HTTPTransport()
+            fetchrange(plain, uri, ByteRange(0, 1)); fetchrange(plain, uri, ByteRange(1, 1))
+            @test _hits(ts, "/download") - before == 2
+        end
+    end
+
+    @testset "resolve = true sends its headers only to the URL as given" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/object.bin", content)
+            t = HTTPTransport(; resolve = true, headers = ["Authorization" => "Bearer t"])
+            @test fetchrange(t, base * "/object.bin", ByteRange(0, 2)) == content[1:2]
+            @test ChunkManifests._target(t, base * "/object.bin") == (base * "/object.bin", String[])
+        end
+    end
+
+    @testset "resolve = true refuses a chain ending at a login page" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/login", Vector{UInt8}("<html>sign in</html>"); ignorerange = true)
+            _addroute!(ts, "/guarded", UInt8[]; location = "/login")
+            @test_throws "rather than at the object" fetchrange(HTTPTransport(; resolve = true), base * "/guarded",
+                                                                ByteRange(0, 1))
         end
     end
 end

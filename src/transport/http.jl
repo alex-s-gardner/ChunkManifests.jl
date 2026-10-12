@@ -13,9 +13,16 @@ function _httpuri(uri::AbstractString)
     return uri
 end
 
+# Where each URL a transport has read leads, when it follows redirects once rather than per request.
+struct _Redirects
+    final::Dict{String, String}
+    lock::ReentrantLock
+end
+_Redirects() = _Redirects(Dict{String, String}(), ReentrantLock())
+
 """
     HTTPTransport(; retries=3, headers=Pair{String,String}[], connect_timeout=10,
-                  read_idle_timeout=60)
+                  read_idle_timeout=60, resolve=false)
 
 Reads byte ranges from an HTTP(S) server with ranged GET requests, made with
 libcurl. The ranges of one [`fetchranges`](@ref) call run concurrently on one
@@ -38,25 +45,65 @@ Credentials for a redirect chain such as Earthdata Login's are read from
 TLS handshake, and `read_idle_timeout` how long a response may stall; a
 handshake a server never answers would otherwise wait forever. `0` turns
 either off. Proxies are taken from the environment, as libcurl takes them.
+
+`resolve = true` follows each URL's redirects once, on its first read, and
+reads every range after from the URL they end at — for a download behind a
+login chain that ends at a pre-signed URL, such as an Earthdata archive's,
+where following the chain costs seconds per request. `headers` go only to the
+URL as given: the resolved one carries its own authorization, and S3 refuses
+a pre-signed request that also has an `Authorization` header. A pre-signed URL
+expires, and S3 then answers `403`; a range read that gets one follows the
+original URL again, once, and retries.
 """
 struct HTTPTransport <: AbstractTransport
     client::_CurlClient
     headers::Vector{Pair{String, String}}
     retries::Int
+    redirects::Union{Nothing, _Redirects}
 end
 
 function HTTPTransport(;
         retries::Integer = 3, headers = Pair{String, String}[],
-        connect_timeout::Real = 10, read_idle_timeout::Real = 60,
+        connect_timeout::Real = 10, read_idle_timeout::Real = 60, resolve::Bool = false,
     )
     retries >= 0 || throw(ArgumentError("retries must be nonnegative, got $retries"))
     connect_timeout >= 0 || throw(ArgumentError("connect_timeout must be nonnegative, got $connect_timeout"))
     read_idle_timeout >= 0 || throw(ArgumentError("read_idle_timeout must be nonnegative, got $read_idle_timeout"))
     client = _CurlClient(; connect_timeout, read_idle_timeout)
-    return HTTPTransport(client, [String(first(h)) => String(last(h)) for h in headers], Int(retries))
+    return HTTPTransport(client, [String(first(h)) => String(last(h)) for h in headers], Int(retries),
+                         resolve ? _Redirects() : nothing)
 end
 
 _headerlines(t::HTTPTransport) = [string(k, ": ", v) for (k, v) in t.headers]
+
+# The URL to read `uri` from, and the header lines to send it: `uri` itself and the transport's headers,
+# unless the transport resolves redirects. Then it is where `uri` leads — followed on first use, or again
+# when `stale` — sent no headers.
+function _target(t::HTTPTransport, uri::String; stale::Bool = false)
+    r = t.redirects
+    r === nothing && return uri, _headerlines(t)
+    if !stale
+        u = @lock r.lock get(r.final, uri, "")
+        isempty(u) || return u, String[]
+    end
+    request = _CurlRequest(uri, [_headerlines(t); "Range: bytes=0-0"])
+    attempt = 0
+    while true
+        resp = only(_curl_get(t.client, [request]; concurrency = 1))
+        if _transient(resp) && attempt < t.retries
+            _backoff(attempt)
+            attempt += 1
+            continue
+        end
+        isempty(resp.error) || throw(ErrorException("HTTP GET " * uri * " failed: " * resp.error))
+        # A login page answers 200 and ignores `Range`; the object itself answers 206.
+        resp.status == 206 || throw(ErrorException(
+            "following " * uri * " ended at HTTP " * string(resp.status) * " from " * resp.url *
+            " rather than at the object; a download behind a login needs its credentials"))
+        @lock r.lock r.final[uri] = resp.url
+        return resp.url, String[]
+    end
+end
 
 _rangeheader(r::ByteRange) = string("bytes=", r.offset, "-", r.offset + r.nbytes - 1)
 
@@ -84,9 +131,6 @@ function _curlget(client::_CurlClient, lines::Vector{String}, retries::Int, uri:
     end
 end
 
-_httpget(t::HTTPTransport, uri::AbstractString, rangeheader::AbstractString) =
-    _curlget(t.client, _headerlines(t), t.retries, uri, rangeheader)
-
 # A whole-object GET, with no `Range`, retried while it fails transiently; a status other than 200 throws.
 function _getall(client::_CurlClient, lines::Vector{String}, retries::Int, uri::String)
     request = _CurlRequest(uri, lines)
@@ -111,8 +155,10 @@ end
 The whole object at `uri`, in one request without `Range` — for a small object from a server that may not
 honor ranges, such as an API answering with a generated document.
 """
-fetchall(t::HTTPTransport, uri::AbstractString) =
-    _getall(t.client, _headerlines(t), t.retries, String(_httpuri(uri)))
+function fetchall(t::HTTPTransport, uri::AbstractString)
+    url, lines = _target(t, String(_httpuri(uri)))
+    return _getall(t.client, lines, t.retries, url)
+end
 
 """
     http_request(url; method = "GET", headers = String[]) -> (status, body)
@@ -196,9 +242,11 @@ function _rangebody(status::Int, received::Vector{UInt8}, r::ByteRange, uri::Abs
 end
 
 # Every range of `blocks` from `uri` in one batch of concurrent requests, each
-# retried while it fails transiently.
+# retried while it fails transiently. With `expired`, a `403` sets it and ends
+# the batch, for the caller to resolve `uri` again; its result is then incomplete.
 function _fetchblocks(client::_CurlClient, lines::Vector{String}, retries::Int, uri::String,
-                      blocks::AbstractVector{ByteRange}, concurrency::Int)
+                      blocks::AbstractVector{ByteRange}, concurrency::Int;
+                      expired::Union{Nothing, Base.RefValue{Bool}} = nothing)
     out = Vector{Vector{UInt8}}(undef, length(blocks))
     pending = Int[]
     for k in eachindex(blocks)
@@ -219,6 +267,10 @@ function _fetchblocks(client::_CurlClient, lines::Vector{String}, retries::Int, 
                     "HTTP request failed fetching $(_rangeheader(blocks[k])) from $(repr(uri)): $(resp.error)"
                 )
             )
+            if resp.status == 403 && expired !== nothing
+                expired[] = true
+                return out
+            end
             out[k] = _rangebody(resp.status, resp.body, blocks[k], uri)
         end
         isempty(again) || (_backoff(attempt); attempt += 1)
@@ -243,7 +295,19 @@ always checked against `r.nbytes` before returning.
 """
 function fetchrange(t::HTTPTransport, uri::AbstractString, r::ByteRange)
     _httpuri(uri)
-    return only(_fetchblocks(t.client, _headerlines(t), t.retries, String(uri), [r], 1))
+    return only(_blocks(t, String(uri), [r], 1))
+end
+
+# `blocks` of `uri` through `t`; for a transport resolving redirects, from where `uri` leads, followed
+# again once if the resolved URL has expired.
+function _blocks(t::HTTPTransport, uri::String, blocks::AbstractVector{ByteRange}, concurrency::Int)
+    url, lines = _target(t, uri)
+    t.redirects === nothing && return _fetchblocks(t.client, lines, t.retries, url, blocks, concurrency)
+    expired = Ref(false)
+    out = _fetchblocks(t.client, lines, t.retries, url, blocks, concurrency; expired)
+    expired[] || return out
+    url, lines = _target(t, uri; stale = true)
+    return _fetchblocks(t.client, lines, t.retries, url, blocks, concurrency)
 end
 
 """
@@ -257,7 +321,7 @@ libcurl multi handle, so they are concurrent without occupying a thread each.
 function fetchranges(t::HTTPTransport, uri::AbstractString, ranges::AbstractVector{ByteRange})
     _httpuri(uri)
     merged, mapping = coalesce_ranges(ranges; maxgap = maxgap(t), maxblock = maxblock(t))
-    blocks = _fetchblocks(t.client, _headerlines(t), t.retries, String(uri), merged, concurrency(t))
+    blocks = _blocks(t, String(uri), merged, concurrency(t))
     return _assemble(ranges, mapping, blocks)
 end
 
@@ -273,8 +337,8 @@ object. Asking for `bytes=0-0` costs one byte and makes the server state the
 total it is serving.
 """
 function objectsize(t::HTTPTransport, uri::AbstractString)
-    url = _httpuri(uri)
-    status, contentrange, _ = _httpget(t, url, "bytes=0-0")
+    url, lines = _target(t, String(_httpuri(uri)))
+    status, contentrange, _ = _curlget(t.client, lines, t.retries, url, "bytes=0-0")
     status == 206 || error(
         "HTTP $status sizing $(repr(uri)): expected 206 with a Content-Range " *
             "header; a server that ignores Range cannot report a total size this way",
@@ -332,10 +396,9 @@ overlap, and each response states the object's size. On an object shorter
 than both together the tail repeats bytes the head holds, at most `tail` of
 them.
 """
-function _fetchends(t::HTTPTransport, uri::AbstractString, head::Integer, tail::Integer)
-    _httpuri(uri)
-    lines = _headerlines(t)
-    head == 0 && tail == 0 && return UInt8[], UInt8[], objectsize(t, uri)
+function _fetchends(t::HTTPTransport, given::AbstractString, head::Integer, tail::Integer)
+    uri, lines = _target(t, String(_httpuri(given)))
+    head == 0 && tail == 0 && return UInt8[], UInt8[], objectsize(t, given)
     if head == 0
         body, start, total = _clipped(t.client, lines, t.retries, uri, "bytes=-$tail")
         tl = min(UInt64(tail), total)
