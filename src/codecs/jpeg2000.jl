@@ -2,7 +2,7 @@
 #
 # The type and its configuration live here, so a manifest naming it can be
 # loaded, saved and validated anywhere; decoding needs libopenjp2, which the
-# OpenJpeg_jll extension supplies by setting `_J2K_DECODE`.
+# OpenJpeg_jll extension supplies as a method of `_j2k_decodetile!`.
 
 """
     JPEG2000Tile(header) <: Zarr.Compressor
@@ -73,14 +73,17 @@ JSON.lower(c::JPEG2000Tile) = jpeg2000tile_config(c.header)
 
 Zarr.getCompressor(::Type{JPEG2000Tile}, d::Dict) = JPEG2000Tile(Base64.base64decode(d["header"]))
 
-# Set by the OpenJpeg_jll extension to `(dest, codestream, bounds, chunkshape) -> dest`,
-# which decodes the single-tile `codestream` into `dest`, a chunk of `chunkshape`.
-const _J2K_DECODE = Ref{Any}(nothing)
+"""
+    _j2k_decodetile!(dest, codestream, bounds, chunkshape) -> dest
+
+Decodes the single-tile `codestream` into `dest`, a chunk of `chunkshape`. The OpenJpeg_jll extension
+adds the method that does; a generic function rather than a stored callback, so the call resolves
+when a program is compiled.
+"""
+_j2k_decodetile!(dest, codestream, bounds, chunkshape) =
+    error("OpenJpeg_jll must be loaded to decode a JPEG 2000 chunk. Try `using OpenJpeg_jll`.")
 
 function _j2k_decode!(dest::AbstractArray, compressed, c::JPEG2000Tile)
-    decode = _J2K_DECODE[]
-    decode === nothing &&
-        error("OpenJpeg_jll must be loaded to decode a JPEG 2000 chunk. Try `using OpenJpeg_jll`.")
     siz = _j2k_siz(c.header)
     length(dest) == siz.xtsiz * siz.ytsiz || throw(
         ArgumentError("a JPEG 2000 chunk holds $(siz.xtsiz)×$(siz.ytsiz) samples, not $(length(dest))")
@@ -89,7 +92,7 @@ function _j2k_decode!(dest::AbstractArray, compressed, c::JPEG2000Tile)
     key = (c.id, Int(_j2k_u16(compressed, 5)))
     _j2k_cached!(dest, key) && return dest
     codestream, bounds = _j2k_tilecodestream(c.header, compressed)
-    decode(dest, codestream, bounds, (siz.xtsiz, siz.ytsiz))
+    _j2k_decodetile!(dest, codestream, bounds, (siz.xtsiz, siz.ytsiz))
     _j2k_keep!(key, dest)
     return dest
 end

@@ -87,8 +87,8 @@ function coalesce_ranges(
     )
     maxgap >= 0 || throw(ArgumentError("maxgap must be nonnegative, got $maxgap"))
     maxblock > 0 || throw(ArgumentError("maxblock must be positive, got $maxblock"))
-    maxgap = UInt64(maxgap)
-    maxblock = UInt64(maxblock)
+    gaplimit = UInt64(maxgap)
+    blocklimit = UInt64(maxblock)
 
     mapping = similar(ranges, Tuple{Int, UInt64})
     merged = ByteRange[]
@@ -98,16 +98,6 @@ function coalesce_ranges(
 
     blockstart = blockend = zero(UInt64)
     members = Int[]
-
-    function flush!()
-        push!(merged, ByteRange(blockstart, blockend - blockstart))
-        bi = length(merged)
-        for i in members
-            mapping[i] = (bi, ranges[i].offset - blockstart)
-        end
-        return empty!(members)
-    end
-
     for (n, i) in enumerate(order)
         r = ranges[i]
         rstart, rend = r.offset, r.offset + r.nbytes
@@ -116,18 +106,30 @@ function coalesce_ranges(
         else
             gap = rstart > blockend ? rstart - blockend : zero(UInt64)
             newend = max(blockend, rend)
-            if gap <= maxgap && (newend - blockstart) <= maxblock
+            if gap <= gaplimit && (newend - blockstart) <= blocklimit
                 blockend = newend
             else
-                flush!()
+                _flushblock!(merged, mapping, members, ranges, blockstart, blockend)
                 blockstart, blockend = rstart, rend
             end
         end
         push!(members, i)
     end
-    flush!()
+    _flushblock!(merged, mapping, members, ranges, blockstart, blockend)
 
     return merged, mapping
+end
+
+# Closes the block [blockstart, blockend) holding `members`, recording where each member lies in it.
+function _flushblock!(merged::Vector{ByteRange}, mapping, members::Vector{Int},
+                      ranges::AbstractVector{ByteRange}, blockstart::UInt64, blockend::UInt64)
+    push!(merged, ByteRange(blockstart, blockend - blockstart))
+    bi = length(merged)
+    for i in members
+        mapping[i] = (bi, ranges[i].offset - blockstart)
+    end
+    empty!(members)
+    return nothing
 end
 
 # Shared by the generic fetchranges below and by any transport-specific
@@ -206,7 +208,7 @@ function _fetchends(t::AbstractTransport, uri::AbstractString, head::Integer, ta
     tl = min(UInt64(tail), total - h)
     headtask = Threads.@spawn h == 0 ? UInt8[] : fetchrange(t, uri, ByteRange(0, h))
     tailbytes = tl == 0 ? UInt8[] : fetchrange(t, uri, ByteRange(total - tl, tl))
-    return fetch(headtask), tailbytes, total
+    return fetch(headtask)::Vector{UInt8}, tailbytes, total
 end
 
 # The offset of a ranged response's first byte and the object's size, from its

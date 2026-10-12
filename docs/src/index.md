@@ -1,7 +1,7 @@
 ```@meta
 CurrentModule = ChunkManifests
 DocTestSetup = quote
-    using ChunkManifests, Zarr
+    using ChunkManifests, HDF5, Zarr
 end
 ```
 
@@ -34,6 +34,7 @@ last filter is shuffle or fletcher32 on elements wider than one byte. Julia 1.10
 
 ```julia
 using ChunkManifests
+using HDF5                   # loads the scanner for HDF5 and NetCDF4 files
 
 z = scan("granule.h5")       # or an http(s):// or s3:// URL
 z["gt1l/h_li"][1:100]        # reads only the chunks it needs

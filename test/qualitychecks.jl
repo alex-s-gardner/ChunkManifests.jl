@@ -32,9 +32,15 @@ end
         # parent's internals, for the reason given for qualified accesses below.
         all_explicit_imports_are_public = VERSION >= v"1.11" && (;
             ignore = (
-                :ChunkManifest, :ExplicitChunkMap, :INLINE_CHUNK, :ManifestArray, :PathTable,
-                :VIRTUAL_CHUNK, :arraysof, :attrsof, :chunkgridaxes, :chunklocation,
-                :chunkmapof, :chunkstate, :inlinebytes, :push_uri!,
+                :_drainprefetches!, :_h5prefetchobjects, :_h5sizes, :_hasnonfinite, :_inlinearray,
+                :_isremote, :_precompile_remote, :_RANGE_DRIVER, :_RANGE_FILES, :_RANGE_LOCK,
+                :_rangefill!, :_RangeSource, :_rangesource, :_rangevfdsupported, :_refuseclassic,
+                :_remoteaccess, :_scan, :_scantransport, :AffineChunkMap, :arraysof, :attrsof,
+                :build_codecs, :check_last_filter_multibyte, :chunkgridaxes, :chunklocation,
+                :ChunkManifest, :chunkmapof, :chunkstate, :ExplicitChunkMap, :INLINE_CHUNK,
+                :INLINE_INDEX, :inlinebytes, :ManifestArray, :MISSING_INDEX, :PathTable, :push_uri!,
+                :resolve_access, :VIRTUAL_CHUNK, :withsourcepath, :zarr_decodes_byte_filters,
+                :zarr_dtype_string,
             ),
         ),
         # Three reasons this fails, none fixable without reimplementing

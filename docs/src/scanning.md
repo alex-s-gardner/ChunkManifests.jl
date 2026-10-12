@@ -1,7 +1,7 @@
 ```@meta
 CurrentModule = ChunkManifests
 DocTestSetup = quote
-    using ChunkManifests, Zarr
+    using ChunkManifests, HDF5, Zarr
 end
 ```
 

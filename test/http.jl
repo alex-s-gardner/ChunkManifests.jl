@@ -7,17 +7,20 @@ import Zarr
 # injected 500 responses before serving the real content, `forcestatus`
 # (when nonzero) always answers with that status regardless of Range, and
 # `ignorerange` always answers 200 with the whole body even when a Range
-# header is present, modeling a server or CDN that drops Range support.
+# header is present, modeling a server or CDN that drops Range support. A
+# route with a `location` redirects there with a 307.
 mutable struct _Route
     bytes::Vector{UInt8}
     fails::Threads.Atomic{Int}
     ignorerange::Bool
     forcestatus::Int
+    location::String
 end
 function _Route(
-        bytes::Vector{UInt8}; fails::Integer = 0, ignorerange::Bool = false, forcestatus::Integer = 0
+        bytes::Vector{UInt8}; fails::Integer = 0, ignorerange::Bool = false, forcestatus::Integer = 0,
+        location::AbstractString = ""
     )
-    return _Route(bytes, Threads.Atomic{Int}(fails), ignorerange, Int(forcestatus))
+    return _Route(bytes, Threads.Atomic{Int}(fails), ignorerange, Int(forcestatus), String(location))
 end
 
 struct _TestServer
@@ -40,6 +43,7 @@ function _handle(ts::_TestServer, req::HTTP.Request)
     route === nothing && return HTTP.Response(404, "no such route: $path")
     Threads.atomic_add!(ts.hits[path], 1)
 
+    isempty(route.location) || return HTTP.Response(307, ["Location" => route.location])
     if route.forcestatus != 0
         return HTTP.Response(route.forcestatus, "forced status $(route.forcestatus)")
     end
@@ -377,6 +381,45 @@ end
         _withserver() do ts, base
             uri = base * "/absent.bin"
             @test_throws "404" objectsize(HTTPTransport(), uri)
+        end
+    end
+
+    @testset "fetchall reads a whole object in one request without Range" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/doc", content)
+            _addroute!(ts, "/generated", content; ignorerange = true)
+            @test ChunkManifests.fetchall(HTTPTransport(), base * "/doc") == content
+            @test ChunkManifests.fetchall(HTTPTransport(), base * "/generated") == content
+            @test _hits(ts, "/doc") == 1
+            @test_throws "HTTP 404" ChunkManifests.fetchall(HTTPTransport(), base * "/absent")
+        end
+        mktempdir() do dir
+            path = joinpath(dir, "doc")
+            write(path, content)
+            @test ChunkManifests.fetchall(LocalTransport(), path) == content
+        end
+    end
+
+    @testset "http_request returns the status and body" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/token", Vector{UInt8}("{\"access_token\": \"t\"}"))
+            status, body = ChunkManifests.http_request(base * "/token"; method = "POST",
+                                                       headers = ["Authorization: Basic eDp5"])
+            @test status == 200
+            @test String(body) == "{\"access_token\": \"t\"}"
+            @test first(ChunkManifests.http_request(base * "/absent")) == 404
+        end
+    end
+
+    @testset "http_resolve reports each URL's final status and location" begin
+        _withserver() do ts, base
+            _addroute!(ts, "/final.bin", content)
+            _addroute!(ts, "/hop", UInt8[]; location = "/final.bin")
+            _addroute!(ts, "/pending", UInt8[]; forcestatus = 202)
+            @test ChunkManifests.http_resolve([base * "/hop", base * "/pending", base * "/absent"]) ==
+                  [(206, base * "/final.bin"), (202, base * "/pending"), (404, base * "/absent")]
+            @test _hits(ts, "/final.bin") == 1
+            @test_throws "not an HTTP" ChunkManifests.http_resolve(["/local/path"])
         end
     end
 end

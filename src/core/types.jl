@@ -281,22 +281,6 @@ Reads byte ranges from the local filesystem.
 struct LocalTransport <: AbstractTransport end
 
 """
-    S3Transport(bucket; aws=nothing)
-
-Reads byte ranges from an S3 bucket. Available once the `AWSS3` extension
-loads; constructing one without `AWSS3` reports that rather than failing
-obscurely later.
-"""
-struct S3Transport <: AbstractTransport
-    bucket::String
-    aws::Any
-end
-
-function S3Transport(args...; kwargs...)
-    error("AWSS3 must be loaded to use S3Transport. Try `using AWSS3`.")
-end
-
-"""
     ReadaheadCache(; maxbytes=64 * 1024 * 1024, chunks=32)
 
 Bounded cache of fetched chunk bytes, keyed by source file and byte offset.
@@ -478,7 +462,7 @@ function _load end
 # The package a format's or driver's methods arrive with, for those whose
 # implementation lives in an extension.
 const EXTENSION_BACKEND = Dict{Symbol, String}(
-    :KerchunkParquet => "Parquet2", :GeoTIFFDriver => "TiffImages",
+    :KerchunkParquet => "Parquet2", :GeoTIFFDriver => "TiffImages", :HDF5Driver => "HDF5",
 )
 
 # Reached only when no concrete method applies, which for an extension-gated
