@@ -143,6 +143,16 @@ function _curl_header(ptr::Ptr{UInt8}, size::Csize_t, n::Csize_t, user::Ptr{Cvoi
     return len
 end
 
+# Wait up to `_CURL_WAIT_MS` for activity on `multi`. GC-safe where Julia supports it (1.12 and later), so
+# other threads keep collecting while this one waits.
+@static if VERSION >= v"1.12"
+    _multi_poll(multi::Ptr{Cvoid}) = @ccall gc_safe = true LibCURL_jll.libcurl.curl_multi_poll(
+        multi::Ptr{Cvoid}, C_NULL::Ptr{Cvoid}, 0::Cuint, _CURL_WAIT_MS::Cint, C_NULL::Ptr{Cint})::Cint
+else
+    _multi_poll(multi::Ptr{Cvoid}) = @ccall LibCURL_jll.libcurl.curl_multi_poll(
+        multi::Ptr{Cvoid}, C_NULL::Ptr{Cvoid}, 0::Cuint, _CURL_WAIT_MS::Cint, C_NULL::Ptr{Cint})::Cint
+end
+
 function _take_multi!(c::_CurlClient)
     @lock c.lock isempty(c.multis) || return pop!(c.multis)
     m = ccall((:curl_multi_init, LibCURL_jll.libcurl), Ptr{Cvoid}, ())
@@ -221,8 +231,8 @@ end
 
 Perform `requests`, at most `concurrency` at a time, and return one response per request in the
 same order. The calling task waits until all have finished; while it waits it yields every few
-milliseconds, so other tasks on its thread run, and libcurl's waits are GC-safe, so other threads
-keep collecting.
+milliseconds, so other tasks on its thread run, and from Julia 1.12 libcurl's waits are GC-safe, so
+other threads keep collecting.
 """
 function _curl_get(c::_CurlClient, requests::Vector{_CurlRequest}; concurrency::Int = 32)
     concurrency >= 1 || throw(ArgumentError("concurrency must be at least 1, got $concurrency"))
@@ -273,8 +283,7 @@ function _curl_get(c::_CurlClient, requests::Vector{_CurlRequest}; concurrency::
                 # starving every other task scheduled on it — including, in a single-threaded
                 # process, a server the requests are addressed to. `curl_multi_poll` returns early
                 # on activity, so the slice bounds only how long a waiting thread stays unavailable.
-                @ccall gc_safe = true LibCURL_jll.libcurl.curl_multi_poll(
-                    multi::Ptr{Cvoid}, C_NULL::Ptr{Cvoid}, 0::Cuint, _CURL_WAIT_MS::Cint, C_NULL::Ptr{Cint})::Cint
+                _multi_poll(multi)
                 yield()
             end
         end
