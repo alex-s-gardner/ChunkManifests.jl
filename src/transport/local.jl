@@ -111,3 +111,5 @@ function fetchranges(t::LocalTransport, uri::AbstractString, ranges::AbstractVec
     bytes = _localmap(path)
     return [_mapped_range(path, bytes, r) for r in ranges]
 end
+
+fetchall(::LocalTransport, uri::AbstractString) = read(_localpath(uri))

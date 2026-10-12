@@ -252,7 +252,7 @@ function _j2k_tileparts(transport::AbstractTransport, uri::AbstractString, sot, 
     parts = NTuple{3, Int}[]
     pos = sot
     while true
-        walk = fetch(walks[pos])
+        walk = fetch(walks[pos])::Union{Nothing, @NamedTuple{parts::Vector{NTuple{3, Int}}, stop::Int, done::Bool}}
         walk === nothing && (walk = _j2k_walk(readsot, pos, csend, ntiles, (), context; strict = true))
         append!(parts, walk.parts)
         walk.done && return parts

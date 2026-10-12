@@ -27,14 +27,18 @@ Full documentation: <https://alex-s-gardner.github.io/ChunkManifests.jl>.
 module ChunkManifests
 
 import Base64
-import Downloads
-import HDF5
+import Dates
 import HTTP
 import JSON
 import LibCURL
+import LibCURL_jll
+import Libdl
 import Logging
 import Mmap
+import Zlib_jll
+import NetworkOptions
 import PrecompileTools
+import SHA
 import Zarr
 
 include("core/types.jl")
@@ -47,7 +51,9 @@ include("codecs/tiffpredictor.jl")
 include("codecs/jpeg2000.jl")
 include("transport/transport.jl")
 include("transport/local.jl")
+include("transport/curl.jl")
 include("transport/http.jl")
+include("transport/s3.jl")
 include("transport/containers.jl")
 include("store/metadata.jl")
 include("store/readahead.jl")
@@ -59,7 +65,6 @@ include("access/access.jl")
 include("access/rangesource.jl")
 include("access/rangeio.jl")
 include("access/h5prefetch.jl")
-include("access/hdf5vfd.jl")
 include("drivers/hdf5.jl")
 include("drivers/geotiffmeta.jl")
 include("drivers/jpeg2000.jl")
@@ -68,8 +73,11 @@ include("serialize/kerchunkjson.jl")
 include("combine/combine.jl")
 include("combine/merge.jl")
 include("combine/series.jl")
+include("typed/typed.jl")
+include("typed/h5.jl")
+include("typed/zip.jl")
 include("entry.jl")
-include("precompile.jl")
+include("precompilehelpers.jl")
 
 export scan, load, save, concat, replace_prefix!, validate
 export AbstractDriver, HDF5Driver, GeoTIFFDriver, JPEG2000Driver
@@ -85,12 +93,17 @@ if VERSION >= v"1.11.0-DEV.469"
         Meta.parse(
             "public register_driver!, ByteRange, fetchrange, fetchranges, objectsize, " *
                 "maxgap, maxblock, concurrency, coalesce_ranges, RangeIO, rangecost, " *
-                "withrangefile, ValidationReport, ConsistencyIssue"
+                "withrangefile, ValidationReport, ConsistencyIssue, open_tiff, open_jp2, tiff_eltype, jp2_eltype, TypedArray, " *
+                "TypedChunkStore, ChunkCodec, ChunkCache, cached, LeafTransport, fetchall, http_request, http_resolve, H5File, h5open_typed, h5_exists, h5_isgroup, " *
+                "h5_dims, h5_read, h5_read_elements, h5_read_strings, h5_attr_string, h5_open_array, ZipMember, zip_members, ZipEntry, read_entry, read_member, extract_member"
         )
     )
 end
 
 function __init__()
+    # Once, before any task can reach libcurl: curl_global_init is not safe to race with other
+    # libcurl calls. CURL_GLOBAL_ALL.
+    ccall((:curl_global_init, LibCURL_jll.libcurl), Cint, (Clong,), Clong(3))
     # The precompile workload registers the range driver with the libhdf5 of
     # that process, and the id it got is saved with the package; a new process
     # registers it afresh.

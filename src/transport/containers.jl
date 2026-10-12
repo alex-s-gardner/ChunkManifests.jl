@@ -29,15 +29,14 @@ get these defaults even with no configuration at all: `"http://"` and
 both, and each distinct `s3://<bucket>/...` gets its own `S3Transport`.
 Each is built the first time a URI needs it and shared by every
 `TransportContainers` thereafter, so a manifest referencing only local files
-never constructs an HTTP client, connections are reused from one scan or read
-to the next, and an `s3://` default is possible whether or not `AWSS3` is
-loaded yet.
+never constructs an HTTP client, and connections are reused from one scan or
+read to the next.
 Binding a prefix explicitly overrides these defaults. Resolving an `s3://` URI
-that matches no explicit binding when the `AWSS3` extension is not loaded
-fails with [`S3Transport`](@ref)'s own construction error, which names
-`AWSS3` as what to load; it is not swallowed into `fallback`, which would
-otherwise try to read the key as a local path and fail with a confusing
-file-not-found error instead.
+that matches no explicit binding where no AWS credentials can be found fails
+with [`S3Transport`](@ref)'s own construction error, which names where it
+looked; it is not swallowed into `fallback`, which would otherwise try to read
+the key as a local path and fail with a confusing file-not-found error
+instead.
 
 `authorize(uri) -> Bool` is consulted before any URI is fetched and defaults
 to allowing everything. A manifest is an instruction to fetch arbitrary URIs:
@@ -76,11 +75,10 @@ function TransportContainers(
     )
 end
 
-# Default transports are built on first use, not at construction: an
-# HTTPTransport owns an HTTP.Client with its own connection pool, and an
-# S3Transport needs the AWSS3 extension. Building either eagerly would make
-# every manifest pay for backends it may never touch, and would make an
-# `s3://` default impossible without AWSS3 loaded.
+# Default transports are built on first use, not at construction: each owns a
+# pool of connections, and an S3Transport looks up its credentials when it is
+# built. Building either eagerly would make every manifest pay for backends it
+# may never touch.
 #
 # The defaults are shared by every TransportContainers in the session, so the
 # connections a scan opens are reused by the reads of its manifest and by the
@@ -108,9 +106,8 @@ function _s3_bucket(uri::AbstractString)
 end
 
 # Constructs (and caches, per bucket) the default S3Transport an unbound
-# s3:// URI resolves to. Deliberately calls S3Transport itself rather than
-# checking whether AWSS3 is loaded, so the one error message that
-# construction already gives (naming AWSS3) is the only one a caller sees.
+# s3:// URI resolves to, so the one error message that construction gives
+# when it finds no credentials is the only one a caller sees.
 function _s3_default_transport(c::TransportContainers, uri::AbstractString)
     bucket = _s3_bucket(uri)
     return _defaulttransport(c, "s3://" * bucket) do

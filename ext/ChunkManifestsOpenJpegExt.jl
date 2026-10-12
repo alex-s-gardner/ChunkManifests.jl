@@ -7,7 +7,6 @@ module ChunkManifestsOpenJpegExt
 using ChunkManifests
 import OpenJpeg_jll
 
-const libopenjp2 = OpenJpeg_jll.libopenjp2
 
 const _OPJ_CODEC_J2K = Cint(0)
 
@@ -96,45 +95,45 @@ function _fail(d::_Decode, step::AbstractString)
     throw(ErrorException("libopenjp2 failed to $step a JPEG 2000 tile$detail"))
 end
 
-function _decode!(dest::AbstractArray{T}, codestream::Vector{UInt8}, bounds, chunkshape) where {T}
+function ChunkManifests._j2k_decodetile!(dest::AbstractArray{T}, codestream::Vector{UInt8}, bounds, chunkshape) where {T}
     readcb, skipcb, seekcb, errorcb = _CALLBACKS[]
     d = _Decode(codestream, 0, String[])
     params = zeros(UInt8, _DPARAMETERS_BYTES)
     image = Ref{Ptr{_OpjImage}}(C_NULL)
-    codec = ccall((:opj_create_decompress, libopenjp2), Ptr{Cvoid}, (Cint,), _OPJ_CODEC_J2K)
+    codec = ccall((:opj_create_decompress, OpenJpeg_jll.libopenjp2), Ptr{Cvoid}, (Cint,), _OPJ_CODEC_J2K)
     codec == C_NULL && throw(ErrorException("libopenjp2 could not create a decoder"))
     stream = C_NULL
     Threads.atomic_add!(_INFLIGHT, 1)
     GC.@preserve d params begin
         try
-            ccall((:opj_set_error_handler, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
+            ccall((:opj_set_error_handler, OpenJpeg_jll.libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
                 codec, errorcb, pointer_from_objref(d))
-            ccall((:opj_set_default_decoder_parameters, libopenjp2), Cvoid, (Ptr{UInt8},), params)
-            ccall((:opj_setup_decoder, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{UInt8}), codec, params) == 1 ||
+            ccall((:opj_set_default_decoder_parameters, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{UInt8},), params)
+            ccall((:opj_setup_decoder, OpenJpeg_jll.libopenjp2), Cint, (Ptr{Cvoid}, Ptr{UInt8}), codec, params) == 1 ||
                 _fail(d, "set up the decoder for")
             threads = max(1, Threads.nthreads() ÷ max(1, _INFLIGHT[]))
-            ccall((:opj_codec_set_threads, libopenjp2), Cint, (Ptr{Cvoid}, Cint), codec, threads)
-            stream = ccall((:opj_stream_create, libopenjp2), Ptr{Cvoid}, (Csize_t, Cint),
+            ccall((:opj_codec_set_threads, OpenJpeg_jll.libopenjp2), Cint, (Ptr{Cvoid}, Cint), codec, threads)
+            stream = ccall((:opj_stream_create, OpenJpeg_jll.libopenjp2), Ptr{Cvoid}, (Csize_t, Cint),
                 Csize_t(max(length(codestream), 1)), Cint(1))
             stream == C_NULL && throw(ErrorException("libopenjp2 could not create a stream"))
-            ccall((:opj_stream_set_read_function, libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), stream, readcb)
-            ccall((:opj_stream_set_skip_function, libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), stream, skipcb)
-            ccall((:opj_stream_set_seek_function, libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), stream, seekcb)
-            ccall((:opj_stream_set_user_data, libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
+            ccall((:opj_stream_set_read_function, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), stream, readcb)
+            ccall((:opj_stream_set_skip_function, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), stream, skipcb)
+            ccall((:opj_stream_set_seek_function, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), stream, seekcb)
+            ccall((:opj_stream_set_user_data, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
                 stream, pointer_from_objref(d), C_NULL)
-            ccall((:opj_stream_set_user_data_length, libopenjp2), Cvoid, (Ptr{Cvoid}, UInt64),
+            ccall((:opj_stream_set_user_data_length, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid}, UInt64),
                 stream, UInt64(length(codestream)))
-            ccall((:opj_read_header, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Ptr{_OpjImage}}),
+            ccall((:opj_read_header, OpenJpeg_jll.libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Ptr{_OpjImage}}),
                 stream, codec, image) == 1 || _fail(d, "read the header of")
-            ccall((:opj_decode, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{_OpjImage}),
+            ccall((:opj_decode, OpenJpeg_jll.libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{_OpjImage}),
                 codec, stream, image[]) == 1 || _fail(d, "decode")
-            ccall((:opj_end_decompress, libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}), codec, stream) == 1 ||
+            ccall((:opj_end_decompress, OpenJpeg_jll.libopenjp2), Cint, (Ptr{Cvoid}, Ptr{Cvoid}), codec, stream) == 1 ||
                 _fail(d, "finish decoding")
             _place!(reshape(dest, chunkshape), unsafe_load(image[]), bounds)
         finally
-            image[] == C_NULL || ccall((:opj_image_destroy, libopenjp2), Cvoid, (Ptr{_OpjImage},), image[])
-            stream == C_NULL || ccall((:opj_stream_destroy, libopenjp2), Cvoid, (Ptr{Cvoid},), stream)
-            ccall((:opj_destroy_codec, libopenjp2), Cvoid, (Ptr{Cvoid},), codec)
+            image[] == C_NULL || ccall((:opj_image_destroy, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{_OpjImage},), image[])
+            stream == C_NULL || ccall((:opj_stream_destroy, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid},), stream)
+            ccall((:opj_destroy_codec, OpenJpeg_jll.libopenjp2), Cvoid, (Ptr{Cvoid},), codec)
             Threads.atomic_sub!(_INFLIGHT, 1)
         end
     end
@@ -171,7 +170,6 @@ function __init__()
         @cfunction(_opj_seek, Cint, (Int64, Ptr{Cvoid})),
         @cfunction(_opj_error, Cvoid, (Cstring, Ptr{Cvoid})),
     )
-    ChunkManifests._J2K_DECODE[] = _decode!
     return nothing
 end
 

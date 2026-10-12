@@ -46,12 +46,9 @@ const _RANGE_VFD_SCHEME = "chunkmanifests_range://"
 # libhdf5 is handed an integer key, never a pointer to a Julia object, so
 # nothing it holds can dangle or keep a Julia value alive.
 const _RANGE_SOURCES = Dict{Int64, _RangeSource}()
-# The source behind each file open through the driver, by the file's id, for
-# the scan to hand prefetching hints to.
-const _RANGE_FILES = Dict{HDF5.API.hid_t, _RangeSource}()
-const _RANGE_LOCK = ReentrantLock()
+
 const _RANGE_NEXTKEY = Ref{Int64}(0)
-const _RANGE_DRIVER = Ref{Int64}(-1)
+
 # Globals because libhdf5 holds these pointers for as long as the driver is
 # registered.
 const _RANGE_CLASS = zeros(UInt8, _H5FD_CLASS_SIZE)
@@ -160,7 +157,7 @@ _range_write(::Ptr{Nothing}, ::Cint, ::Int64, ::UInt64, ::Csize_t, ::Ptr{UInt8})
     Cint(-1)
 _range_truncate(::Ptr{Nothing}, ::Int64, ::Bool)::Cint = Cint(-1)
 
-function _rangevfdsupported()
+function ChunkManifests._rangevfdsupported()
     v = HDF5.API.h5_get_libversion()
     return (Int(v.major), Int(v.minor)) in _RANGE_VFD_LIBVERSIONS
 end
@@ -223,7 +220,7 @@ Metadata is prefetched while it is open (see src/access/h5prefetch.jl), and
 prefetches may still be in flight when this returns; `_drainprefetches!`
 waits for them.
 """
-function withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
+function ChunkManifests.withrangefile(f::Function, access::RangeAccess, source::_RangeSource)
     uri = source.uri
     _rangevfdsupported() || throw(
         ArgumentError(

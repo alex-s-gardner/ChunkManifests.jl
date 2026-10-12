@@ -1,7 +1,3 @@
-# Must run before anything in the process loads AWSS3 (see test/s3.jl's own
-# note on this): the "unavailable transport" testset below depends on the
-# AWSS3 extension still being unloaded.
-
 # A controllable fake transport: fetchrange/objectsize return values that
 # identify which _TaggedTransport served the call, so a test can tell which
 # transport TransportContainers actually dispatched to without needing a
@@ -124,19 +120,22 @@ ChunkManifests.concurrency(t::_TaggedTransport) = t.concurrency
         end
     end
 
-    @testset "unavailable transport names what to load" begin
-        # No binding is given for s3://, and AWSS3 has not been loaded
-        # anywhere yet in this process (test/s3.jl loads it, and that file
-        # runs after this one).
-        @test Base.get_extension(ChunkManifests, :ChunkManifestsAWSS3Ext) === nothing
-
-        c = ChunkManifests.TransportContainers()
-        @test_throws "AWSS3 must be loaded" ChunkManifests.resolve_transport(
-            c, "s3://some-bucket/key"
-        )
-        @test_throws "AWSS3 must be loaded" fetchrange(
-            c, "s3://some-bucket/key", ByteRange(0, 1)
-        )
+    @testset "an s3:// default without credentials names where it looked" begin
+        # No binding is given for s3://, and the machine's own credentials are hidden.
+        nocreds = ["AWS_ACCESS_KEY_ID" => nothing, "AWS_SECRET_ACCESS_KEY" => nothing,
+                   "AWS_SHARED_CREDENTIALS_FILE" => "/nonexistent/credentials",
+                   "AWS_CONFIG_FILE" => "/nonexistent/config",
+                   "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" => nothing,
+                   "AWS_CONTAINER_CREDENTIALS_FULL_URI" => nothing, "AWS_EC2_METADATA_DISABLED" => "true"]
+        withenv(nocreds...) do
+            c = ChunkManifests.TransportContainers()
+            @test_throws "no AWS credentials found" ChunkManifests.resolve_transport(
+                c, "s3://some-bucket/key"
+            )
+            @test_throws "no AWS credentials found" fetchrange(
+                c, "s3://some-bucket/key", ByteRange(0, 1)
+            )
+        end
     end
 
     @testset "authorization hook" begin
