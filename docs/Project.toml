@@ -1,6 +1,7 @@
 [deps]
 ChunkManifests = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
 
 [sources]
@@ -13,6 +14,7 @@ Zarr = {url = "https://github.com/alex-s-gardner/Zarr.jl", rev = "complex-int-dt
 
 [compat]
 Documenter = "1"
+HDF5 = "0.17"
 Zarr = "0.10"
 # Above the package's own lower bound: `[sources]` needs Julia 1.11.
 julia = "1.11"

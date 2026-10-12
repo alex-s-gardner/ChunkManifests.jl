@@ -43,6 +43,7 @@ the upstream releases that will remove the need for it. Julia 1.10 or later.
 
 ```julia
 using ChunkManifests
+using HDF5   # loads the scanner for HDF5 and NetCDF4 files
 
 # An ITS_LIVE glacier-velocity granule (NetCDF4) in a public AWS Open Data bucket
 url = "https://its-live-data.s3.us-west-2.amazonaws.com/NSIDC/velocity_image_pair_sample/landsatOLI/v02/N80E010/LC09_L1TP_013243_20230801_20230802_02_T1_X_LC08_L1TP_013243_20240811_20240815_02_T1_G0120V02_P028.nc"

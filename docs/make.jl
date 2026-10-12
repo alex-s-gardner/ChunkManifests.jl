@@ -1,5 +1,7 @@
 using Documenter
 using ChunkManifests
+# HDF5 loads the scanner for HDF5 and NetCDF4 files, which the doctests scan.
+using HDF5
 using Zarr
 
 # Doctests run against the fixture committed under `test/data`, so the output in
@@ -8,7 +10,7 @@ DocMeta.setdocmeta!(
     ChunkManifests,
     :DocTestSetup,
     quote
-        using ChunkManifests, Zarr
+        using ChunkManifests, HDF5, Zarr
         NETCDF = joinpath(pkgdir(ChunkManifests), "test", "data", "antarctic_grounded_ice.nc")
     end;
     recursive = true,
