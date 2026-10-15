@@ -105,7 +105,7 @@ using TiffImages
             width, height = 9, 6
             # Complex integers need the structured dtype of the Zarr.jl `[sources]` pins, which Julia
             # 1.10 does not honor; there the scan refuses them by name.
-            complexints = Zarr.typestr(Complex{Int16}) isa AbstractVector
+            complexints = ZarrCore.typestr(Complex{Int16}) isa AbstractVector
             for (T, sampleformat) in ((Complex{Int16}, 5), (Complex{Int32}, 5), (ComplexF32, 6))
                 data = T.(rand(-100:100, width, height), rand(-100:100, width, height))
                 path = joinpath(dir, "complex_$(sampleformat)_$(sizeof(T)).tif")

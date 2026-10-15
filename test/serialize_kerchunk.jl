@@ -414,7 +414,7 @@ import ZarrCore
         @warn "ItsLiveMasks fixture not found; skipping the scanned-NetCDF4 round trip" ITSLIVE_PATH
     end
 
-    @testset "store-agnostic: round trip through an in-memory Zarr.DictStore" begin
+    @testset "store-agnostic: round trip through an in-memory ZarrCore.DictStore" begin
         # `save`/`load` reach the filesystem only by resolving `path` to a
         # store and a key within it; a `DictStore` round trip proves the
         # document itself never touches a file path.
@@ -432,7 +432,7 @@ import ZarrCore
             va = ManifestArray{UInt8}(manifest, (4,), (1,); dimnames = ["i"])
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("arr" => va))
 
-            store = Zarr.DictStore()
+            store = ZarrCore.DictStore()
             _save(store, "refs.json", group, KerchunkJSON())
             @test store["refs.json"] !== nothing
 

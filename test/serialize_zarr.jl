@@ -418,7 +418,7 @@ end
         end
     end
 
-    @testset "store-agnostic: round trip through an in-memory Zarr.DictStore" begin
+    @testset "store-agnostic: round trip through an in-memory ZarrCore.DictStore" begin
         # `save`/`load` reach the filesystem only by resolving `path` to a
         # store; a `DictStore` round trip proves the native format itself
         # never touches a file, directory, or path string.
@@ -428,7 +428,7 @@ end
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = ZarrManifest()
 
-            store = Zarr.DictStore()
+            store = ZarrCore.DictStore()
             _save(store, "", group, fmt)
             @test store["manifest.json"] !== nothing
             @test store["columns/index/.zarray"] !== nothing
@@ -441,7 +441,7 @@ end
         end
     end
 
-    @testset "store-agnostic: round trip under a nonempty key prefix in one Zarr.DictStore" begin
+    @testset "store-agnostic: round trip under a nonempty key prefix in one ZarrCore.DictStore" begin
         # Proves a manifest need not own the whole store: `save`/`load`
         # address everything through `prefix`, so two manifests can share one
         # store at different prefixes without colliding.
@@ -451,7 +451,7 @@ end
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => va))
             fmt = ZarrManifest()
 
-            store = Zarr.DictStore()
+            store = ZarrCore.DictStore()
             _save(store, "scans/one", group, fmt)
             @test store["scans/one/manifest.json"] !== nothing
 

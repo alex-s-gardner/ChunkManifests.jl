@@ -64,7 +64,7 @@ import ZarrCore
         @test ChunkManifests.zarr_dtype_string(UInt16) == "<u2"
         @test ChunkManifests.zarr_dtype_string(Bool) == "|b1"
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
-        if Zarr.typestr(Complex{Int32}) isa AbstractVector
+        if ZarrCore.typestr(Complex{Int32}) isa AbstractVector
             @test ChunkManifests.zarr_dtype_string(Complex{Int32}) == [["r", "<i4"], ["i", "<i4"]]
         else
             @test_throws "complex integers need" ChunkManifests.zarr_dtype_string(Complex{Int32})
@@ -170,7 +170,7 @@ import ZarrCore
         compressor = Zarr.ZlibCompressor(3)
         compressed = ZarrCore.zcompress(data, compressor)
 
-        store = Zarr.DictStore()
+        store = ZarrCore.DictStore()
         store[".zarray"] = ChunkManifests.zarray_json(va)
         store[ChunkManifests.chunkkey(va, CartesianIndex(1, 1))] = compressed
 
@@ -189,11 +189,11 @@ import ZarrCore
 
         # The types a saved manifest reads back as have to emit the same
         # string, or a load-then-save cycle would change the dtype.
-        # Zarr.typestr is no inverse here: it encodes ASCIIChar as "<V1",
+        # ZarrCore.typestr is no inverse here: it encodes ASCIIChar as "<V1",
         # opaque bytes, which would lose the string type entirely.
-        @test Zarr.typestr("|S1") === ZarrCore.ASCIIChar
-        @test Zarr.typestr("|S5") === ZarrCore.MaxLengthString{5, UInt8}
-        @test Zarr.typestr(ZarrCore.ASCIIChar) == "<V1"
+        @test ZarrCore.typestr("|S1") === ZarrCore.ASCIIChar
+        @test ZarrCore.typestr("|S5") === ZarrCore.MaxLengthString{5, UInt8}
+        @test ZarrCore.typestr(ZarrCore.ASCIIChar) == "<V1"
         @test ChunkManifests.zarr_dtype_string(ZarrCore.ASCIIChar) == "|S1"
         @test ChunkManifests.zarr_dtype_string(ZarrCore.MaxLengthString{5, UInt8}) == "|S5"
 

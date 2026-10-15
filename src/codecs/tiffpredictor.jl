@@ -6,7 +6,7 @@
 # silently decode TIFF rows as one undifferenced run.
 
 """
-    TIFFPredictor{T}(width, samplesperpixel) <: Zarr.Filter{T,T}
+    TIFFPredictor{T}(width, samplesperpixel) <: ZarrCore.Filter{T,T}
 
 Undoes TIFF Predictor 2 (horizontal differencing). Decoding is a cumulative
 sum along each row of `width` pixels, independently for each of
@@ -25,7 +25,7 @@ package invented: it is not part of the Zarr or numcodecs specifications. A
 `.zarray` document naming it is readable by ChunkManifests.jl but not by Python
 `zarr`/`numcodecs` or any other Zarr implementation.
 """
-struct TIFFPredictor{T} <: Zarr.Filter{T, T}
+struct TIFFPredictor{T} <: ZarrCore.Filter{T, T}
     width::Int
     samplesperpixel::Int
 
@@ -114,7 +114,7 @@ function JSON.lower(f::TIFFPredictor{T}) where {T}
     return Dict(
         "id" => "tiff_predictor",
         "predictor" => 2,
-        "dtype" => Zarr.typestr(T),
+        "dtype" => ZarrCore.typestr(T),
         "width" => f.width,
         "samplesperpixel" => f.samplesperpixel,
     )
@@ -128,7 +128,7 @@ function ZarrCore.getfilter(::Type{<:TIFFPredictor}, d::Dict)
                 "got predictor $predictor"
         )
     )
-    T = Zarr.typestr(d["dtype"])
+    T = ZarrCore.typestr(d["dtype"])
     return TIFFPredictor{T}(d["width"], d["samplesperpixel"])
 end
 

@@ -103,7 +103,7 @@ end
 
 function _compressor_for(fmt::ZarrManifest)
     name = fmt.compressor
-    name === nothing && return Zarr.NoCompressor()
+    name === nothing && return ZarrCore.NoCompressor()
     name == "zstd" && return Zarr.ZstdCompressor()
     name == "zlib" && return Zarr.ZlibCompressor()
     throw(
@@ -192,7 +192,7 @@ function _save_columns(store::ZarrCore.AbstractStore, prefix::AbstractString, co
     # single-type form; keeping them equal avoids relying on that path.
     za_offset = Zarr.zcreate(
         UInt64, store, n; path = _joinkey(prefix, "offset"), chunks, compressor,
-        filters = (Zarr.DeltaFilter{UInt64}(),),
+        filters = (ZarrCore.DeltaFilter{UInt64}(),),
     )
     copyto!(za_index, index)
     copyto!(za_nbytes, nbytes)
@@ -456,7 +456,7 @@ function _load(store::ZarrCore.AbstractStore, prefix::AbstractString, fmt::ZarrM
     arrays = Dict{String, ManifestArray}()
     for (arraydoc, manifest) in zip(doc["arrays"], maps)
         key = arraydoc["path"]::AbstractString
-        T = Zarr.typestr(arraydoc["dtype"]::Union{AbstractString, AbstractVector})
+        T = ZarrCore.typestr(arraydoc["dtype"]::Union{AbstractString, AbstractVector})
         shape = Tuple(arraydoc["shape"])
         chunkshape = Tuple(arraydoc["chunkshape"])
 

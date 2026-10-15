@@ -15,7 +15,7 @@ resolved when the program is compiled.
 const LeafTransport = Union{LocalTransport, HTTPTransport, S3Transport}
 
 """
-    ChunkCodec <: Zarr.Compressor
+    ChunkCodec <: ZarrCore.Compressor
 
 How every chunk of a typed array is encoded, one type for all the encodings a typed open reads, so
 the array's type does not depend on which one a file uses. `kind` is `CODEC_NONE`, `CODEC_ZLIB`,
@@ -23,7 +23,7 @@ the array's type does not depend on which one a file uses. `kind` is `CODEC_NONE
 rows of `width` samples); `shuffle` is the element size of HDF5's byte shuffle, undone after
 decompressing, or `0` for none; `jpeg2000` holds the codestream header a JPEG 2000 tile decodes against.
 """
-struct ChunkCodec <: Zarr.Compressor
+struct ChunkCodec <: ZarrCore.Compressor
     kind::Int
     predictor::Int
     width::Int
@@ -259,7 +259,7 @@ const TypedArray{T} = Zarr.ZArray{T, 2, TypedChunkStore, ZarrCore.MetadataV2{T, 
 function _typedarray(::Type{T}, store::TypedChunkStore, shape::NTuple{2, Int}, chunks::NTuple{2, Int},
                      codec::ChunkCodec, fillvalue::Union{Nothing, T}) where {T}
     meta = ZarrCore.MetadataV2{T, 2, ChunkCodec, Nothing}(2, "array", shape, chunks, zarr_dtype_string(T), codec,
-                                                    fillvalue, 'C', nothing, Zarr.ChunkKeyEncoding('.', false))
+                                                    fillvalue, 'C', nothing, ZarrCore.ChunkKeyEncoding('.', false))
     return Zarr.ZArray{T, 2, TypedChunkStore, ZarrCore.MetadataV2{T, 2, ChunkCodec, Nothing}}(
         meta, store, "", Dict{String, Any}(), false)
 end

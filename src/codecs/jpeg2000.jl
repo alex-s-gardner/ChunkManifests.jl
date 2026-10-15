@@ -5,7 +5,7 @@
 # OpenJpeg_jll extension supplies as a method of `_j2k_decodetile!`.
 
 """
-    JPEG2000Tile(header) <: Zarr.Compressor
+    JPEG2000Tile(header) <: ZarrCore.Compressor
 
 Decodes a chunk holding the tile-parts of one tile of a JPEG 2000 codestream,
 given that codestream's main `header` (SOC up to the first SOT). The decoded
@@ -18,7 +18,7 @@ package invented: it is not part of the Zarr or numcodecs specifications. A
 `OpenJpeg_jll` loaded, but not by Python `zarr`/`numcodecs`. Decoding only:
 compressing a chunk throws.
 """
-struct JPEG2000Tile <: Zarr.Compressor
+struct JPEG2000Tile <: ZarrCore.Compressor
     header::Vector{UInt8}
     # Names this compressor's tiles in `_J2K_TILES`: one per opened array, so two files never share an
     # entry, and unlike `objectid` never reused.

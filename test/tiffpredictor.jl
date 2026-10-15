@@ -98,8 +98,8 @@ import Random
         @test ZarrCore.filterdict["tiff_predictor"] === ChunkManifests.TIFFPredictor
 
         # Pre-existing Zarr.jl filters are untouched.
-        @test ZarrCore.filterdict["shuffle"] === Zarr.ShuffleFilter
-        @test ZarrCore.filterdict["delta"] === Zarr.DeltaFilter
+        @test ZarrCore.filterdict["shuffle"] === ZarrCore.ShuffleFilter
+        @test ZarrCore.filterdict["delta"] === ZarrCore.DeltaFilter
         @test ZarrCore.filterdict["fletcher32"] === Zarr.Fletcher32Filter
         @test ZarrCore.filterdict["quantize"] === Zarr.QuantizeFilter
         @test ZarrCore.filterdict["fixedscaleoffset"] === Zarr.FixedScaleOffsetFilter
@@ -130,12 +130,12 @@ import Random
     end
 
     @testset "through a real ZArray" begin
-        store = Zarr.DictStore()
+        store = ZarrCore.DictStore()
         width, samplesperpixel = 3, 1
         f = ChunkManifests.TIFFPredictor(Int16, width, samplesperpixel)
         z = Zarr.zcreate(
             Int16, store, width;
-            chunks = (width,), compressor = Zarr.NoCompressor(), filters = (f,), zarr_format = 2,
+            chunks = (width,), compressor = ZarrCore.NoCompressor(), filters = (f,), zarr_format = 2,
         )
 
         original = Int16[1000, 1050, 900]

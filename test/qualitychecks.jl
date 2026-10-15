@@ -80,6 +80,7 @@ end
                 Base => Core, HTTP => Base, JSON => parentmodule(JSON.lower),
                 HDF5.API => HDF5.API.HDF5_jll,
                 TiffImages => TiffImages.FileIO,
+                Zarr => parentmodule(Zarr.ZlibCompressor), Zarr => parentmodule(Zarr.ZstdCompressor),
             ),
         ),
     )

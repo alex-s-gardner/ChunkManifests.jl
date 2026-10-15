@@ -56,7 +56,7 @@ end
 # A dtype can be read exactly when `zarr_dtype_string` emits it again, so the
 # writer defines the readable set and the two cannot disagree.
 #
-# The byte-order marker is compared separately, because `Zarr.typestr` parses it
+# The byte-order marker is compared separately, because `ZarrCore.typestr` parses it
 # and then discards it: ">i4" and "<i4" both give `Int32`. A big-endian dtype
 # would therefore decode as little-endian and yield wrong values rather than
 # fail, which is what `_checkbyteorder` refuses for HDF5 datasets and what this
@@ -70,7 +70,7 @@ function _juliadtype(dtype, path, key)
         )
     )
     T = try
-        Zarr.typestr(dtype)
+        ZarrCore.typestr(dtype)
     catch e
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$path: $key: invalid Zarr v2 dtype string $(repr(dtype)): $(e.msg)"))
@@ -112,7 +112,7 @@ end
 # whose fields each carry a byte order.
 function _juliadtype(dtype::AbstractVector, path, key)
     T = try
-        Zarr.typestr(dtype)
+        ZarrCore.typestr(dtype)
     catch e
         e isa ArgumentError || rethrow()
         throw(ArgumentError("$path: $key: $(e.msg)"))
