@@ -1,5 +1,5 @@
 # ReadaheadCache: restores range coalescing for the one-chunk-at-a-time
-# access patterns that bypass Zarr.read_items! (reductions and broadcast walk
+# access patterns that bypass ZarrCore.read_items! (reductions and broadcast walk
 # a Zarr array through Zarr.jl's single-chunk fast path, which calls
 # Base.getindex on the store directly).
 

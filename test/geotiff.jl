@@ -201,7 +201,7 @@ using TiffImages
             payload = Vector{UInt8}[]
             for ty in 1:gridy, tx in 1:gridx
                 block = padded[((tx - 1) * tilewidth + 1):(tx * tilewidth), ((ty - 1) * tilelength + 1):(ty * tilelength)]
-                push!(payload, Zarr.zcompress(block, Zarr.ZlibCompressor()))
+                push!(payload, ZarrCore.zcompress(block, Zarr.ZlibCompressor()))
             end
 
             path = joinpath(dir, "tiled_deflate.tif")
@@ -225,7 +225,7 @@ using TiffImages
             path = joinpath(dir, "predictor.tif")
             _gt_striped(
                 path; width, height, rowsperstrip, bits = 16, compression = 8, predictor = 2,
-                payload = [Zarr.zcompress(data, Zarr.ZlibCompressor())],
+                payload = [ZarrCore.zcompress(data, Zarr.ZlibCompressor())],
             )
             group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
@@ -440,7 +440,7 @@ using TiffImages
                 data3[b, x, y] = UInt16(1000b + 10y + x)
             end
             payload = [
-                Zarr.zcompress(block, Zarr.ZlibCompressor())
+                ZarrCore.zcompress(block, Zarr.ZlibCompressor())
                     for block in _gt_chunkytiles(data3, tilewidth, tilelength)
             ]
 
@@ -472,8 +472,8 @@ using TiffImages
                 data3[b, x, y] = UInt16(1000b + 10y + x)
             end
             f = ChunkManifests.TIFFPredictor(UInt16, width, nsp)
-            encoded = Zarr.zencode(vec(data3), f)
-            compressed = Zarr.zcompress(encoded, Zarr.ZlibCompressor())
+            encoded = ZarrCore.zencode(vec(data3), f)
+            compressed = ZarrCore.zcompress(encoded, Zarr.ZlibCompressor())
 
             path = joinpath(dir, "rgb_predictor.tif")
             _gt_striped(

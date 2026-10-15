@@ -212,6 +212,6 @@ end
     end
 
     @testset "Zarr.zopen of a path does not reach the store" begin
-        @test_throws "use load(" Zarr.storefromstring(ChunkManifest, "x.manifest", false)
+        @test_throws "use load(" ZarrCore.storefromstring(ChunkManifest, "x.manifest", false)
     end
 end

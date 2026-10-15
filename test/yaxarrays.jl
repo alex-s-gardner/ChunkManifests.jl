@@ -8,7 +8,7 @@ const _YX_DD = YAXArrays.DD
 # returns a `Zarr.ZGroup`, and YAXArrayBase already declares `to_dataset` for
 # one, so `open_dataset` reaches a manifest through dispatches that exist. The
 # `zopen` step is not optional: nothing declares `to_dataset` for a bare
-# `Zarr.AbstractStore`, which is what the first case below records.
+# `ZarrCore.AbstractStore`, which is what the first case below records.
 
 @testset "YAXArrays" begin
     dir = mktempdir()

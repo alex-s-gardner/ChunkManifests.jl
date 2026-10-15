@@ -436,7 +436,7 @@ function _scanvlenstring!(arrays, table, f, dset, dsetpath::AbstractString, cont
     raw = read(dset)
     values = raw isa AbstractString ? [String(raw)] : map(String, vec(_corder(raw)))
     width = max(1, maximum(sizeof, values; init = 0))
-    T = Zarr.MaxLengthString{width, UInt8}
+    T = ZarrCore.MaxLengthString{width, UInt8}
 
     shape = size(dset)
     bytes = zeros(UInt8, width * length(values))

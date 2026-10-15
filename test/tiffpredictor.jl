@@ -8,16 +8,16 @@ import Random
         f = ChunkManifests.TIFFPredictor(UInt8, 4, 1)
         original = UInt8[10, 12, 11, 200]
         encoded = UInt8[10, 2, 255, 189]  # 10; 12-10; 11-12 mod 256; 200-11
-        @test Zarr.zencode(original, f) == encoded
-        @test Zarr.zdecode(encoded, f) == original
+        @test ZarrCore.zencode(original, f) == encoded
+        @test ZarrCore.zdecode(encoded, f) == original
     end
 
     @testset "known-answer: single row, Int16" begin
         f = ChunkManifests.TIFFPredictor(Int16, 4, 1)
         original = Int16[1000, 1050, 900, 905]
         encoded = Int16[1000, 50, -150, 5]  # 1000; 1050-1000; 900-1050; 905-900
-        @test Zarr.zencode(original, f) == encoded
-        @test Zarr.zdecode(encoded, f) == original
+        @test ZarrCore.zencode(original, f) == encoded
+        @test ZarrCore.zdecode(encoded, f) == original
     end
 
     @testset "known-answer: several rows, reset at row boundary" begin
@@ -25,12 +25,12 @@ import Random
         # Row 1: 5, 7, 3.  Row 2: 200, 100, 250.
         encoded = UInt8[5, 2, 252, 200, 156, 150]
         expected = UInt8[5, 7, 3, 200, 100, 250]
-        @test Zarr.zdecode(encoded, f) == expected
+        @test ZarrCore.zdecode(encoded, f) == expected
         # Without a reset, row 2's first sample (stored absolute, 200) would
         # be decoded as a difference from row 1's last value (3), giving 203
         # instead of 200.
-        @test Zarr.zdecode(encoded, f)[4] == 200
-        @test Zarr.zencode(expected, f) == encoded
+        @test ZarrCore.zdecode(encoded, f)[4] == 200
+        @test ZarrCore.zencode(expected, f) == encoded
     end
 
     @testset "known-answer: interleaved bands, samplesperpixel=3" begin
@@ -39,25 +39,25 @@ import Random
         original = UInt8[10, 20, 30, 15, 25, 35, 12, 22, 255]
         # Per-band (stride 3) differences: R: 10,5,-3; G: 20,5,-3; B: 30,5,220.
         encoded = UInt8[10, 20, 30, 5, 5, 5, 253, 253, 220]
-        @test Zarr.zencode(original, f) == encoded
-        @test Zarr.zdecode(encoded, f) == original
+        @test ZarrCore.zencode(original, f) == encoded
+        @test ZarrCore.zdecode(encoded, f) == original
         # A stride-1 (flat delta) decode would be wrong here: it would not
         # recover the original interleaved pixel values.
-        @test Zarr.zdecode(encoded, f) != cumsum(encoded)
+        @test ZarrCore.zdecode(encoded, f) != cumsum(encoded)
     end
 
     @testset "wrapping arithmetic" begin
         f8 = ChunkManifests.TIFFPredictor(UInt8, 2, 1)
         original8 = UInt8[250, 10]
         encoded8 = UInt8[250, 16]  # 10 - 250 mod 256 == 16
-        @test Zarr.zencode(original8, f8) == encoded8
-        @test Zarr.zdecode(encoded8, f8) == original8
+        @test ZarrCore.zencode(original8, f8) == encoded8
+        @test ZarrCore.zdecode(encoded8, f8) == original8
 
         f16 = ChunkManifests.TIFFPredictor(Int16, 2, 1)
         original16 = Int16[32767, -32768]
         encoded16 = Int16[32767, 1]  # -32768 - 32767 mod 65536 == 1
-        @test Zarr.zencode(original16, f16) == encoded16
-        @test Zarr.zdecode(encoded16, f16) == original16
+        @test ZarrCore.zencode(original16, f16) == encoded16
+        @test ZarrCore.zdecode(encoded16, f16) == original16
     end
 
     @testset "round trip" begin
@@ -69,8 +69,8 @@ import Random
                 f = ChunkManifests.TIFFPredictor(T, width, samplesperpixel)
                 n = width * samplesperpixel * nrows
                 x = rand(T, n)
-                encoded = Zarr.zencode(x, f)
-                @test Zarr.zdecode(encoded, f) == x
+                encoded = ZarrCore.zencode(x, f)
+                @test ZarrCore.zdecode(encoded, f) == x
             end
         end
     end
@@ -80,10 +80,10 @@ import Random
         @test_throws "samplesperpixel must be at least 1" ChunkManifests.TIFFPredictor(UInt8, 4, 0)
 
         f = ChunkManifests.TIFFPredictor(UInt8, 4, 1)
-        @test_throws "not a multiple of width" Zarr.zdecode(UInt8[1, 2, 3], f)
-        @test_throws "not a multiple of width" Zarr.zencode(UInt8[1, 2, 3], f)
+        @test_throws "not a multiple of width" ZarrCore.zdecode(UInt8[1, 2, 3], f)
+        @test_throws "not a multiple of width" ZarrCore.zencode(UInt8[1, 2, 3], f)
 
-        @test_throws "eltype" Zarr.zdecode(Int16[1, 2, 3, 4], f)
+        @test_throws "eltype" ZarrCore.zdecode(Int16[1, 2, 3, 4], f)
     end
 
     @testset "predictor 1 and 3 handling" begin
@@ -94,18 +94,18 @@ import Random
     end
 
     @testset "registration" begin
-        @test haskey(Zarr.filterdict, "tiff_predictor")
-        @test Zarr.filterdict["tiff_predictor"] === ChunkManifests.TIFFPredictor
+        @test haskey(ZarrCore.filterdict, "tiff_predictor")
+        @test ZarrCore.filterdict["tiff_predictor"] === ChunkManifests.TIFFPredictor
 
         # Pre-existing Zarr.jl filters are untouched.
-        @test Zarr.filterdict["shuffle"] === Zarr.ShuffleFilter
-        @test Zarr.filterdict["delta"] === Zarr.DeltaFilter
-        @test Zarr.filterdict["fletcher32"] === Zarr.Fletcher32Filter
-        @test Zarr.filterdict["quantize"] === Zarr.QuantizeFilter
-        @test Zarr.filterdict["fixedscaleoffset"] === Zarr.FixedScaleOffsetFilter
-        @test Zarr.filterdict["vlen-array"] === Zarr.VLenArrayFilter
-        @test Zarr.filterdict["vlen-utf8"] === Zarr.VLenUTF8Filter
-        @test Zarr.filterdict["tiff_predictor"] !== Zarr.filterdict["shuffle"]
+        @test ZarrCore.filterdict["shuffle"] === Zarr.ShuffleFilter
+        @test ZarrCore.filterdict["delta"] === Zarr.DeltaFilter
+        @test ZarrCore.filterdict["fletcher32"] === Zarr.Fletcher32Filter
+        @test ZarrCore.filterdict["quantize"] === Zarr.QuantizeFilter
+        @test ZarrCore.filterdict["fixedscaleoffset"] === Zarr.FixedScaleOffsetFilter
+        @test ZarrCore.filterdict["vlen-array"] === Zarr.VLenArrayFilter
+        @test ZarrCore.filterdict["vlen-utf8"] === Zarr.VLenUTF8Filter
+        @test ZarrCore.filterdict["tiff_predictor"] !== ZarrCore.filterdict["shuffle"]
     end
 
     @testset "JSON.lower and getfilter round trip" begin
@@ -118,13 +118,13 @@ import Random
             "width" => 7,
             "samplesperpixel" => 3,
         )
-        f2 = Zarr.getfilter(ChunkManifests.TIFFPredictor, d)
+        f2 = ZarrCore.getfilter(ChunkManifests.TIFFPredictor, d)
         @test f2 isa ChunkManifests.TIFFPredictor{Int16}
         @test f2.width == f.width
         @test f2.samplesperpixel == f.samplesperpixel
         @test f2 == f
 
-        @test_throws "only implements TIFF Predictor 2" Zarr.getfilter(
+        @test_throws "only implements TIFF Predictor 2" ZarrCore.getfilter(
             ChunkManifests.TIFFPredictor, Dict("predictor" => 3, "dtype" => "<f4", "width" => 4, "samplesperpixel" => 1)
         )
     end

@@ -72,7 +72,7 @@ function _checkpredictorinput(v::AbstractVector, f::TIFFPredictor{T}) where {T}
     return rowsamples
 end
 
-function Zarr.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
+function ZarrCore.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     v = vec(a)
     rowsamples = _checkpredictorinput(v, f)
     nrows = length(v) ÷ rowsamples
@@ -92,7 +92,7 @@ function Zarr.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     return out
 end
 
-function Zarr.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
+function ZarrCore.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     v = vec(a)
     rowsamples = _checkpredictorinput(v, f)
     nrows = length(v) ÷ rowsamples
@@ -120,7 +120,7 @@ function JSON.lower(f::TIFFPredictor{T}) where {T}
     )
 end
 
-function Zarr.getfilter(::Type{<:TIFFPredictor}, d::Dict)
+function ZarrCore.getfilter(::Type{<:TIFFPredictor}, d::Dict)
     predictor = get(d, "predictor", 2)
     predictor == 2 || throw(
         ArgumentError(
@@ -162,7 +162,7 @@ end
 
 # Called from ChunkManifests.__init__ to register the codec with Zarr.
 function _register_tiff_predictor!()
-    haskey(Zarr.filterdict, "tiff_predictor") && return nothing
-    Zarr.filterdict["tiff_predictor"] = TIFFPredictor
+    haskey(ZarrCore.filterdict, "tiff_predictor") && return nothing
+    ZarrCore.filterdict["tiff_predictor"] = TIFFPredictor
     return nothing
 end

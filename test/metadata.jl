@@ -1,6 +1,7 @@
 import HDF5
 import JSON
 import Zarr
+import ZarrCore
 
 # zarray_json, zattrs_json, zgroup_json, chunkkey, parse_chunkkey and
 # zarr_dtype_string are internal to ChunkManifests (not exported), so they are
@@ -167,7 +168,7 @@ import Zarr
 
         data = reshape(collect(1.0:6.0), shape)
         compressor = Zarr.ZlibCompressor(3)
-        compressed = Zarr.zcompress(data, compressor)
+        compressed = ZarrCore.zcompress(data, compressor)
 
         store = Zarr.DictStore()
         store[".zarray"] = ChunkManifests.zarray_json(va)
@@ -190,11 +191,11 @@ import Zarr
         # string, or a load-then-save cycle would change the dtype.
         # Zarr.typestr is no inverse here: it encodes ASCIIChar as "<V1",
         # opaque bytes, which would lose the string type entirely.
-        @test Zarr.typestr("|S1") === Zarr.ASCIIChar
-        @test Zarr.typestr("|S5") === Zarr.MaxLengthString{5, UInt8}
-        @test Zarr.typestr(Zarr.ASCIIChar) == "<V1"
-        @test ChunkManifests.zarr_dtype_string(Zarr.ASCIIChar) == "|S1"
-        @test ChunkManifests.zarr_dtype_string(Zarr.MaxLengthString{5, UInt8}) == "|S5"
+        @test Zarr.typestr("|S1") === ZarrCore.ASCIIChar
+        @test Zarr.typestr("|S5") === ZarrCore.MaxLengthString{5, UInt8}
+        @test Zarr.typestr(ZarrCore.ASCIIChar) == "<V1"
+        @test ChunkManifests.zarr_dtype_string(ZarrCore.ASCIIChar) == "|S1"
+        @test ChunkManifests.zarr_dtype_string(ZarrCore.MaxLengthString{5, UInt8}) == "|S5"
 
         # Variable-length strings and compound types stay refused.
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
@@ -224,7 +225,7 @@ import Zarr
         # parseable.
         store = ChunkManifest(; arrays = Dict{String, ManifestArray}("s" => va))
         z = Zarr.zopen(store)["s"]
-        @test eltype(z) === Zarr.ASCIIChar
+        @test eltype(z) === ZarrCore.ASCIIChar
         @test UInt8(z[]) == 0x41
     end
 
@@ -240,7 +241,7 @@ import Zarr
         va = ManifestArray{HDF5.FixedString{5, 0}}(m, (1,), (1,); dimnames = ["s"])
         store = ChunkManifest(; arrays = Dict{String, ManifestArray}("s" => va))
         z = Zarr.zopen(store)["s"]
-        @test eltype(z) === Zarr.MaxLengthString{5, UInt8}
+        @test eltype(z) === ZarrCore.MaxLengthString{5, UInt8}
         @test String(z[1]) == "abcde"
     end
 

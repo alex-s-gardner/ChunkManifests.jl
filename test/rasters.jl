@@ -5,7 +5,7 @@ import Zarr
 import ZarrDatasets
 
 const _RA_CDM = ZarrDatasets.CDM
-const _RA_DA = Zarr.DiskArrays
+const _RA_DA = ZarrCore.DiskArrays
 
 
 const _RA_ITSLIVE_PATH = ITSLIVE_PATH

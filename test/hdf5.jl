@@ -407,7 +407,7 @@ end
             out = _save(joinpath(mktempdir(), "m"), g, ZarrManifest())
             back = _manifest(load(out))
             mb = arraysof(back)["mapping"]
-            @test eltype(mb) === Zarr.ASCIIChar
+            @test eltype(mb) === ZarrCore.ASCIIChar
             @test ChunkManifests.zarr_dtype_string(eltype(mb)) == "|S1"
             @test attrsof(mb) == attrs
         end
@@ -672,7 +672,7 @@ end
             # writer gives a scalar metadata variable.
             cm = _scan(fn, HDF5Driver(); group = "/vlen")
             va = arraysof(cm)["vlen"]
-            @test eltype(va) === Zarr.MaxLengthString{2, UInt8}
+            @test eltype(va) === ZarrCore.MaxLengthString{2, UInt8}
             @test ChunkManifests.zarr_dtype_string(eltype(va)) == "|S2"
             @test chunkstate(chunkmapof(va), CartesianIndex(1)) == INLINE_CHUNK
             # No file is read for it, so a manifest carrying one is portable.

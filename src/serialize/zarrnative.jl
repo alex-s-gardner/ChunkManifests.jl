@@ -46,11 +46,11 @@
 # `arrays/<n>/`, and is still read.
 #
 # `path` is resolved to a single `(store, prefix)` pair through
-# `Zarr.storefromstring` (see `_resolvestore` below), and everything above —
+# `ZarrCore.storefromstring` (see `_resolvestore` below), and everything above —
 # `manifest.json` and each column — is addressed as a key or a
 # `zcreate`/`zopen` `path` kwarg under that one store rather than through
 # separate filesystem operations. A local directory still ends up with
-# exactly the layout above, since `Zarr.storefromstring` falls back to a
+# exactly the layout above, since `ZarrCore.storefromstring` falls back to a
 # `DirectoryStore` rooted at `path`; an `s3://`, `gs://`, `http://`, or
 # `https://` URI resolves to the matching remote store instead, so saving or
 # loading a manifest on object storage reuses this same code path.
@@ -59,19 +59,19 @@ const _ZARR_MANIFEST_ARRAYS_DIR = "arrays"
 const _ZARR_MANIFEST_COLUMNS_DIR = "columns"
 const _ZARR_MANIFEST_JSON = "manifest.json"
 
-# A string that `Zarr.storefromstring` resolves to a store other than a local
+# A string that `ZarrCore.storefromstring` resolves to a store other than a local
 # `DirectoryStore`: one matching an `s3://`, `gs://`, `http://`, or `https://`
-# prefix registered in `Zarr.storageregexlist`.
-_isstoreuri(path::AbstractString) = any(rx_type -> occursin(first(rx_type), path), Zarr.storageregexlist)
+# prefix registered in `ZarrCore.storageregexlist`.
+_isstoreuri(path::AbstractString) = any(rx_type -> occursin(first(rx_type), path), ZarrCore.storageregexlist)
 
 # Joins a store key `prefix` (possibly empty, meaning the store root) with a
-# relative `suffix`, the way `Zarr.AbstractStore`'s own two-argument indexing
+# relative `suffix`, the way `ZarrCore.AbstractStore`'s own two-argument indexing
 # does internally.
 _joinkey(prefix::AbstractString, suffix::AbstractString) =
     isempty(prefix) ? suffix : string(rstrip(prefix, '/'), '/', suffix)
 
 # Resolves `path`, naming a whole manifest directory, to a `(store, prefix)`
-# pair via `Zarr.storefromstring`. A URI is handed to `storefromstring`
+# pair via `ZarrCore.storefromstring`. A URI is handed to `storefromstring`
 # unchanged. A local path falls back to a `DirectoryStore` rooted at `path`
 # itself (prefix `""`); when `create` is `false`, a local `path` that is not
 # an existing directory raises before any store or directory is created,
@@ -80,17 +80,17 @@ function _resolvestore(path::AbstractString, create::Bool)
     if !create && !_isstoreuri(path) && !isdir(path)
         throw(ArgumentError("load: no such directory \"$path\""))
     end
-    return Zarr.storefromstring(path, create)
+    return ZarrCore.storefromstring(path, create)
 end
 
 # Resolves `path`, naming one JSON document rather than a directory, to a
-# `(store, key)` pair. A URI is handed to `Zarr.storefromstring` unchanged,
+# `(store, key)` pair. A URI is handed to `ZarrCore.storefromstring` unchanged,
 # since the whole string already resolves to one object key once the store's
 # own root (e.g. an S3 bucket) is split off. A local path is split into its
 # parent directory, opened as a `DirectoryStore`, and the document's file
 # name as the key, so that `path` itself never becomes a directory.
 function _resolvefilestore(path::AbstractString, create::Bool)
-    _isstoreuri(path) && return Zarr.storefromstring(path, create)
+    _isstoreuri(path) && return ZarrCore.storefromstring(path, create)
     dir = dirname(path)
     isempty(dir) && (dir = ".")
     if create
@@ -176,7 +176,7 @@ function _save_chunkmanifest!(columns, manifest::ExplicitChunkMap{N}) where {N}
     )
 end
 
-function _save_columns(store::Zarr.AbstractStore, prefix::AbstractString, columns, fmt::ZarrManifest)
+function _save_columns(store::ZarrCore.AbstractStore, prefix::AbstractString, columns, fmt::ZarrManifest)
     index, offset, nbytes = columns
     n = length(index)
     chunks = (max(1, min(fmt.chunkcells, n)),)
@@ -215,7 +215,7 @@ end
     _save(path, group::ChunkManifest, fmt::ZarrManifest) -> String
 
 Write `group` to `path` as a [`ZarrManifest`](@ref). `path` is resolved to a
-store through `Zarr.storefromstring`: a plain local path is created as a
+store through `ZarrCore.storefromstring`: a plain local path is created as a
 directory if needed; an `s3://`, `gs://`, `http://`, or `https://` URI is
 written to the matching remote store instead. Returns `path`.
 """
@@ -226,14 +226,14 @@ function _save(path::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
 end
 
 """
-    _save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
+    _save(store::ZarrCore.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
 
 Write `group` as a [`ZarrManifest`](@ref) into `store` under the key prefix
 `prefix`, exactly as `_save(path, group, fmt)` does once it has resolved
 `path` to a store. Not part of the public interface; exists so a manifest's
-store-agnosticism can be exercised directly against any `Zarr.AbstractStore`.
+store-agnosticism can be exercised directly against any `ZarrCore.AbstractStore`.
 """
-function _save(store::Zarr.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
+function _save(store::ZarrCore.AbstractStore, prefix::AbstractString, group::ChunkManifest, fmt::ZarrManifest)
     columns = (UInt32[], UInt64[], UInt64[])
     explicit = false
     arraydocs = Dict{String, Any}[]
@@ -348,7 +348,7 @@ end
 
 # Format version 2: one array's columns, under `arrays/<n>/`.
 function _load_chunkmanifest(
-        store::Zarr.AbstractStore, arrayprefix::AbstractString, table::PathTable, gridsize::NTuple{N, Int},
+        store::ZarrCore.AbstractStore, arrayprefix::AbstractString, table::PathTable, gridsize::NTuple{N, Int},
         mdoc, label::AbstractString,
     ) where {N}
     index = _ZarrColumn(Zarr.zopen(store; path = _joinkey(arrayprefix, "index")))
@@ -373,7 +373,7 @@ function _load_chunkmanifest(
 end
 
 # Format version 2: one array's chunk map, over a table of its own.
-function _load_manifestpart(store::Zarr.AbstractStore, prefix::AbstractString, arraydoc, label::AbstractString)
+function _load_manifestpart(store::ZarrCore.AbstractStore, prefix::AbstractString, arraydoc, label::AbstractString)
     mdoc = arraydoc["manifest"]
     kind = mdoc["kind"]
     table = _pathtable_from_json(mdoc["tableof"])
@@ -407,7 +407,7 @@ end
     _load(path, fmt::ZarrManifest) -> ChunkManifest
 
 Read a [`ChunkManifest`](@ref) previously written by [`save`](@ref) to
-`path`. `path` is resolved to a store through `Zarr.storefromstring`, the
+`path`. `path` is resolved to a store through `ZarrCore.storefromstring`, the
 same way `save` resolves it, so a manifest saved to object storage reads
 back by this same method. A `ExplicitChunkMap`'s columns are opened as
 `Zarr.ZArray`s and decoded one Zarr chunk at a time as they are consulted,
@@ -420,16 +420,16 @@ function _load(path::AbstractString, fmt::ZarrManifest)
 end
 
 """
-    _load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label=prefix) -> ChunkManifest
+    _load(store::ZarrCore.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label=prefix) -> ChunkManifest
 
 Read a [`ZarrManifest`](@ref) from `store` under the key prefix `prefix`,
 exactly as `_load(path, fmt)` does once it has resolved `path` to a store.
 `label` names `store`/`prefix` in any error message; it defaults to `prefix`
 since a bare store has no path of its own. Not part of the public interface;
 exists so a manifest's store-agnosticism can be exercised directly against
-any `Zarr.AbstractStore`.
+any `ZarrCore.AbstractStore`.
 """
-function _load(store::Zarr.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString = prefix)
+function _load(store::ZarrCore.AbstractStore, prefix::AbstractString, fmt::ZarrManifest; label::AbstractString = prefix)
     jsonbytes = store[prefix, _ZARR_MANIFEST_JSON]
     jsonbytes === nothing && throw(
         ArgumentError(
@@ -484,7 +484,7 @@ const _READABLE_FORMAT_VERSIONS = (2, MANIFEST_FORMAT_VERSION)
 # Every array's chunk map in a current-format manifest, in the order listed,
 # over the one table they share, and that table. The columns are opened once
 # and each ExplicitChunkMap reads its own stretch of them.
-function _load_chunkmaps(store::Zarr.AbstractStore, prefix::AbstractString, doc, label::AbstractString)
+function _load_chunkmaps(store::ZarrCore.AbstractStore, prefix::AbstractString, doc, label::AbstractString)
     table = _pathtable_from_json(doc["table"])
     arraydocs = doc["arrays"]
     explicit = any(a -> a["manifest"]["kind"] == "chunk", arraydocs)

@@ -46,14 +46,14 @@ end
             offset = zeros(UInt64, gridsize)
             nbytes = zeros(UInt64, gridsize)
             for I in CartesianIndices(gridsize)
-                fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
+                fname = joinpath(dir, ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
                 index[I] = push_uri!(table, fname; size = filesize(fname))
                 nbytes[I] = filesize(fname)
             end
 
             I_missing = CartesianIndex(1, 1, 1)
             I_inline = CartesianIndex(2, 1, 1)
-            inline_bytes = read(joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I_inline)))
+            inline_bytes = read(joinpath(dir, ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I_inline)))
             index[I_missing] = ChunkManifests.MISSING_INDEX
             index[I_inline] = ChunkManifests.INLINE_INDEX
 

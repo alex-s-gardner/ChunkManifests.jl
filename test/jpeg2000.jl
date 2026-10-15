@@ -114,7 +114,7 @@ end
 
         @testset "a chunk without the tile's SOT is refused" begin
             c = ChunkManifests.JPEG2000Tile(UInt8[0xff, 0x4f, 0xff, 0x51])
-            @test_throws "does not start with the SOC and SIZ markers" Zarr.zuncompress(zeros(UInt8, 16), c, UInt8)
+            @test_throws "does not start with the SOC and SIZ markers" ZarrCore.zuncompress(zeros(UInt8, 16), c, UInt8)
         end
     end
 end

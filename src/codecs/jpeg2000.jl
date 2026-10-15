@@ -71,7 +71,7 @@ jpeg2000tile_config(header::AbstractVector{UInt8}) =
 
 JSON.lower(c::JPEG2000Tile) = jpeg2000tile_config(c.header)
 
-Zarr.getCompressor(::Type{JPEG2000Tile}, d::Dict) = JPEG2000Tile(Base64.base64decode(d["header"]))
+ZarrCore.getCompressor(::Type{JPEG2000Tile}, d::Dict) = JPEG2000Tile(Base64.base64decode(d["header"]))
 
 """
     _j2k_decodetile!(dest, codestream, bounds, chunkshape) -> dest
@@ -97,18 +97,18 @@ function _j2k_decode!(dest::AbstractArray, compressed, c::JPEG2000Tile)
     return dest
 end
 
-function Zarr.zuncompress(a, c::JPEG2000Tile, T)
+function ZarrCore.zuncompress(a, c::JPEG2000Tile, T)
     siz = _j2k_siz(c.header)
     return _j2k_decode!(Vector{T}(undef, siz.xtsiz * siz.ytsiz), a, c)
 end
 
-Zarr.zuncompress!(data::DenseArray, compressed, c::JPEG2000Tile) = _j2k_decode!(data, compressed, c)
+ZarrCore.zuncompress!(data::DenseArray, compressed, c::JPEG2000Tile) = _j2k_decode!(data, compressed, c)
 
-Zarr.zcompress(a, ::JPEG2000Tile) =
+ZarrCore.zcompress(a, ::JPEG2000Tile) =
     throw(ArgumentError("JPEG2000Tile decodes a scanned JPEG 2000 tile; it does not encode"))
 
 # Called from ChunkManifests.__init__ to register the codec with Zarr.
 function _register_jpeg2000_tile!()
-    Zarr.compressortypes["jpeg2000_tile"] = JPEG2000Tile
+    ZarrCore.compressortypes["jpeg2000_tile"] = JPEG2000Tile
     return nothing
 end

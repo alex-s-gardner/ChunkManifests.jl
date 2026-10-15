@@ -48,15 +48,15 @@ end
 # zarr-python writes; Zarr.jl parses `|S<n>` and `<S<n>` identically.
 #
 # These are not delegated to `Zarr.typestr`, which is not an inverse here:
-# `typestr("|S1")` gives `Zarr.ASCIIChar`, but `typestr(Zarr.ASCIIChar)` gives
+# `typestr("|S1")` gives `ZarrCore.ASCIIChar`, but `typestr(ZarrCore.ASCIIChar)` gives
 # `"<V1"` — opaque bytes, which would lose the string type when a saved
 # manifest is read back and written again. At n == 1 Zarr.jl decodes as
 # `ASCIIChar` rather than a string type; that is byte-compatible, one byte
 # either way, and is the right trade against emitting a spelling off-spec.
 # The HDF5 driver adds the method for its own fixed-string eltype, in
 # src/drivers/hdf5.jl: driver-specific type knowledge lives with the driver.
-zarr_dtype_string(::Type{Zarr.MaxLengthString{N, UInt8}}) where {N} = "|S$N"
-zarr_dtype_string(::Type{Zarr.ASCIIChar}) = "|S1"
+zarr_dtype_string(::Type{ZarrCore.MaxLengthString{N, UInt8}}) where {N} = "|S$N"
+zarr_dtype_string(::Type{ZarrCore.ASCIIChar}) = "|S1"
 
 # JSON has no literal for a non-finite number, and Zarr v2 spells the three it
 # needs as strings. A NaN fill value is what a NetCDF4 writer leaves on a
@@ -170,7 +170,7 @@ zgroup_json() = Vector{UInt8}(JSON.json(Dict{String, Any}("zarr_format" => 2)))
 Zarr v2 chunk key for the 1-based Julia chunk index `I`.
 """
 function chunkkey(::ManifestArray{T, N}, I::CartesianIndex{N}) where {T, N}
-    return Zarr.citostring(_V2_CHUNK_KEY_ENCODING, I)
+    return ZarrCore.citostring(_V2_CHUNK_KEY_ENCODING, I)
 end
 
 # Number of '.'-separated components of a chunk key, and the k-th of them as a
