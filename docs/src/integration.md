@@ -35,17 +35,14 @@ julia> z["grounded"][1:2, 1:2]
 ## ZarrDatasets.jl and YAXArrays.jl
 
 ```julia
-using ZarrDatasets, YAXArrays
+using ZarrDatasets
 ZarrDatasets.ZarrDataset(z)   # CommonDataModel
-YAXArrays.open_dataset(z)
 ```
 
-Both take the group directly. `open_dataset` opens one group's arrays, so open a subgroup —
-a GeoTIFF level, or one file of a merge — by indexing to it:
-
-```julia
-YAXArrays.open_dataset(z["0"])   # a GeoTIFF's full-resolution level
-```
+`ZarrDataset` takes the group directly. YAXArrays.jl opens a group the same way
+(`YAXArrays.open_dataset(z)`, or `z["0"]` for a GeoTIFF's full-resolution level), but
+YAXArrayBase 0.7 requires Zarr 0.10 and this package requires Zarr 0.11, so the two cannot
+be installed together until YAXArrayBase supports Zarr 0.11.
 
 ## Rasters.jl
 

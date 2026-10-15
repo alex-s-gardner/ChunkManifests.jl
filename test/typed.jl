@@ -5,8 +5,8 @@
 import Zarr
 
 # One deflate (zlib) stream per chunk, as TIFF compression 8 stores it.
-_ty_deflate(bytes::Vector{UInt8}) = Zarr.zcompress(bytes, Zarr.ZlibCompressor())
-_ty_zstd(bytes::Vector{UInt8}) = Zarr.zcompress(bytes, Zarr.ZstdCompressor())
+_ty_deflate(bytes::Vector{UInt8}) = ZarrCore.zcompress(bytes, Zarr.ZlibCompressor())
+_ty_zstd(bytes::Vector{UInt8}) = ZarrCore.zcompress(bytes, Zarr.ZstdCompressor())
 
 # The chunks of `data`, an (x, y) matrix, as TIFF tiles in row-major tile order, each padded to the
 # full tile; `predict` applies Predictor 2 to each before encoding.
@@ -17,7 +17,7 @@ function _ty_tiles(data::Matrix{T}, tw::Int, th::Int; encode = identity, predict
         tile = zeros(T, tw, th)
         xs, ys = (tx * tw + 1):min(w, (tx + 1) * tw), (ty * th + 1):min(h, (ty + 1) * th)
         tile[1:length(xs), 1:length(ys)] = data[xs, ys]
-        predict && (tile = reshape(Zarr.zencode(tile, ChunkManifests.TIFFPredictor{T}(tw, 1)), tw, th))
+        predict && (tile = reshape(ZarrCore.zencode(tile, ChunkManifests.TIFFPredictor{T}(tw, 1)), tw, th))
         push!(payload, encode(Vector{UInt8}(reinterpret(UInt8, vec(tile)))))
     end
     return payload

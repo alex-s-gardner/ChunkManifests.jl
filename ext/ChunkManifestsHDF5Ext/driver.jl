@@ -195,7 +195,7 @@ end
 # missing chunk of that type cannot be materialized at all.
 # The scan-time eltype of an HDF5 fixed-length string dataset. Its Zarr v2
 # spelling is `|S<n>`; see `zarr_dtype_string` in src/store/metadata.jl for why
-# that form rather than whatever `Zarr.typestr` would return.
+# that form rather than whatever `ZarrCore.typestr` would return.
 zarr_dtype_string(::Type{HDF5.FixedString{N, PAD}}) where {N, PAD} = "|S$N"
 
 _isfixedstring(::Type) = false
@@ -436,7 +436,7 @@ function _scanvlenstring!(arrays, table, f, dset, dsetpath::AbstractString, cont
     raw = read(dset)
     values = raw isa AbstractString ? [String(raw)] : map(String, vec(_corder(raw)))
     width = max(1, maximum(sizeof, values; init = 0))
-    T = Zarr.MaxLengthString{width, UInt8}
+    T = ZarrCore.MaxLengthString{width, UInt8}
 
     shape = size(dset)
     bytes = zeros(UInt8, width * length(values))

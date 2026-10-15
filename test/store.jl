@@ -1,8 +1,8 @@
 import JSON
 import Zarr
 
-# Zarr.read_items!, Zarr.subdirs, Zarr.subkeys, Zarr.storagesize,
-# Zarr.store_read_strategy and Zarr.storefromstring are Zarr.jl internals
+# ZarrCore.read_items!, ZarrCore.subdirs, ZarrCore.subkeys, Zarr.storagesize,
+# ZarrCore.store_read_strategy and ZarrCore.storefromstring are Zarr.jl internals
 # (unexported), so they are qualified throughout this file.
 
 # Counts fetchrange calls so a coalescing test can assert the number of
@@ -32,7 +32,7 @@ function _manifest_columns_from_directorystore(dir::AbstractString, gridsize::NT
     offset = zeros(UInt64, gridsize)
     nbytes = zeros(UInt64, gridsize)
     for I in CartesianIndices(gridsize)
-        fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
+        fname = joinpath(dir, ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
         index[I] = push_uri!(table, fname)
         nbytes[I] = filesize(fname)
     end
@@ -96,7 +96,7 @@ end
                 # The never-decode invariant: a store value must be the file's
                 # bytes verbatim, not anything Zarr-decoded or recompressed.
                 I = CartesianIndex(1, 1, 1)
-                key = Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
+                key = ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
                 fname = joinpath(dir, key)
                 @test mstore[key] == read(fname)
             end
@@ -123,7 +123,7 @@ end
 
             @testset "inline chunk reads back correctly" begin
                 I = CartesianIndex(2, 1, 1)
-                key = Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
+                key = ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
                 inlinebytes_ = read(joinpath(dir, key))
 
                 index_inline = copy(index)
@@ -150,7 +150,7 @@ end
                     manifest_bad, shape, chunkshape; fillvalue, compressor, dimnames
                 )
                 mstore_bad = ChunkManifest(; arrays = Dict{String, ManifestArray}("" => va_bad))
-                key = Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, CartesianIndex(1, 1, 1))
+                key = ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, CartesianIndex(1, 1, 1))
                 @test_throws "exceeds size" mstore_bad[key]
             end
         end
@@ -178,7 +178,7 @@ end
             za = Zarr.zopen(mstore)
 
             @test za[:] == vals
-            # Regression guard: Zarr.read_items! is unexported and undocumented
+            # Regression guard: ZarrCore.read_items! is unexported and undocumented
             # upstream. If a future Zarr.jl version stops routing multi-chunk
             # reads through it, this falls back to one fetch per chunk and
             # must fail loudly here rather than silently losing the win.
@@ -250,7 +250,7 @@ end
         mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("g/a" => va))
         # A virtual chunk is reported present without its file being read:
         # "absent.bin" does not exist.
-        @test Zarr.isinitialized(mstore, "g/a/" * ChunkManifests.chunkkey(va, CartesianIndex(1, 2)))
+        @test ZarrCore.isinitialized(mstore, "g/a/" * ChunkManifests.chunkkey(va, CartesianIndex(1, 2)))
         keys_ = [
             ".zgroup", ".zattrs", ".zarray", "g/.zgroup", "g/.zattrs", "g/.zarray",
             "g/a/.zarray", "g/a/.zattrs", "g/a/.zgroup", "g/a/nonsense", "g/a/9.9",
@@ -259,20 +259,20 @@ end
             "h/.zgroup", "nope",
         ]
         for k in keys_
-            @test Zarr.isinitialized(mstore, k) == (mstore[k] !== nothing)
+            @test ZarrCore.isinitialized(mstore, k) == (mstore[k] !== nothing)
         end
     end
 
     @testset "setindex! and storefromstring are read-only" begin
         mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => _dummyva((4,), (2,))))
         @test_throws "read-only" (mstore["a/.zarray"] = UInt8[1, 2, 3])
-        @test_throws "cannot be opened from inside Zarr.zopen" Zarr.storefromstring(ChunkManifest, "s3://bucket/key", false)
+        @test_throws "cannot be opened from inside Zarr.zopen" ZarrCore.storefromstring(ChunkManifest, "s3://bucket/key", false)
     end
 
     @testset "store_read_strategy reports transport concurrency" begin
         mstore = ChunkManifest(; arrays = Dict{String, ManifestArray}("a" => _dummyva((4,), (2,))))
-        strategy = Zarr.store_read_strategy(mstore)
-        @test strategy isa Zarr.ConcurrentRead
+        strategy = ZarrCore.store_read_strategy(mstore)
+        @test strategy isa ZarrCore.ConcurrentRead
         @test strategy.ntasks == ChunkManifests.concurrency(LocalTransport())
     end
 
@@ -287,14 +287,14 @@ end
         )
         mstore = group
 
-        @test Set(Zarr.subdirs(mstore, "")) == Set(["grp", "top"])
-        @test Set(Zarr.subkeys(mstore, "")) == Set([".zgroup", ".zattrs"])
-        @test Set(Zarr.subdirs(mstore, "grp")) == Set(["sub", "b"])
-        @test Set(Zarr.subdirs(mstore, "grp/sub")) == Set(["a"])
-        @test Zarr.subdirs(mstore, "grp/sub/a") == String[]
-        @test Set(Zarr.subkeys(mstore, "grp/sub/a")) == Set([".zarray", ".zattrs", "0", "1"])
-        @test Zarr.subdirs(mstore, "nonexistent") == String[]
-        @test Zarr.subkeys(mstore, "nonexistent") == String[]
+        @test Set(ZarrCore.subdirs(mstore, "")) == Set(["grp", "top"])
+        @test Set(ZarrCore.subkeys(mstore, "")) == Set([".zgroup", ".zattrs"])
+        @test Set(ZarrCore.subdirs(mstore, "grp")) == Set(["sub", "b"])
+        @test Set(ZarrCore.subdirs(mstore, "grp/sub")) == Set(["a"])
+        @test ZarrCore.subdirs(mstore, "grp/sub/a") == String[]
+        @test Set(ZarrCore.subkeys(mstore, "grp/sub/a")) == Set([".zarray", ".zattrs", "0", "1"])
+        @test ZarrCore.subdirs(mstore, "nonexistent") == String[]
+        @test ZarrCore.subkeys(mstore, "nonexistent") == String[]
 
         @test JSON.parse(String(mstore[".zattrs"]))["title"] == "demo"
         @test mstore["nonexistent/.zarray"] === nothing

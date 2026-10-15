@@ -15,7 +15,7 @@ function _zip_fixture(members::Vector{Tuple{String,Vector{UInt8},Bool}})
     le32(x) = htol(UInt32(x))
     for (name, bytes, deflate) in members
         # Zarr's zlib stream less its two-byte header and four-byte checksum is the raw deflate a zip holds.
-        data = deflate ? Zarr.zcompress(bytes, Zarr.ZlibCompressor())[3:(end - 4)] : bytes
+        data = deflate ? ZarrCore.zcompress(bytes, Zarr.ZlibCompressor())[3:(end - 4)] : bytes
         offset = position(io)
         method = deflate ? 8 : 0
         write(io, le32(0x04034b50), le16(20), le16(0), le16(method), le16(0), le16(0), le32(0),

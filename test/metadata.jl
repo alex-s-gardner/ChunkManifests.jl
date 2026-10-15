@@ -1,6 +1,7 @@
 import HDF5
 import JSON
 import Zarr
+import ZarrCore
 
 # zarray_json, zattrs_json, zgroup_json, chunkkey, parse_chunkkey and
 # zarr_dtype_string are internal to ChunkManifests (not exported), so they are
@@ -63,7 +64,7 @@ import Zarr
         @test ChunkManifests.zarr_dtype_string(UInt16) == "<u2"
         @test ChunkManifests.zarr_dtype_string(Bool) == "|b1"
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
-        if Zarr.typestr(Complex{Int32}) isa AbstractVector
+        if ZarrCore.typestr(Complex{Int32}) isa AbstractVector
             @test ChunkManifests.zarr_dtype_string(Complex{Int32}) == [["r", "<i4"], ["i", "<i4"]]
         else
             @test_throws "complex integers need" ChunkManifests.zarr_dtype_string(Complex{Int32})
@@ -167,9 +168,9 @@ import Zarr
 
         data = reshape(collect(1.0:6.0), shape)
         compressor = Zarr.ZlibCompressor(3)
-        compressed = Zarr.zcompress(data, compressor)
+        compressed = ZarrCore.zcompress(data, compressor)
 
-        store = Zarr.DictStore()
+        store = ZarrCore.DictStore()
         store[".zarray"] = ChunkManifests.zarray_json(va)
         store[ChunkManifests.chunkkey(va, CartesianIndex(1, 1))] = compressed
 
@@ -188,13 +189,13 @@ import Zarr
 
         # The types a saved manifest reads back as have to emit the same
         # string, or a load-then-save cycle would change the dtype.
-        # Zarr.typestr is no inverse here: it encodes ASCIIChar as "<V1",
+        # ZarrCore.typestr is no inverse here: it encodes ASCIIChar as "<V1",
         # opaque bytes, which would lose the string type entirely.
-        @test Zarr.typestr("|S1") === Zarr.ASCIIChar
-        @test Zarr.typestr("|S5") === Zarr.MaxLengthString{5, UInt8}
-        @test Zarr.typestr(Zarr.ASCIIChar) == "<V1"
-        @test ChunkManifests.zarr_dtype_string(Zarr.ASCIIChar) == "|S1"
-        @test ChunkManifests.zarr_dtype_string(Zarr.MaxLengthString{5, UInt8}) == "|S5"
+        @test ZarrCore.typestr("|S1") === ZarrCore.ASCIIChar
+        @test ZarrCore.typestr("|S5") === ZarrCore.MaxLengthString{5, UInt8}
+        @test ZarrCore.typestr(ZarrCore.ASCIIChar) == "<V1"
+        @test ChunkManifests.zarr_dtype_string(ZarrCore.ASCIIChar) == "|S1"
+        @test ChunkManifests.zarr_dtype_string(ZarrCore.MaxLengthString{5, UInt8}) == "|S5"
 
         # Variable-length strings and compound types stay refused.
         @test_throws "no faithful Zarr v2 dtype" ChunkManifests.zarr_dtype_string(String)
@@ -224,7 +225,7 @@ import Zarr
         # parseable.
         store = ChunkManifest(; arrays = Dict{String, ManifestArray}("s" => va))
         z = Zarr.zopen(store)["s"]
-        @test eltype(z) === Zarr.ASCIIChar
+        @test eltype(z) === ZarrCore.ASCIIChar
         @test UInt8(z[]) == 0x41
     end
 
@@ -240,7 +241,7 @@ import Zarr
         va = ManifestArray{HDF5.FixedString{5, 0}}(m, (1,), (1,); dimnames = ["s"])
         store = ChunkManifest(; arrays = Dict{String, ManifestArray}("s" => va))
         z = Zarr.zopen(store)["s"]
-        @test eltype(z) === Zarr.MaxLengthString{5, UInt8}
+        @test eltype(z) === ZarrCore.MaxLengthString{5, UInt8}
         @test String(z[1]) == "abcde"
     end
 

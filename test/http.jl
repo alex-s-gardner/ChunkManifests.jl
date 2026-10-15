@@ -326,7 +326,7 @@ end
                 offset = zeros(UInt64, gridsize)
                 nbytessize = zeros(UInt64, gridsize)
                 for I in CartesianIndices(gridsize)
-                    key = Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
+                    key = ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I)
                     chunkbytes = read(joinpath(dir, key))
                     path = "/" * key
                     _addroute!(ts, path, chunkbytes)

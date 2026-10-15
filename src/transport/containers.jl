@@ -205,7 +205,7 @@ end
 
 Minimum of [`concurrency`](@ref) over every transport `c` currently
 references: every bound transport, `c.fallback`, and any `s3://` bucket
-transport already resolved and cached. `Zarr.store_read_strategy` needs one
+transport already resolved and cached. `ZarrCore.store_read_strategy` needs one
 concurrency figure for the whole store; when a manifest spans several
 backends, the slowest one is the binding constraint on how many requests may
 run at once.

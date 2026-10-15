@@ -46,7 +46,7 @@ end
         # Three reasons this fails, none fixable without reimplementing
         # another package's internals or over-exposing our own. Zarr exports
         # no API for writing a custom store or filter — building
-        # ChunkManifest <: Zarr.AbstractStore and the TIFFPredictor codec
+        # ChunkManifest <: ZarrCore.AbstractStore and the TIFFPredictor codec
         # means reaching into AbstractStore, storefromstring, read_items!,
         # Filter, zdecode/zencode and the compressor types directly. HDF5's
         # public API has no chunk-layout introspection, so scanning chunk
@@ -80,6 +80,7 @@ end
                 Base => Core, HTTP => Base, JSON => parentmodule(JSON.lower),
                 HDF5.API => HDF5.API.HDF5_jll,
                 TiffImages => TiffImages.FileIO,
+                Zarr => parentmodule(Zarr.ZlibCompressor), Zarr => parentmodule(Zarr.ZstdCompressor),
             ),
         ),
     )

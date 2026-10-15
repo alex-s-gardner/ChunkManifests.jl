@@ -20,6 +20,7 @@ PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Proj = "c94c279d-25a6-4763-9509-64d165bea63e"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
+ZarrCore = "77f5b75c-4c08-499f-ba13-550b0a0af171"
 Zlib_jll = "83775a58-1f1d-513f-b197-d71354ab007a"
 
 [weakdeps]
@@ -34,7 +35,9 @@ TiffImages = "731e570b-9d59-4bfa-96dc-6df516fadf69"
 ZarrDatasets = "519a4cdf-1362-424a-9ea1-b1d782dbb24b"
 
 [sources]
-Zarr = {rev = "complex-int-dtype", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+Zarr = {rev = "complex-int-dtype-v0.11", subdir = "Zarr", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+ZarrCore = {rev = "complex-int-dtype-v0.11", subdir = "ZarrCore", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+ZarrZlib = {rev = "complex-int-dtype-v0.11", subdir = "ZarrZlib", url = "https://github.com/alex-s-gardner/Zarr.jl"}
 
 [extensions]
 ChunkManifestsAWSS3Ext = ["AWSS3", "AWS"]
@@ -73,9 +76,10 @@ SHA = "0.7, 1"
 Sockets = "1.10, 1.11"
 Test = "1.10, 1.11"
 TiffImages = "0.11"
-YAXArrays = "0.7"
 Zlib_jll = "1"
-Zarr = "0.10"
+Zarr = "0.11"
+ZarrCore = "0.11.1"
+ZarrZlib = "0.11"
 ZarrDatasets = "0.1.6"
 julia = "1.10"
 
@@ -92,8 +96,8 @@ Rasters = "a3a2b9e3-a471-40c9-b274-f788e487c689"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TiffImages = "731e570b-9d59-4bfa-96dc-6df516fadf69"
-YAXArrays = "c21b50f5-aa40-41ea-b809-c0f5e47bfa5c"
 ZarrDatasets = "519a4cdf-1362-424a-9ea1-b1d782dbb24b"
+ZarrZlib = "5ee7c756-6ac8-46ad-a53f-994846513443"
 
 [targets]
-test = ["AWSS3", "HDF5", "Aqua", "ExplicitImports", "OpenJpeg_jll", "Parquet2", "PooledArrays", "Random", "Rasters", "Sockets", "Test", "TiffImages", "YAXArrays", "ZarrDatasets"]
+test = ["AWSS3", "HDF5", "Aqua", "ExplicitImports", "OpenJpeg_jll", "Parquet2", "PooledArrays", "Random", "Rasters", "Sockets", "Test", "TiffImages", "ZarrDatasets", "ZarrZlib"]

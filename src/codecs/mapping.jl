@@ -147,9 +147,9 @@ function zarr_decodes_byte_filters()
     supported = try
         data = Int32[1, 2, 3, 4]
         z = Zarr.zcreate(
-            Int32, Zarr.DictStore(), length(data);
-            chunks = (length(data),), compressor = Zarr.NoCompressor(),
-            filters = (Zarr.ShuffleFilter(sizeof(Int32)),),
+            Int32, ZarrCore.DictStore(), length(data);
+            chunks = (length(data),), compressor = ZarrCore.NoCompressor(),
+            filters = (ZarrCore.ShuffleFilter(sizeof(Int32)),),
         )
         z[:] = data
         z[:] == data

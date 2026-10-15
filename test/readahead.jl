@@ -119,7 +119,7 @@ end
             offset = zeros(UInt64, gridsize)
             nbytes = zeros(UInt64, gridsize)
             for I in CartesianIndices(gridsize)
-                fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
+                fname = joinpath(dir, ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
                 index[I] = push_uri!(table, fname)
                 nbytes[I] = filesize(fname)
             end
@@ -303,7 +303,7 @@ end
                     transport = counting, readahead,
                 )
                 za = Zarr.zopen(store)
-                arr = wrapcache ? Zarr.DiskArrays.cache(za) : za
+                arr = wrapcache ? ZarrCore.DiskArrays.cache(za) : za
                 counting.count[] = 0
                 @test sum(arr) == sum(vals)
                 first = counting.count[]
@@ -313,7 +313,7 @@ end
                 counting.count[] = 0
                 @test arr[3:4] == vals[3:4]
                 window = counting.count[]
-                return (; first, repeat, window, chunks = size(Zarr.DiskArrays.eachchunk(arr)))
+                return (; first, repeat, window, chunks = size(ZarrCore.DiskArrays.eachchunk(arr)))
             end
 
             off = counts(; readahead = ReadaheadCache(; maxbytes = 0), wrapcache = false)
@@ -342,15 +342,15 @@ end
             # The chunk grid survives the wrapper, so DiskArrays' own batching
             # keeps asking for chunk-aligned blocks either way.
             @test off.chunks == ra.chunks == dac.chunks == both.chunks == (nchunks,)
-            @test Zarr.DiskArrays.haschunks(
-                Zarr.DiskArrays.cache(
+            @test ZarrCore.DiskArrays.haschunks(
+                ZarrCore.DiskArrays.cache(
                     Zarr.zopen(
                         ChunkManifest(;
                             arrays = Dict{String, ManifestArray}("" => va),
                         )
                     )
                 )
-            ) isa Zarr.DiskArrays.Chunked
+            ) isa ZarrCore.DiskArrays.Chunked
         end
     end
 

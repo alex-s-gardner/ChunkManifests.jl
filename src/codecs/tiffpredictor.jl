@@ -6,7 +6,7 @@
 # silently decode TIFF rows as one undifferenced run.
 
 """
-    TIFFPredictor{T}(width, samplesperpixel) <: Zarr.Filter{T,T}
+    TIFFPredictor{T}(width, samplesperpixel) <: ZarrCore.Filter{T,T}
 
 Undoes TIFF Predictor 2 (horizontal differencing). Decoding is a cumulative
 sum along each row of `width` pixels, independently for each of
@@ -25,7 +25,7 @@ package invented: it is not part of the Zarr or numcodecs specifications. A
 `.zarray` document naming it is readable by ChunkManifests.jl but not by Python
 `zarr`/`numcodecs` or any other Zarr implementation.
 """
-struct TIFFPredictor{T} <: Zarr.Filter{T, T}
+struct TIFFPredictor{T} <: ZarrCore.Filter{T, T}
     width::Int
     samplesperpixel::Int
 
@@ -72,7 +72,7 @@ function _checkpredictorinput(v::AbstractVector, f::TIFFPredictor{T}) where {T}
     return rowsamples
 end
 
-function Zarr.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
+function ZarrCore.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     v = vec(a)
     rowsamples = _checkpredictorinput(v, f)
     nrows = length(v) ÷ rowsamples
@@ -92,7 +92,7 @@ function Zarr.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     return out
 end
 
-function Zarr.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
+function ZarrCore.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     v = vec(a)
     rowsamples = _checkpredictorinput(v, f)
     nrows = length(v) ÷ rowsamples
@@ -114,13 +114,13 @@ function JSON.lower(f::TIFFPredictor{T}) where {T}
     return Dict(
         "id" => "tiff_predictor",
         "predictor" => 2,
-        "dtype" => Zarr.typestr(T),
+        "dtype" => ZarrCore.typestr(T),
         "width" => f.width,
         "samplesperpixel" => f.samplesperpixel,
     )
 end
 
-function Zarr.getfilter(::Type{<:TIFFPredictor}, d::Dict)
+function ZarrCore.getfilter(::Type{<:TIFFPredictor}, d::Dict)
     predictor = get(d, "predictor", 2)
     predictor == 2 || throw(
         ArgumentError(
@@ -128,7 +128,7 @@ function Zarr.getfilter(::Type{<:TIFFPredictor}, d::Dict)
                 "got predictor $predictor"
         )
     )
-    T = Zarr.typestr(d["dtype"])
+    T = ZarrCore.typestr(d["dtype"])
     return TIFFPredictor{T}(d["width"], d["samplesperpixel"])
 end
 
@@ -162,7 +162,7 @@ end
 
 # Called from ChunkManifests.__init__ to register the codec with Zarr.
 function _register_tiff_predictor!()
-    haskey(Zarr.filterdict, "tiff_predictor") && return nothing
-    Zarr.filterdict["tiff_predictor"] = TIFFPredictor
+    haskey(ZarrCore.filterdict, "tiff_predictor") && return nothing
+    ZarrCore.filterdict["tiff_predictor"] = TIFFPredictor
     return nothing
 end

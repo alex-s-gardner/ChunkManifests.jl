@@ -3,7 +3,7 @@
 
 # Zarr v2's on-disk chunk key separator and lack of a "c" prefix, matching
 # the convention Zarr.jl itself uses for v2 stores.
-const _V2_CHUNK_KEY_ENCODING = Zarr.ChunkKeyEncoding('.', false)
+const _V2_CHUNK_KEY_ENCODING = ZarrCore.ChunkKeyEncoding('.', false)
 
 """
     zarr_dtype_string(::Type{T}) -> Union{String, Vector{Any}}
@@ -15,13 +15,13 @@ complex-integer typestr).
 Only `Bool`, fixed-width signed/unsigned integers, floating-point types,
 complex-float and complex-integer types and fixed-length byte strings have an
 exact Zarr v2 encoding and are supported. Every other type throws:
-`Zarr.typestr`'s fallback for an unrecognized type encodes it as opaque raw
+`ZarrCore.typestr`'s fallback for an unrecognized type encodes it as opaque raw
 bytes (`"<Vn"`), which would silently discard the type's actual layout rather
 than fail on it.
 """
 function zarr_dtype_string(::Type{T}) where {T}
     if T <: Complex{<:Signed}
-        dtype = Zarr.typestr(T)
+        dtype = ZarrCore.typestr(T)
         # A Zarr.jl without the structured complex-integer dtype spells one as opaque bytes.
         dtype isa AbstractVector || throw(
             ArgumentError(
@@ -32,7 +32,7 @@ function zarr_dtype_string(::Type{T}) where {T}
         return dtype
     end
     if T === Bool || T <: Union{Signed, Unsigned} || T <: AbstractFloat || T <: Complex{<:AbstractFloat}
-        return Zarr.typestr(T)
+        return ZarrCore.typestr(T)
     end
     throw(
         ArgumentError(
@@ -47,16 +47,16 @@ end
 # carries. `|S<n>` is the numpy and Zarr v2 spelling for them and what
 # zarr-python writes; Zarr.jl parses `|S<n>` and `<S<n>` identically.
 #
-# These are not delegated to `Zarr.typestr`, which is not an inverse here:
-# `typestr("|S1")` gives `Zarr.ASCIIChar`, but `typestr(Zarr.ASCIIChar)` gives
+# These are not delegated to `ZarrCore.typestr`, which is not an inverse here:
+# `typestr("|S1")` gives `ZarrCore.ASCIIChar`, but `typestr(ZarrCore.ASCIIChar)` gives
 # `"<V1"` — opaque bytes, which would lose the string type when a saved
 # manifest is read back and written again. At n == 1 Zarr.jl decodes as
 # `ASCIIChar` rather than a string type; that is byte-compatible, one byte
 # either way, and is the right trade against emitting a spelling off-spec.
 # The HDF5 driver adds the method for its own fixed-string eltype, in
 # src/drivers/hdf5.jl: driver-specific type knowledge lives with the driver.
-zarr_dtype_string(::Type{Zarr.MaxLengthString{N, UInt8}}) where {N} = "|S$N"
-zarr_dtype_string(::Type{Zarr.ASCIIChar}) = "|S1"
+zarr_dtype_string(::Type{ZarrCore.MaxLengthString{N, UInt8}}) where {N} = "|S$N"
+zarr_dtype_string(::Type{ZarrCore.ASCIIChar}) = "|S1"
 
 # JSON has no literal for a non-finite number, and Zarr v2 spells the three it
 # needs as strings. A NaN fill value is what a NetCDF4 writer leaves on a
@@ -73,7 +73,7 @@ end
 _jsonfillvalue(v::Complex) = [_jsonfillvalue(real(v)), _jsonfillvalue(imag(v))]
 # A complex integer is a structured dtype, whose fill value the spec writes as
 # the Base64 of its bytes.
-_jsonfillvalue(v::Complex{<:Signed}) = Zarr.fill_value_encoding(v)
+_jsonfillvalue(v::Complex{<:Signed}) = ZarrCore.fill_value_encoding(v)
 
 # The inverse, reading a document back. Only a floating-point array's fill
 # value is reinterpreted: the three spellings are reserved for those, and a
@@ -86,7 +86,7 @@ function _fillvaluefromjson(v::AbstractString, ::Type{T}) where {T <: AbstractFl
     return v
 end
 _fillvaluefromjson(v::AbstractString, ::Type{T}) where {T <: Complex{<:Signed}} =
-    Zarr.fill_value_decoding(v, T)
+    ZarrCore.fill_value_decoding(v, T)
 function _fillvaluefromjson(v::AbstractVector, ::Type{Complex{T}}) where {T}
     length(v) == 2 || return v
     return Complex{T}(
@@ -170,7 +170,7 @@ zgroup_json() = Vector{UInt8}(JSON.json(Dict{String, Any}("zarr_format" => 2)))
 Zarr v2 chunk key for the 1-based Julia chunk index `I`.
 """
 function chunkkey(::ManifestArray{T, N}, I::CartesianIndex{N}) where {T, N}
-    return Zarr.citostring(_V2_CHUNK_KEY_ENCODING, I)
+    return ZarrCore.citostring(_V2_CHUNK_KEY_ENCODING, I)
 end
 
 # Number of '.'-separated components of a chunk key, and the k-th of them as a

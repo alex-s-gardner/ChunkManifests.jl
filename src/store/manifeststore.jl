@@ -1,4 +1,4 @@
-# The Zarr.AbstractStore implementation that serves source-file bytes as Zarr
+# The ZarrCore.AbstractStore implementation that serves source-file bytes as Zarr
 # chunks. A ChunkManifest is itself that store.
 #
 # Keys are "/"-separated Zarr v2 paths: an array path optionally followed by
@@ -60,14 +60,14 @@ function Base.getindex(s::ChunkManifest, key::AbstractString)
 end
 
 """
-    Zarr.isinitialized(s::ChunkManifest, key::AbstractString) -> Bool
+    ZarrCore.isinitialized(s::ChunkManifest, key::AbstractString) -> Bool
 
 Whether `getindex(s, key)` would return bytes, answered without producing them:
 opening a group asks this of every array's and group's metadata keys, and
 Zarr.jl's fallback would synthesize each document, or fetch a chunk, only to
 discard it.
 """
-function Zarr.isinitialized(s::ChunkManifest, key::AbstractString)
+function ZarrCore.isinitialized(s::ChunkManifest, key::AbstractString)
     prefix, leaf = _splitkey(key)
     va = get(arraysof(s), prefix, nothing)
     if va !== nothing
@@ -95,13 +95,13 @@ function Base.setindex!(::ChunkManifest, v, key::AbstractString)
 end
 
 """
-    Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
+    ZarrCore.storefromstring(::Type{<:ChunkManifest}, s, create)
 
 Always throws. A manifest is opened with [`load`](@ref)`(path)`, which returns
 the Zarr group directly. Nothing registers a URL pattern for this store, so
 Zarr.jl never reaches this method on its own.
 """
-function Zarr.storefromstring(::Type{<:ChunkManifest}, s, create)
+function ZarrCore.storefromstring(::Type{<:ChunkManifest}, s, create)
     throw(
         ArgumentError(
             "a chunk manifest cannot be opened from inside Zarr.zopen(\"$s\"); use " *
@@ -143,11 +143,11 @@ function Zarr.storagesize(s::ChunkManifest, p::AbstractString)
 end
 
 """
-    Zarr.subdirs(s::ChunkManifest, p::AbstractString) -> Vector{String}
+    ZarrCore.subdirs(s::ChunkManifest, p::AbstractString) -> Vector{String}
 
 Names of the groups and arrays directly under path `p`.
 """
-function Zarr.subdirs(s::ChunkManifest, p::AbstractString)
+function ZarrCore.subdirs(s::ChunkManifest, p::AbstractString)
     haskey(arraysof(s), p) && return String[]
     (p == "" || _isgrouppath(s, p)) || return String[]
     return copy(s.groups[p])
@@ -164,13 +164,13 @@ function _subkeys(va::ManifestArray)
 end
 
 """
-    Zarr.subkeys(s::ChunkManifest, p::AbstractString) -> Vector{String}
+    ZarrCore.subkeys(s::ChunkManifest, p::AbstractString) -> Vector{String}
 
 Metadata and chunk keys directly present at path `p`: `.zarray`/`.zattrs`
 plus every non-missing chunk key when `p` is an array, or `.zgroup`/`.zattrs`
 when `p` is a group.
 """
-function Zarr.subkeys(s::ChunkManifest, p::AbstractString)
+function ZarrCore.subkeys(s::ChunkManifest, p::AbstractString)
     if haskey(arraysof(s), p)
         return _subkeys(arraysof(s)[p])
     elseif p == "" || _isgrouppath(s, p)
@@ -180,18 +180,18 @@ function Zarr.subkeys(s::ChunkManifest, p::AbstractString)
 end
 
 """
-    Zarr.store_read_strategy(s::ChunkManifest) -> Zarr.ConcurrentRead
+    ZarrCore.store_read_strategy(s::ChunkManifest) -> ZarrCore.ConcurrentRead
 
 Reports [`concurrency`](@ref)`(s.transport)` so Zarr.jl sizes the read
 channel's buffer to match; the actual reads happen through the
-[`Zarr.read_items!`](@ref) override below, not through this strategy's
+[`ZarrCore.read_items!`](@ref) override below, not through this strategy's
 generic consumer.
 """
-Zarr.store_read_strategy(s::ChunkManifest) = Zarr.ConcurrentRead(concurrency(s.transport))
+ZarrCore.store_read_strategy(s::ChunkManifest) = ZarrCore.ConcurrentRead(concurrency(s.transport))
 
 """
-    Zarr.read_items!(s::ChunkManifest, c::AbstractChannel,
-                      e::Zarr.AbstractChunkKeyEncoding, p, i)
+    ZarrCore.read_items!(s::ChunkManifest, c::AbstractChannel,
+                      e::ZarrCore.AbstractChunkKeyEncoding, p, i)
 
 Resolve every chunk index in `i` (a `CartesianIndices` into array `p`'s chunk
 grid) and `put!` each as `index => bytes_or_nothing` onto `c`. Virtual chunks
@@ -209,8 +209,8 @@ would make the consumer's own `close` throw. Consulting and populating the
 cache does not change that: each index still resolves to exactly one `put!`,
 either from the cache or from the fetch loop below.
 """
-function Zarr.read_items!(
-        s::ChunkManifest, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i
+function ZarrCore.read_items!(
+        s::ChunkManifest, c::AbstractChannel, ::ZarrCore.AbstractChunkKeyEncoding, p, i
     )
     return _read_items!(chunkmapof(arraysof(s)[p]), c, s.transport, s.readahead, i)
 end

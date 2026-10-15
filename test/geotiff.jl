@@ -105,7 +105,7 @@ using TiffImages
             width, height = 9, 6
             # Complex integers need the structured dtype of the Zarr.jl `[sources]` pins, which Julia
             # 1.10 does not honor; there the scan refuses them by name.
-            complexints = Zarr.typestr(Complex{Int16}) isa AbstractVector
+            complexints = ZarrCore.typestr(Complex{Int16}) isa AbstractVector
             for (T, sampleformat) in ((Complex{Int16}, 5), (Complex{Int32}, 5), (ComplexF32, 6))
                 data = T.(rand(-100:100, width, height), rand(-100:100, width, height))
                 path = joinpath(dir, "complex_$(sampleformat)_$(sizeof(T)).tif")
@@ -201,7 +201,7 @@ using TiffImages
             payload = Vector{UInt8}[]
             for ty in 1:gridy, tx in 1:gridx
                 block = padded[((tx - 1) * tilewidth + 1):(tx * tilewidth), ((ty - 1) * tilelength + 1):(ty * tilelength)]
-                push!(payload, Zarr.zcompress(block, Zarr.ZlibCompressor()))
+                push!(payload, ZarrCore.zcompress(block, Zarr.ZlibCompressor()))
             end
 
             path = joinpath(dir, "tiled_deflate.tif")
@@ -225,7 +225,7 @@ using TiffImages
             path = joinpath(dir, "predictor.tif")
             _gt_striped(
                 path; width, height, rowsperstrip, bits = 16, compression = 8, predictor = 2,
-                payload = [Zarr.zcompress(data, Zarr.ZlibCompressor())],
+                payload = [ZarrCore.zcompress(data, Zarr.ZlibCompressor())],
             )
             group = _scan(path, GeoTIFFDriver())
             va = ChunkManifests.arraysof(group)["0/data"]
@@ -440,7 +440,7 @@ using TiffImages
                 data3[b, x, y] = UInt16(1000b + 10y + x)
             end
             payload = [
-                Zarr.zcompress(block, Zarr.ZlibCompressor())
+                ZarrCore.zcompress(block, Zarr.ZlibCompressor())
                     for block in _gt_chunkytiles(data3, tilewidth, tilelength)
             ]
 
@@ -472,8 +472,8 @@ using TiffImages
                 data3[b, x, y] = UInt16(1000b + 10y + x)
             end
             f = ChunkManifests.TIFFPredictor(UInt16, width, nsp)
-            encoded = Zarr.zencode(vec(data3), f)
-            compressed = Zarr.zcompress(encoded, Zarr.ZlibCompressor())
+            encoded = ZarrCore.zencode(vec(data3), f)
+            compressed = ZarrCore.zcompress(encoded, Zarr.ZlibCompressor())
 
             path = joinpath(dir, "rgb_predictor.tif")
             _gt_striped(

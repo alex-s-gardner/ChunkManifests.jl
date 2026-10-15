@@ -6,20 +6,23 @@ authors except where noted. States verified 2026-10-05.
 
 ## Zarr.jl: complex-integer dtype and concurrent chunk decoding — not yet proposed
 
-`[sources]` pins the `complex-int-dtype` branch of the fork, which is
-`v0.10.2-bytes-filter-fix` (the #354 fix, below) plus four changes no upstream
-release carries:
+`[sources]` pins the `complex-int-dtype-v0.11` branch of the fork for the
+`Zarr`, `ZarrCore` and `ZarrZlib` packages. It is JuliaIO/Zarr.jl `main` plus
+three changes no upstream release carries:
 
 - complex integers read and written as the Zarr v2 structured dtype
   `[["r", T], ["i", T]]`, which a Sentinel-1 SLC's CInt16 GeoTIFF scans to;
 - a complex fill value whose part is `"NaN"` or `"Infinity"` decodes, as a
   NISAR GSLC's `NaN + NaN*im` needs;
-- a read spanning several chunks decodes them on several threads, and an
-  uncompressed chunk is copied straight from its bytes, so a memory-mapped
-  local file reads only the pages a window touches;
-- chunk buffers are pooled, and zlib+shuffle decodes into them.
+- a read spanning several chunks decodes them on several threads, an
+  uncompressed chunk is copied straight from its bytes (so a memory-mapped
+  local file reads only the pages a window touches), and chunk buffers are
+  pooled, with zlib+shuffle decoding into them. `ZarrZlib` implements the two
+  hooks this adds to `ZarrCore`, so the change needs a `ZarrCore` bump and a
+  matching `ZarrZlib` compat bound upstream.
 
-None of these has been offered to JuliaIO/Zarr.jl yet.
+None of these has been offered to JuliaIO/Zarr.jl yet. `ZarrZlib` is listed in
+`[extras]` only so that `[sources]` can name it.
 
 ## Zarr.jl #354 — merged, release pending on #356
 
@@ -66,16 +69,12 @@ compat `"0.11.0"` (any 0.11.x) and re-exports `ZarrCore`'s public names.
 So once `ZarrCore` 0.11.1 is registered (#356 above), `Zarr` 0.11.0 resolves
 to a `ZarrCore` carrying the #354 fix with no new `Zarr` release needed.
 
-`Zarr = "0.10"` in `Project.toml` still bounds the pre-split package, which is
-also what the `[sources]` branch forks. Clearing the #354 pin therefore means
-moving to `Zarr = "0.11"`, not deleting four lines.
-
-What that move costs is unmeasured. `ChunkManifest` subtypes
-`Zarr.AbstractStore` and adds methods to `Zarr.storefromstring`,
-`Zarr.store_read_strategy` and the undocumented `Zarr.read_items!`. The
-re-export covers only `ZarrCore`'s public names, so whether each of those is
-still reachable as `Zarr.<name>` — or must be qualified as `ZarrCore.<name>` —
-has not been checked.
+`Project.toml` requires `Zarr = "0.11"`. `ChunkManifest` subtypes
+`ZarrCore.AbstractStore` and adds methods to `ZarrCore.storefromstring`,
+`ZarrCore.store_read_strategy` and the undocumented `ZarrCore.read_items!`: the
+umbrella re-exports only some of `ZarrCore`'s names, and `ExplicitImports`
+requires a name to be qualified by the package that owns it. `ZarrCore` is
+therefore a dependency.
 
 ## Zarr.jl — byte order in a dtype string is ignored
 
