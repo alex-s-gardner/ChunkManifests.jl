@@ -10,6 +10,8 @@ No version has been released yet. `0.1.0` will be the first, and the
 
 ### Breaking
 
+- Requires Zarr 0.11 (with `ZarrCore`), taken from the Zarr.jl fork's `complex-int-dtype-v0.11`
+  branch. YAXArrays.jl cannot be installed beside it until YAXArrayBase 0.7 allows Zarr 0.11.
 - The public API is `scan`, `load` and `save`, each returning or taking the `Zarr.ZGroup` of a
   manifest, plus `concat`, `merge`, `replace_prefix!` and `validate` on such groups.
   `scan(path)` chooses the driver from the extension, and `save`/`load` choose the format from
