@@ -1,5 +1,6 @@
 import HTTP
 import Random
+import Sockets
 import Zarr
 
 # Local, Range-aware HTTP fixture so HTTPTransport tests never touch the
@@ -86,6 +87,40 @@ function _withserver(f::Function)
     server = HTTP.serve!(req -> _handle(ts, req), "127.0.0.1", 0)
     return try
         f(ts, "http://127.0.0.1:$(HTTP.port(server))")
+    finally
+        close(server)
+    end
+end
+
+# A server that closes its first `drops` connections without answering, which curl reports as a request with
+# no response, and then answers every request with a one-byte 206. `accepted` counts the connections made.
+function _withdropping(f::Function, drops::Integer)
+    server = Sockets.listen(Sockets.localhost, 0)
+    accepted = Threads.Atomic{Int}(0)
+    @async while isopen(server)
+        sock = try
+            Sockets.accept(server)
+        catch
+            break
+        end
+        n = Threads.atomic_add!(accepted, 1) + 1
+        @async try
+            head = UInt8[]
+            while !(length(head) >= 4 && head[(end - 3):end] == UInt8[0x0d, 0x0a, 0x0d, 0x0a])
+                push!(head, read(sock, UInt8))
+            end
+            n > drops && write(
+                sock,
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\n" *
+                    "Connection: close\r\n\r\nx",
+            )
+        catch
+        finally
+            close(sock)
+        end
+    end
+    return try
+        f("http://127.0.0.1:$(Int(Sockets.getsockname(server)[2]))/x", accepted)
     finally
         close(server)
     end
@@ -474,6 +509,40 @@ end
             _addroute!(ts, "/guarded", UInt8[]; location = "/login")
             @test_throws "rather than at the object" fetchrange(HTTPTransport(; resolve = true), base * "/guarded",
                                                                 ByteRange(0, 1))
+        end
+    end
+
+    @testset "a request that gets no response is sent again" begin
+        @testset "http_resolve recovers from dropped connections" begin
+            _withdropping(2) do url, accepted
+                @test ChunkManifests.http_resolve([url]) == [(206, url)]
+                @test accepted[] == 3
+            end
+        end
+        @testset "http_resolve retries only the requests that failed" begin
+            _withdropping(1) do url, accepted
+                got = ChunkManifests.http_resolve([url, url])
+                @test all(g -> g == (206, url), got)
+            end
+        end
+        @testset "http_resolve gives up after its retries, with a clear message" begin
+            _withdropping(100) do url, accepted
+                @test_throws "failed" ChunkManifests.http_resolve([url]; retries = 2)
+                @test accepted[] == 3
+            end
+        end
+        @testset "http_request retries a GET" begin
+            _withdropping(1) do url, accepted
+                status, body = ChunkManifests.http_request(url; headers = ["Range: bytes=0-0"])
+                @test (status, body) == (206, UInt8[0x78])
+                @test accepted[] == 2
+            end
+        end
+        @testset "http_request sends any other method once" begin
+            _withdropping(1) do url, accepted
+                @test_throws "failed" ChunkManifests.http_request(url; method = "POST")
+                @test accepted[] == 1
+            end
         end
     end
 end

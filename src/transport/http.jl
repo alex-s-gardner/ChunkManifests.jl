@@ -160,32 +160,53 @@ function fetchall(t::HTTPTransport, uri::AbstractString)
     return _getall(t.client, lines, t.retries, url)
 end
 
+# `requests` sent together, and those that get no response (a dropped connection, a failed TLS handshake) sent
+# again, up to `retries` times with the backoff a single request gets. A response of any status is final.
+function _curl_get_retrying(client::_CurlClient, requests::Vector{_CurlRequest}, retries::Int; concurrency::Int)
+    responses = _curl_get(client, requests; concurrency)
+    attempt = 0
+    while attempt < retries
+        failed = findall(r -> !isempty(r.error), responses)
+        isempty(failed) && break
+        _backoff(attempt)
+        attempt += 1
+        responses[failed] = _curl_get(client, requests[failed]; concurrency)
+    end
+    return responses
+end
+
 """
-    http_request(url; method = "GET", headers = String[]) -> (status, body)
+    http_request(url; method = "GET", headers = String[], retries = 3) -> (status, body)
 
 One HTTP request with no body, following redirects, as `"Name: value"` header lines; returns the final
-response's status and body. A request that gets no response throws. For the odd call outside reading
+response's status and body. A `GET` that gets no response is sent again up to `retries` times, with
+exponential backoff; any other method is sent once, since a request that reached the server may have acted
+before the connection failed. A request that still gets no response throws. For the odd call outside reading
 objects, such as a credential exchange, so that it needs no other HTTP client.
 """
-function http_request(url::AbstractString; method::AbstractString = "GET", headers::Vector{String} = String[])
+function http_request(url::AbstractString; method::AbstractString = "GET", headers::Vector{String} = String[],
+                      retries::Integer = 3)
     u = String(_httpuri(url))
     lines = method == "GET" ? headers : String[headers; "Content-Length: 0"]
-    resp = only(_curl_get(HTTPTransport().client, [_CurlRequest(u, lines; method)]; concurrency = 1))
+    resp = only(_curl_get_retrying(HTTPTransport().client, [_CurlRequest(u, lines; method)],
+                                   method == "GET" ? Int(retries) : 0; concurrency = 1))
     isempty(resp.error) || throw(ErrorException("HTTP " * String(method) * " " * u * " failed: " * resp.error))
     return resp.status, resp.body
 end
 
 """
-    http_resolve(urls; headers = String[]) -> Vector{Tuple{Int,String}}
+    http_resolve(urls; headers = String[], retries = 3) -> Vector{Tuple{Int,String}}
 
 Where each of `urls` leads: one one-byte ranged GET per URL, run concurrently, each following its
 redirects, and for each the final response's status and the URL it came from. For a URL that redirects
 to a pre-signed one, such as an Earthdata Login-guarded download, so the object can then be read from
-there by range without the redirect chain on every request. A request that gets no response throws.
+there by range without the redirect chain on every request. A request that gets no response is sent again
+up to `retries` times, with exponential backoff; one that still gets none throws.
 """
-function http_resolve(urls::AbstractVector{<:AbstractString}; headers::Vector{String} = String[])
+function http_resolve(urls::AbstractVector{<:AbstractString}; headers::Vector{String} = String[],
+                      retries::Integer = 3)
     requests = [_CurlRequest(String(_httpuri(u)), [headers; "Range: bytes=0-0"]) for u in urls]
-    responses = _curl_get(_CurlClient(), requests; concurrency = 8)
+    responses = _curl_get_retrying(_CurlClient(), requests, Int(retries); concurrency = 8)
     for (u, resp) in zip(urls, responses)
         isempty(resp.error) || throw(ErrorException("HTTP GET " * String(u) * " failed: " * resp.error))
     end
