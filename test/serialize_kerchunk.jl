@@ -1,5 +1,6 @@
 import JSON
 import Zarr
+import ZarrCore
 
 @testset "serialize_kerchunk" begin
 
@@ -29,7 +30,7 @@ import Zarr
             offset = zeros(UInt64, gridsize)
             nbytes = zeros(UInt64, gridsize)
             for I in CartesianIndices(gridsize)
-                fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
+                fname = joinpath(dir, ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
                 index[I] = push_uri!(table, fname)
                 nbytes[I] = filesize(fname)
             end
@@ -356,9 +357,9 @@ import Zarr
             # Fixed-length byte strings: the dtype a CF grid-mapping variable
             # carries, and what `zarr_dtype_string` emits for one. Zarr.jl
             # decodes `|S1` as ASCIIChar and wider ones as a string type.
-            @test _loaddtype("|S1") === Zarr.ASCIIChar
-            @test _loaddtype("|S5") === Zarr.MaxLengthString{5, UInt8}
-            @test _loaddtype("<S5") === Zarr.MaxLengthString{5, UInt8}
+            @test _loaddtype("|S1") === ZarrCore.ASCIIChar
+            @test _loaddtype("|S5") === ZarrCore.MaxLengthString{5, UInt8}
+            @test _loaddtype("<S5") === ZarrCore.MaxLengthString{5, UInt8}
 
             @test _loaddtype("|u1") === UInt8
             @test _loaddtype("<i4") === Int32
@@ -413,7 +414,7 @@ import Zarr
         @warn "ItsLiveMasks fixture not found; skipping the scanned-NetCDF4 round trip" ITSLIVE_PATH
     end
 
-    @testset "store-agnostic: round trip through an in-memory Zarr.DictStore" begin
+    @testset "store-agnostic: round trip through an in-memory ZarrCore.DictStore" begin
         # `save`/`load` reach the filesystem only by resolving `path` to a
         # store and a key within it; a `DictStore` round trip proves the
         # document itself never touches a file path.
@@ -431,7 +432,7 @@ import Zarr
             va = ManifestArray{UInt8}(manifest, (4,), (1,); dimnames = ["i"])
             group = ChunkManifest(; arrays = Dict{String, ManifestArray}("arr" => va))
 
-            store = Zarr.DictStore()
+            store = ZarrCore.DictStore()
             _save(store, "refs.json", group, KerchunkJSON())
             @test store["refs.json"] !== nothing
 

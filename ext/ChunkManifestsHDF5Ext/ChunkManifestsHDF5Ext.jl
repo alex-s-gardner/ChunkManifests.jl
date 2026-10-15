@@ -18,6 +18,7 @@ import HTTP
 import Logging
 import PrecompileTools
 import Zarr
+import ZarrCore
 
 include("vfd.jl")
 include("driver.jl")

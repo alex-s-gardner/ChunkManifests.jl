@@ -287,7 +287,7 @@ Bounded cache of fetched chunk bytes, keyed by source file and byte offset.
 
 Reductions and broadcast walk a Zarr array one chunk at a time through
 `store_readchunk`, which never reaches
-`Zarr.read_items!` and so gets no range coalescing. Filling this cache
+`ZarrCore.read_items!` and so gets no range coalescing. Filling this cache
 with a run of byte-adjacent chunks on each miss restores it for those access
 patterns. `maxbytes = 0` disables readahead; `chunks` bounds how far ahead a
 single miss reads.
@@ -327,7 +327,7 @@ end
 Tree of [`ManifestArray`](@ref)s keyed by full Zarr path (`"gt1l/h_li"`), plus
 group attributes and a record of which driver produced the scan.
 
-A `ChunkManifest` *is* a read-only `Zarr.AbstractStore`: it answers metadata
+A `ChunkManifest` *is* a read-only `ZarrCore.AbstractStore`: it answers metadata
 keys from synthesized Zarr v2 documents and chunk keys with the source files'
 raw, still-encoded bytes, so the `Zarr.ZGroup` that [`scan`](@ref) and
 [`load`](@ref) return is a plain Zarr group over it. Decoding is Zarr.jl's job — this store never
@@ -340,7 +340,7 @@ rather than per chunk. `transport` resolves those URIs: a
 [`TransportContainers`](@ref) routes each URI to the backend that can read it,
 while a single transport reads every URI the same way.
 """
-struct ChunkManifest <: Zarr.AbstractStore
+struct ChunkManifest <: ZarrCore.AbstractStore
     arrays::Dict{String, ManifestArray}
     table::PathTable
     attrs::Dict{String, Any}

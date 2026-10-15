@@ -15,7 +15,7 @@ resolved when the program is compiled.
 const LeafTransport = Union{LocalTransport, HTTPTransport, S3Transport}
 
 """
-    ChunkCodec <: Zarr.Compressor
+    ChunkCodec <: ZarrCore.Compressor
 
 How every chunk of a typed array is encoded, one type for all the encodings a typed open reads, so
 the array's type does not depend on which one a file uses. `kind` is `CODEC_NONE`, `CODEC_ZLIB`,
@@ -23,7 +23,7 @@ the array's type does not depend on which one a file uses. `kind` is `CODEC_NONE
 rows of `width` samples); `shuffle` is the element size of HDF5's byte shuffle, undone after
 decompressing, or `0` for none; `jpeg2000` holds the codestream header a JPEG 2000 tile decodes against.
 """
-struct ChunkCodec <: Zarr.Compressor
+struct ChunkCodec <: ZarrCore.Compressor
     kind::Int
     predictor::Int
     width::Int
@@ -46,7 +46,7 @@ ChunkCodec(kind::Int; predictor::Int = 1, width::Int = 1, shuffle::Int = 0,
 # `NoCompressor` and this package's `JPEG2000Tile` and `TIFFPredictor` do, so a chunk decodes to the
 # same values whichever route read it. A chunk shorter than `data` once decompressed — the last strip
 # of a striped TIFF — fills the front of `data`.
-function Zarr.zuncompress!(data::DenseArray{T}, compressed, c::ChunkCodec, ::Nothing) where {T}
+function ZarrCore.zuncompress!(data::DenseArray{T}, compressed, c::ChunkCodec, ::Nothing) where {T}
     if c.kind == CODEC_JPEG2000
         _j2k_decode!(data, compressed, c.jpeg2000)
     elseif c.kind == CODEC_NONE
@@ -54,15 +54,15 @@ function Zarr.zuncompress!(data::DenseArray{T}, compressed, c::ChunkCodec, ::Not
     elseif c.kind == CODEC_ZLIB
         length(compressed) > 0 || throw(ArgumentError("an empty zlib chunk"))
         try
-            Zarr.zuncompress!(data, compressed, c.zlib)
+            ZarrCore.zuncompress!(data, compressed, c.zlib)
         catch
-            _copyprefix!(data, Zarr.zuncompress(compressed, c.zlib, UInt8))
+            _copyprefix!(data, ZarrCore.zuncompress(compressed, c.zlib, UInt8))
         end
     elseif c.kind == CODEC_ZSTD
         try
-            Zarr.zuncompress!(data, compressed, c.zstd)
+            ZarrCore.zuncompress!(data, compressed, c.zstd)
         catch
-            _copyprefix!(data, Zarr.zuncompress(compressed, c.zstd, UInt8))
+            _copyprefix!(data, ZarrCore.zuncompress(compressed, c.zstd, UInt8))
         end
     else
         throw(ArgumentError("unknown chunk encoding $(c.kind)"))
@@ -110,9 +110,9 @@ function _undo_predictor!(data::DenseArray{T}, width::Int) where {T}
     return data
 end
 
-Zarr.zuncompress(a, c::ChunkCodec, ::Type{T}) where {T} =
+ZarrCore.zuncompress(a, c::ChunkCodec, ::Type{T}) where {T} =
     throw(ArgumentError("a ChunkCodec chunk decodes into a chunk-sized array; use zuncompress!"))
-Zarr.zcompress(a, ::ChunkCodec) = throw(ArgumentError("typed arrays are read-only"))
+ZarrCore.zcompress(a, ::ChunkCodec) = throw(ArgumentError("typed arrays are read-only"))
 
 """
     ChunkCache
@@ -136,14 +136,14 @@ function ChunkCache(dir::AbstractString)
 end
 
 """
-    TypedChunkStore <: Zarr.AbstractStore
+    TypedChunkStore <: ZarrCore.AbstractStore
 
 The chunks of one array in one object: chunk `I` of the chunk grid is the `nbytes[I]` bytes at
 `offset[I]` of `uri`, read through `transport`; a chunk with `nbytes[I] == 0` was never written and
 reads as the fill value. With a `cache`, each chunk is fetched once and read from the cache after. Serves
 only reads.
 """
-struct TypedChunkStore <: Zarr.AbstractStore
+struct TypedChunkStore <: ZarrCore.AbstractStore
     transport::LeafTransport
     uri::String
     offset::Matrix{UInt64}
@@ -154,9 +154,9 @@ end
 TypedChunkStore(transport::LeafTransport, uri::String, offset::Matrix{UInt64}, nbytes::Matrix{UInt64}) =
     TypedChunkStore(transport, uri, offset, nbytes, nothing)
 
-Zarr.store_read_strategy(s::TypedChunkStore) = Zarr.ConcurrentRead(concurrency(s.transport))
+ZarrCore.store_read_strategy(s::TypedChunkStore) = ZarrCore.ConcurrentRead(concurrency(s.transport))
 
-function Zarr.store_readchunk(s::TypedChunkStore, p, i::CartesianIndex{2}, ::Zarr.AbstractChunkKeyEncoding)
+function ZarrCore.store_readchunk(s::TypedChunkStore, p, i::CartesianIndex{2}, ::ZarrCore.AbstractChunkKeyEncoding)
     n = s.nbytes[i]
     n == 0 && return nothing
     s.cache === nothing && return fetchrange(s.transport, s.uri, ByteRange(s.offset[i], n))
@@ -165,7 +165,7 @@ end
 
 # Every chunk of `i` with one coalesced `fetchranges`, as `ChunkManifest`'s store does, one `put!` per
 # index.
-function Zarr.read_items!(s::TypedChunkStore, c::AbstractChannel, ::Zarr.AbstractChunkKeyEncoding, p, i)
+function ZarrCore.read_items!(s::TypedChunkStore, c::AbstractChannel, ::ZarrCore.AbstractChunkKeyEncoding, p, i)
     present = CartesianIndex{2}[]
     for ii in i
         s.nbytes[ii] == 0 ? put!(c, ii => nothing) : push!(present, ii)
@@ -254,13 +254,13 @@ The array a typed open returns: a read-only `Zarr.ZArray` of `T` over a [`TypedC
 whose chunks a [`ChunkCodec`](@ref) decodes. Julia order is `(x, y)`, the samples of a row
 contiguous, as [`scan`](@ref) orders a raster.
 """
-const TypedArray{T} = Zarr.ZArray{T, 2, TypedChunkStore, Zarr.MetadataV2{T, 2, ChunkCodec, Nothing}}
+const TypedArray{T} = Zarr.ZArray{T, 2, TypedChunkStore, ZarrCore.MetadataV2{T, 2, ChunkCodec, Nothing}}
 
 function _typedarray(::Type{T}, store::TypedChunkStore, shape::NTuple{2, Int}, chunks::NTuple{2, Int},
                      codec::ChunkCodec, fillvalue::Union{Nothing, T}) where {T}
-    meta = Zarr.MetadataV2{T, 2, ChunkCodec, Nothing}(2, "array", shape, chunks, zarr_dtype_string(T), codec,
-                                                    fillvalue, 'C', nothing, Zarr.ChunkKeyEncoding('.', false))
-    return Zarr.ZArray{T, 2, TypedChunkStore, Zarr.MetadataV2{T, 2, ChunkCodec, Nothing}}(
+    meta = ZarrCore.MetadataV2{T, 2, ChunkCodec, Nothing}(2, "array", shape, chunks, zarr_dtype_string(T), codec,
+                                                    fillvalue, 'C', nothing, ZarrCore.ChunkKeyEncoding('.', false))
+    return Zarr.ZArray{T, 2, TypedChunkStore, ZarrCore.MetadataV2{T, 2, ChunkCodec, Nothing}}(
         meta, store, "", Dict{String, Any}(), false)
 end
 

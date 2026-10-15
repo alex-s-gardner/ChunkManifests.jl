@@ -193,7 +193,7 @@ end
         nested = asgroup(ChunkManifest(; arrays = Dict{String, ManifestArray}("g/data" => h)))
         @test nested["g"]["data"][:] == expected
         @test_throws "subgroup \"g\"" save(joinpath(dir, "sub.json"), nested["g"])
-        @test_throws "not a chunk manifest" save(joinpath(dir, "other.json"), Zarr.zgroup(Zarr.DictStore()))
+        @test_throws "not a chunk manifest" save(joinpath(dir, "other.json"), Zarr.zgroup(ZarrCore.DictStore()))
     end
 
     @testset "replace_prefix! repoints every array" begin
@@ -212,6 +212,6 @@ end
     end
 
     @testset "Zarr.zopen of a path does not reach the store" begin
-        @test_throws "use load(" Zarr.storefromstring(ChunkManifest, "x.manifest", false)
+        @test_throws "use load(" ZarrCore.storefromstring(ChunkManifest, "x.manifest", false)
     end
 end

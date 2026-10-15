@@ -40,6 +40,7 @@ import NetworkOptions
 import PrecompileTools
 import SHA
 import Zarr
+import ZarrCore
 
 include("core/types.jl")
 include("core/pathtable.jl")

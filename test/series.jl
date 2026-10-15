@@ -51,7 +51,7 @@ _sr_concat(members, dim; kw...) = _manifest(concat([_sr_group(x) for x in member
         h = arraysof(_scan(s1, HDF5Driver()))["h"]
         nested = _sr_group(ChunkManifest(; arrays = Dict{String, ManifestArray}("g/h" => h)))
         @test_throws "subgroup \"g\"" concat([nested["g"]], :time)
-        @test_throws "not a chunk manifest" concat([Zarr.zgroup(Zarr.DictStore())], :time)
+        @test_throws "not a chunk manifest" concat([Zarr.zgroup(ZarrCore.DictStore())], :time)
     end
 
     @testset "scanning several paths keeps their order" begin

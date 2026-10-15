@@ -5,10 +5,10 @@ import ZarrDatasets
 # ZarrDatasets and Zarr each bind their own dependencies (CommonDataModel,
 # DiskArrays) under their own module namespace with `import`, not `using
 # X: ...`, so those names are reachable as ZarrDatasets.CDM and
-# Zarr.DiskArrays by qualification even though neither package is a direct
+# ZarrCore.DiskArrays by qualification even though neither package is a direct
 # dependency of this one.
 const _IT_CDM = ZarrDatasets.CDM
-const _IT_DiskArrays = Zarr.DiskArrays
+const _IT_DiskArrays = ZarrCore.DiskArrays
 
 const _IT_ITSLIVE_PATH = ITSLIVE_PATH
 
@@ -49,7 +49,7 @@ function _it_named_group(
     offset = zeros(UInt64, gridsize)
     nbytes = zeros(UInt64, gridsize)
     for I in CartesianIndices(gridsize)
-        fname = joinpath(dir, Zarr.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
+        fname = joinpath(dir, ZarrCore.citostring(ChunkManifests._V2_CHUNK_KEY_ENCODING, I))
         index[I] = push_uri!(table, fname)
         nbytes[I] = filesize(fname)
     end
