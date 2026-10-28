@@ -1,7 +1,8 @@
 # Byte ranges of a zip archive's members, read through a transport: the central directory, a stored
 # member's bytes in place, and a deflated member's through a seekable-deflate index — the method of
 # zlib's `examples/zran.c` — so a window of a member is inflated from the nearest access point rather than
-# from the start of the member. A member read whole is inflated to a file in one pass.
+# from the start of the member. A member read whole is inflated to a file in one pass; ranges of one
+# near its start are inflated from the start only as far as they reach.
 
 """
     ZipMember
@@ -79,6 +80,9 @@ function zip_members(uri::AbstractString; transport::LeafTransport)
     end
     return members
 end
+
+@noinline _check_method(uri::String, m::ZipMember) = m.method == 0 || m.method == 8 || throw(ArgumentError(
+    uri * ": " * m.name * " is compressed with zip method " * string(m.method) * "; stored and deflated members are read"))
 
 # Where a member's data starts: past its local header, whose name and extra fields may differ in length
 # from the central directory's.
@@ -307,6 +311,13 @@ function read_entry(e::ZipEntry, offset::Int, n::Int)
     return out
 end
 
+# Up to `inflight` blocks of `block` compressed bytes from `offset`, short of `stop`, fetched in a task.
+function _fetch_batch(t::LeafTransport, uri::String, offset::Int, stop::Int, block::Int, inflight::Int)
+    ranges = [ByteRange(UInt64(p), UInt64(min(block, stop - p)))
+              for p in offset:block:min(stop - 1, offset + (inflight - 1) * block)]
+    return Threads.@spawn fetchranges(t, uri, ranges)
+end
+
 """
     extract_member(uri, m::ZipMember, dest; transport, block = 16 MiB, inflight = 4) -> String
 
@@ -318,22 +329,21 @@ inflater. The output goes through `dest * ".part"`, renamed once its size is the
 function extract_member(uri::AbstractString, m::ZipMember, dest::AbstractString; transport::LeafTransport,
                         block::Int = 16 << 20, inflight::Int = 4)
     u = String(uri)
-    m.method == 0 || m.method == 8 || throw(ArgumentError(u * ": " * m.name * " is compressed with zip method " *
-                                                          string(m.method) * "; stored and deflated members are read"))
+    _check_method(u, m)
     start = _zip_data_offset(transport, u, m)
     stop = start + m.compressed
-    ranges = [ByteRange(UInt64(o), UInt64(min(block, stop - o))) for o in start:block:(stop - 1)]
-    batches = [k:min(k + inflight - 1, length(ranges)) for k in 1:inflight:length(ranges)]
     part = String(dest) * ".part"
     io = open(part, "w")
     z = _inflate_init()
     out = Vector{UInt8}(undef, 1 << 20)
     ended = m.method == 0
     try
-        next = isempty(batches) ? nothing : Threads.@spawn fetchranges(transport, u, ranges[batches[1]])
-        for k in eachindex(batches)
-            blocks = fetch(something(next))::Vector{Vector{UInt8}}
-            next = k < length(batches) ? Threads.@spawn(fetchranges(transport, u, ranges[batches[k + 1]])) : nothing
+        offset = start
+        next = offset < stop ? _fetch_batch(transport, u, offset, stop, block, inflight) : nothing
+        while next !== nothing
+            blocks = fetch(next)::Vector{Vector{UInt8}}
+            offset += sum(length, blocks)
+            next = offset < stop ? _fetch_batch(transport, u, offset, stop, block, inflight) : nothing
             for input in blocks
                 if m.method == 0
                     write(io, input)
@@ -354,8 +364,8 @@ function extract_member(uri::AbstractString, m::ZipMember, dest::AbstractString;
     return String(dest)
 end
 
-# All of `input` through the inflater, the output appended to `io`; whether the stream has ended.
-function _inflate_into!(io::IO, z::_ZStream, input::Vector{UInt8}, out::Vector{UInt8}, uri::String)
+# All of `input` through the inflater, the output handed to `sink`; whether the stream has ended.
+function _inflate_into!(sink, z::_ZStream, input::Vector{UInt8}, out::Vector{UInt8}, uri::String)
     GC.@preserve input out begin
         z.next_in = pointer(input)
         z.avail_in = length(input)
@@ -365,12 +375,120 @@ function _inflate_into!(io::IO, z::_ZStream, input::Vector{UInt8}, out::Vector{U
             rc = _inflate!(z, _Z_NO_FLUSH)
             (rc < 0 && rc != _Z_BUF_ERROR) && throw(ErrorException(uri * ": inflate failed with code " * string(rc)))
             produced = length(out) - Int(z.avail_out)
-            produced > 0 && unsafe_write(io, pointer(out), produced)
+            produced > 0 && _emit!(sink, out, produced)
             rc == _Z_STREAM_END && return true
             # A full output buffer may leave decoded output pending past the last input byte.
             (z.avail_in == 0 && z.avail_out != 0) && return false
         end
     end
+end
+
+_emit!(io::IO, out::Vector{UInt8}, n::Int) = (unsafe_write(io, pointer(out), n); nothing)
+
+# The uncompressed byte ranges of a member being kept, each written to its own stream as the inflater
+# passes it: `pos` is how many bytes of the member have gone by.
+mutable struct _RangeSink{S<:IO}
+    starts::Vector{Int}
+    stops::Vector{Int}
+    ios::Vector{S}
+    pos::Int
+end
+
+function _emit!(s::_RangeSink, out::Vector{UInt8}, n::Int)
+    lo, hi = s.pos, s.pos + n
+    for k in eachindex(s.starts)
+        a, b = max(lo, s.starts[k]), min(hi, s.stops[k])
+        a < b && unsafe_write(s.ios[k], pointer(out, a - lo + 1), b - a)
+    end
+    s.pos = hi
+    return nothing
+end
+
+"""
+    inflate_ranges!(ios, uri, m::ZipMember, ranges; transport, block = 16 MiB, inflight = 4) -> ios
+
+The uncompressed bytes `ranges[i]` of member `m` — `(offset, n)`, zero-based, ascending and not
+overlapping — each written to the stream `ios[i]`, and `ios` returned.
+
+A deflated member is inflated from its start, since a deflate stream cannot be entered anywhere else
+without an index, but only until the last range has gone by: every byte before a range is inflated and
+discarded, and the compressed bytes after the last are not fetched beyond the batch already in flight.
+The compressed bytes are fetched as [`extract_member`](@ref) fetches them, `inflight` blocks of `block`
+bytes at a time, the next batch in flight while the current one is inflated.
+"""
+function inflate_ranges!(ios::Vector{S}, uri::AbstractString, m::ZipMember,
+                         ranges::AbstractVector{<:Tuple{Integer,Integer}}; transport::LeafTransport,
+                         block::Int = 16 << 20, inflight::Int = 4) where {S<:IO}
+    u = String(uri)
+    length(ranges) == length(ios) || throw(ArgumentError("inflate_ranges! needs one stream per range"))
+    _check_method(u, m)
+    starts = Int[first(r) for r in ranges]
+    stops = Int[first(r) + last(r) for r in ranges]
+    for k in eachindex(ranges)
+        (0 <= starts[k] <= stops[k] <= m.uncompressed) || throw(BoundsError(m, stops[k]))
+        k == 1 || stops[k - 1] <= starts[k] || throw(ArgumentError(
+            u * ": the ranges of " * m.name * " must ascend without overlapping"))
+    end
+    (isempty(ranges) || last(stops) == 0) && return ios
+    start = _zip_data_offset(transport, u, m)
+    if m.method == 0
+        # Stored bytes are the member's own: each range is read in place, `block` bytes at a time.
+        for k in eachindex(ranges)
+            o = start + starts[k]
+            while o < start + stops[k]
+                write(ios[k], _zfetch(transport, u, o, min(block, start + stops[k] - o)))
+                o += block
+            end
+        end
+        return ios
+    end
+    want = last(stops)
+    stop = start + m.compressed
+    sink = _RangeSink(starts, stops, ios, 0)
+    z = _inflate_init()
+    out = Vector{UInt8}(undef, 1 << 20)
+    ended = false
+    try
+        offset = start
+        next = _fetch_batch(transport, u, offset, stop, block, inflight)
+        while true
+            blocks = fetch(next)::Vector{Vector{UInt8}}
+            consumed = offset - start
+            offset += sum(length, blocks)
+            # Fetched ahead only as far as the inflation so far says the ranges reach, plus a block; a
+            # stream that compresses worse than that is read on, a batch at a time, without the lookahead.
+            reach = consumed == 0 ? stop : start + ceil(Int, want * consumed / max(sink.pos, 1)) + block
+            ahead = min(stop, reach)
+            next = offset < ahead ? _fetch_batch(transport, u, offset, ahead, block, inflight) : nothing
+            done = false
+            for input in blocks
+                ended = _inflate_into!(sink, z, input, out, u)
+                done = ended || sink.pos >= want
+                done && break
+            end
+            (done || offset >= stop) && break
+            next === nothing && (next = _fetch_batch(transport, u, offset, stop, block, inflight))
+        end
+        # The batch fetched ahead is not needed; it is waited for so no task outlives the call.
+        next === nothing || wait(next)
+    finally
+        _inflate_end!(z)
+    end
+    sink.pos >= want || throw(ErrorException(u * ": " * m.name * " ends before byte " * string(want)))
+    return ios
+end
+
+"""
+    read_member(uri, m::ZipMember, offset, n; transport) -> Vector{UInt8}
+
+`n` uncompressed bytes of member `m` from zero-based `offset`. A deflated member is inflated from its
+start and only until `offset + n`, so this is for bytes near the start of a member, such as a file's
+header; [`ZipEntry`](@ref) reads windows anywhere in it.
+"""
+function read_member(uri::AbstractString, m::ZipMember, offset::Integer, n::Integer; transport::LeafTransport)
+    io = IOBuffer()
+    inflate_ranges!([io], uri, m, [(Int(offset), Int(n))]; transport, block = 1 << 20, inflight = 1)
+    return take!(io)
 end
 
 """

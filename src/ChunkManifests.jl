@@ -96,7 +96,7 @@ if VERSION >= v"1.11.0-DEV.469"
                 "maxgap, maxblock, concurrency, coalesce_ranges, RangeIO, rangecost, " *
                 "withrangefile, ValidationReport, ConsistencyIssue, open_tiff, open_jp2, tiff_eltype, jp2_eltype, TypedArray, " *
                 "TypedChunkStore, ChunkCodec, ChunkCache, cached, LeafTransport, fetchall, http_request, http_resolve, H5File, h5open_typed, h5_exists, h5_isgroup, " *
-                "h5_dims, h5_read, h5_read_elements, h5_read_strings, h5_attr_string, h5_open_array, ZipMember, zip_members, ZipEntry, read_entry, read_member, extract_member"
+                "h5_dims, h5_read, h5_read_elements, h5_read_strings, h5_attr_string, h5_open_array, ZipMember, zip_members, ZipEntry, read_entry, read_member, extract_member, inflate_ranges!"
         )
     )
 end

@@ -1,10 +1,10 @@
-# The zip reader (`zip_members`, `ZipEntry`, `read_entry`, `read_member`, `extract_member`): byte ranges of
-# a stored and a deflated member read back as written, from a local file and over HTTP. Uses `_withserver`
-# of `http.jl`.
+# The zip reader (`zip_members`, `ZipEntry`, `read_entry`, `read_member`, `extract_member`, `inflate_ranges!`):
+# byte ranges of a stored and a deflated member read back as written, from a local file and over HTTP. Uses
+# `_withserver` of `http.jl`.
 
 import Random
 import Zarr
-using ChunkManifests: ZipMember, zip_members, ZipEntry, read_entry, read_member, extract_member
+using ChunkManifests: ZipMember, zip_members, ZipEntry, read_entry, read_member, extract_member, inflate_ranges!
 
 # A zip of `members` (name => bytes, deflated when the flag is set), written field by field: local headers,
 # then the central directory and its end record.
@@ -61,6 +61,21 @@ end
                 @test read(dest) == want
                 @test !isfile(dest * ".part")
             end
+            # Ranges of a deflated and of a stored member, the last ending at the member's end.
+            for (k, want, rs) in ((2, big, [(0, 10), (100_000, 250_000), (2_999_000, 1000)]),
+                                  (3, big[1:1000], [(5, 10), (500, 500)]))
+                ios = [IOBuffer() for _ in rs]
+                @test inflate_ranges!(ios, uri, ms[k], rs; transport, block = 100_000, inflight = 3) === ios
+                for (io, (o, n)) in zip(ios, rs)
+                    @test take!(io) == want[(o + 1):(o + n)]
+                end
+            end
+            @test read_member(uri, ms[2], 123, 4567; transport) == big[124:(123 + 4567)]
+            @test read_member(uri, ms[3], 0, 0; transport) == UInt8[]
+            @test_throws "must ascend without overlapping" inflate_ranges!(
+                [IOBuffer(), IOBuffer()], uri, ms[2], [(100, 10), (105, 10)]; transport)
+            @test_throws "one stream per range" inflate_ranges!([IOBuffer()], uri, ms[2], [(0, 1), (2, 1)]; transport)
+            @test_throws BoundsError read_member(uri, ms[2], length(big) - 1, 2; transport)
         end
     end
     # Few, long blocks of long matches: the last access point is far before the end, and the last bytes come
