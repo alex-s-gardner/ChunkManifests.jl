@@ -395,6 +395,13 @@ function _emit!(s::_RangeSink, out::Vector{UInt8}, n::Int)
     return nothing
 end
 
+# Up to `inflight` blocks of `block` compressed bytes from `offset`, short of `stop`, fetched in a task.
+function _fetch_batch(t::LeafTransport, uri::String, offset::Int, stop::Int, block::Int, inflight::Int)
+    ranges = [ByteRange(UInt64(p), UInt64(min(block, stop - p)))
+              for p in offset:block:min(stop - 1, offset + (inflight - 1) * block)]
+    return Threads.@spawn fetchranges(t, uri, ranges)
+end
+
 """
     inflate_ranges!(ios, uri, m::ZipMember, ranges; transport, block = 16 MiB, inflight = 4) -> ios
 
@@ -437,21 +444,18 @@ function inflate_ranges!(ios::Vector{S}, uri::AbstractString, m::ZipMember,
     z = _inflate_init()
     out = Vector{UInt8}(undef, 1 << 20)
     ended = false
-    batch(o) = [ByteRange(UInt64(p), UInt64(min(block, stop - p))) for p in o:block:min(stop - 1, o + (inflight - 1) * block)]
     try
         offset = start
-        next = Threads.@spawn fetchranges(transport, u, batch(offset))
+        next = _fetch_batch(transport, u, offset, stop, block, inflight)
         while true
             blocks = fetch(next)::Vector{Vector{UInt8}}
             offset += sum(length, blocks)
-            more = !ended && offset < stop
-            next = more ? Threads.@spawn(fetchranges(transport, u, batch(offset))) : nothing
+            next = offset < stop ? _fetch_batch(transport, u, offset, stop, block, inflight) : nothing
             for input in blocks
                 ended = _inflate_into!(sink, z, input, out, u)
                 (ended || sink.pos >= want) && break
             end
-            (ended || sink.pos >= want) && break
-            offset < stop || break
+            (ended || sink.pos >= want || offset >= stop) && break
         end
         # The batch fetched ahead is not needed; it is waited for so no task outlives the call.
         next === nothing || wait(next)
