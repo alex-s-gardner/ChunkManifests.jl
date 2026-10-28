@@ -81,6 +81,9 @@ function zip_members(uri::AbstractString; transport::LeafTransport)
     return members
 end
 
+@noinline _check_method(uri::String, m::ZipMember) = m.method == 0 || m.method == 8 || throw(ArgumentError(
+    uri * ": " * m.name * " is compressed with zip method " * string(m.method) * "; stored and deflated members are read"))
+
 # Where a member's data starts: past its local header, whose name and extra fields may differ in length
 # from the central directory's.
 function _zip_data_offset(t::LeafTransport, uri::String, m::ZipMember)
@@ -308,6 +311,13 @@ function read_entry(e::ZipEntry, offset::Int, n::Int)
     return out
 end
 
+# Up to `inflight` blocks of `block` compressed bytes from `offset`, short of `stop`, fetched in a task.
+function _fetch_batch(t::LeafTransport, uri::String, offset::Int, stop::Int, block::Int, inflight::Int)
+    ranges = [ByteRange(UInt64(p), UInt64(min(block, stop - p)))
+              for p in offset:block:min(stop - 1, offset + (inflight - 1) * block)]
+    return Threads.@spawn fetchranges(t, uri, ranges)
+end
+
 """
     extract_member(uri, m::ZipMember, dest; transport, block = 16 MiB, inflight = 4) -> String
 
@@ -319,22 +329,21 @@ inflater. The output goes through `dest * ".part"`, renamed once its size is the
 function extract_member(uri::AbstractString, m::ZipMember, dest::AbstractString; transport::LeafTransport,
                         block::Int = 16 << 20, inflight::Int = 4)
     u = String(uri)
-    m.method == 0 || m.method == 8 || throw(ArgumentError(u * ": " * m.name * " is compressed with zip method " *
-                                                          string(m.method) * "; stored and deflated members are read"))
+    _check_method(u, m)
     start = _zip_data_offset(transport, u, m)
     stop = start + m.compressed
-    ranges = [ByteRange(UInt64(o), UInt64(min(block, stop - o))) for o in start:block:(stop - 1)]
-    batches = [k:min(k + inflight - 1, length(ranges)) for k in 1:inflight:length(ranges)]
     part = String(dest) * ".part"
     io = open(part, "w")
     z = _inflate_init()
     out = Vector{UInt8}(undef, 1 << 20)
     ended = m.method == 0
     try
-        next = isempty(batches) ? nothing : Threads.@spawn fetchranges(transport, u, ranges[batches[1]])
-        for k in eachindex(batches)
-            blocks = fetch(something(next))::Vector{Vector{UInt8}}
-            next = k < length(batches) ? Threads.@spawn(fetchranges(transport, u, ranges[batches[k + 1]])) : nothing
+        offset = start
+        next = offset < stop ? _fetch_batch(transport, u, offset, stop, block, inflight) : nothing
+        while next !== nothing
+            blocks = fetch(next)::Vector{Vector{UInt8}}
+            offset += sum(length, blocks)
+            next = offset < stop ? _fetch_batch(transport, u, offset, stop, block, inflight) : nothing
             for input in blocks
                 if m.method == 0
                     write(io, input)
@@ -395,13 +404,6 @@ function _emit!(s::_RangeSink, out::Vector{UInt8}, n::Int)
     return nothing
 end
 
-# Up to `inflight` blocks of `block` compressed bytes from `offset`, short of `stop`, fetched in a task.
-function _fetch_batch(t::LeafTransport, uri::String, offset::Int, stop::Int, block::Int, inflight::Int)
-    ranges = [ByteRange(UInt64(p), UInt64(min(block, stop - p)))
-              for p in offset:block:min(stop - 1, offset + (inflight - 1) * block)]
-    return Threads.@spawn fetchranges(t, uri, ranges)
-end
-
 """
     inflate_ranges!(ios, uri, m::ZipMember, ranges; transport, block = 16 MiB, inflight = 4) -> ios
 
@@ -419,8 +421,7 @@ function inflate_ranges!(ios::Vector{S}, uri::AbstractString, m::ZipMember,
                          block::Int = 16 << 20, inflight::Int = 4) where {S<:IO}
     u = String(uri)
     length(ranges) == length(ios) || throw(ArgumentError("inflate_ranges! needs one stream per range"))
-    m.method == 0 || m.method == 8 || throw(ArgumentError(u * ": " * m.name * " is compressed with zip method " *
-                                                          string(m.method) * "; stored and deflated members are read"))
+    _check_method(u, m)
     starts = Int[first(r) for r in ranges]
     stops = Int[first(r) + last(r) for r in ranges]
     for k in eachindex(ranges)
@@ -431,10 +432,13 @@ function inflate_ranges!(ios::Vector{S}, uri::AbstractString, m::ZipMember,
     (isempty(ranges) || last(stops) == 0) && return ios
     start = _zip_data_offset(transport, u, m)
     if m.method == 0
-        for (k, b) in enumerate(fetchranges(transport, u,
-                                            [ByteRange(UInt64(start + starts[k]), UInt64(stops[k] - starts[k]))
-                                             for k in eachindex(ranges)]))
-            write(ios[k], b)
+        # Stored bytes are the member's own: each range is read in place, `block` bytes at a time.
+        for k in eachindex(ranges)
+            o = start + starts[k]
+            while o < start + stops[k]
+                write(ios[k], _zfetch(transport, u, o, min(block, start + stops[k] - o)))
+                o += block
+            end
         end
         return ios
     end
@@ -449,13 +453,21 @@ function inflate_ranges!(ios::Vector{S}, uri::AbstractString, m::ZipMember,
         next = _fetch_batch(transport, u, offset, stop, block, inflight)
         while true
             blocks = fetch(next)::Vector{Vector{UInt8}}
+            consumed = offset - start
             offset += sum(length, blocks)
-            next = offset < stop ? _fetch_batch(transport, u, offset, stop, block, inflight) : nothing
+            # Fetched ahead only as far as the inflation so far says the ranges reach, plus a block; a
+            # stream that compresses worse than that is read on, a batch at a time, without the lookahead.
+            reach = consumed == 0 ? stop : start + ceil(Int, want * consumed / max(sink.pos, 1)) + block
+            ahead = min(stop, reach)
+            next = offset < ahead ? _fetch_batch(transport, u, offset, ahead, block, inflight) : nothing
+            done = false
             for input in blocks
                 ended = _inflate_into!(sink, z, input, out, u)
-                (ended || sink.pos >= want) && break
+                done = ended || sink.pos >= want
+                done && break
             end
-            (ended || sink.pos >= want || offset >= stop) && break
+            (done || offset >= stop) && break
+            next === nothing && (next = _fetch_batch(transport, u, offset, stop, block, inflight))
         end
         # The batch fetched ahead is not needed; it is waited for so no task outlives the call.
         next === nothing || wait(next)
