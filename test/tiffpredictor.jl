@@ -92,6 +92,25 @@ import TiffImages  # loads the GeoTIFF driver the GDAL-written fixtures are scan
         end
     end
 
+    @testset "a complex integer sample is differenced as one integer, as libtiff writes it" begin
+        # libtiff applies PREDICTOR=2 to a SAMPLEFORMAT=5, 32-bit (Complex{Int16}) sample as one 32-bit
+        # integer, so a carry out of the real part's 16 bits reaches the imaginary part.
+        f = ChunkManifests.TIFFPredictor(Complex{Int16}, 3, 1)
+        x = Complex{Int16}[complex(Int16(100), Int16(-5)), complex(Int16(-32768), Int16(7)),
+                           complex(Int16(2), Int16(32767))]
+        u = reinterpret(UInt32, x)
+        encoded = reinterpret(Complex{Int16}, UInt32[u[1], u[2] - u[1], u[3] - u[2]])
+        @test ZarrCore.zencode(x, f) == encoded
+        @test ZarrCore.zdecode(encoded, f) == x
+    end
+
+    @testset "a non-dense input decodes as its dense copy" begin
+        f = ChunkManifests.TIFFPredictor(Float32, 4, 2)
+        x = rand(Float32, 4 * 2 * 3)
+        enc = ZarrCore.zencode(x, f)
+        @test reinterpret(UInt32, ZarrCore.zdecode(view(enc, 1:length(enc)), f)) == reinterpret(UInt32, x)
+    end
+
     @testset "wrapping arithmetic" begin
         f8 = ChunkManifests.TIFFPredictor(UInt8, 2, 1)
         original8 = UInt8[250, 10]
