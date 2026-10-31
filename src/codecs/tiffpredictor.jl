@@ -15,10 +15,11 @@ restarting the sum at every row boundary. Encoding is the matching per-row,
 per-band difference. `width` is the row length the predictor was computed
 over — the TIFF image or tile width — not the chunk's total element count.
 
-Arithmetic wraps modulo `2^(8 * sizeof(T))`: TIFF defines the predictor over
-the sample's bit width, so overflow during decoding must wrap back to the
-original value rather than saturate or throw. Julia's fixed-width integer
-`+`/`-` already do this.
+Arithmetic is on each sample's bits as an unsigned integer of the same width,
+wrapping modulo `2^(8 * sizeof(T))`: TIFF defines the predictor over the
+sample's bit width, and libtiff applies it to a floating-point sample's bits
+too, so a `Float32` raster written with `PREDICTOR=2` decodes only through its
+`UInt32` bit patterns. Integer samples get the same result either way.
 
 Registered with Zarr.jl under the filter id `"tiff_predictor"`, a name this
 package invented: it is not part of the Zarr or numcodecs specifications. A
@@ -54,6 +55,11 @@ TIFFPredictor(::Type{T}, width, samplesperpixel) where {T} = TIFFPredictor{T}(wi
 # interleaved bands each.
 _rowsamples(f::TIFFPredictor) = f.width * f.samplesperpixel
 
+# The unsigned integer of a sample's width, which the predictor's arithmetic runs on.
+_predictor_uint(::Type{T}) where {T} =
+    sizeof(T) == 1 ? UInt8 : sizeof(T) == 2 ? UInt16 : sizeof(T) == 4 ? UInt32 : sizeof(T) == 8 ? UInt64 :
+    throw(ArgumentError("TIFFPredictor: no $(8 * sizeof(T))-bit unsigned integer for samples of type $T"))
+
 function _checkpredictorinput(v::AbstractVector, f::TIFFPredictor{T}) where {T}
     Base.require_one_based_indexing(v)
     eltype(v) === T || throw(
@@ -73,8 +79,9 @@ function _checkpredictorinput(v::AbstractVector, f::TIFFPredictor{T}) where {T}
 end
 
 function ZarrCore.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
-    v = vec(a)
-    rowsamples = _checkpredictorinput(v, f)
+    rowsamples = _checkpredictorinput(vec(a), f)
+    U = _predictor_uint(T)
+    v = reinterpret(U, collect(vec(a)))
     nrows = length(v) ÷ rowsamples
     out = similar(v)
     for r in 0:(nrows - 1)
@@ -84,17 +91,18 @@ function ZarrCore.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
             out[rowbase + b] = acc
             for x in 1:(f.width - 1)
                 idx = rowbase + b + x * f.samplesperpixel
-                acc = acc + v[idx]  # wraps for fixed-width integer T, matching TIFF's definition
+                acc = acc + v[idx]  # wraps modulo 2^bits, matching TIFF's definition
                 out[idx] = acc
             end
         end
     end
-    return out
+    return collect(reinterpret(T, out))
 end
 
 function ZarrCore.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
-    v = vec(a)
-    rowsamples = _checkpredictorinput(v, f)
+    rowsamples = _checkpredictorinput(vec(a), f)
+    U = _predictor_uint(T)
+    v = reinterpret(U, collect(vec(a)))
     nrows = length(v) ÷ rowsamples
     out = similar(v)
     for r in 0:(nrows - 1)
@@ -103,11 +111,11 @@ function ZarrCore.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
             out[rowbase + b] = v[rowbase + b]
             for x in 1:(f.width - 1)
                 idx = rowbase + b + x * f.samplesperpixel
-                out[idx] = v[idx] - v[idx - f.samplesperpixel]  # wraps for fixed-width integer T
+                out[idx] = v[idx] - v[idx - f.samplesperpixel]  # wraps modulo 2^bits
             end
         end
     end
-    return out
+    return collect(reinterpret(T, out))
 end
 
 function JSON.lower(f::TIFFPredictor{T}) where {T}

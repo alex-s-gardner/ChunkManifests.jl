@@ -1,6 +1,7 @@
 import JSON
 import Zarr
 import Random
+import TiffImages  # loads the GeoTIFF driver the GDAL-written fixtures are scanned with
 
 @testset "TIFFPredictor" begin
 
@@ -44,6 +45,51 @@ import Random
         # A stride-1 (flat delta) decode would be wrong here: it would not
         # recover the original interleaved pixel values.
         @test ZarrCore.zdecode(encoded, f) != cumsum(encoded)
+    end
+
+    @testset "known-answer: Float32 differences the bits, as libtiff writes them" begin
+        # libtiff's horizontal predictor on 32-bit samples subtracts the samples' bit patterns as
+        # unsigned integers, floating point or not; the stored row is the bits of those differences.
+        f = ChunkManifests.TIFFPredictor(Float32, 4, 1)
+        original = Float32[0.57905257, 0.5804763, 0.58190006, 0.5833238]
+        u = reinterpret(UInt32, original)
+        encoded = reinterpret(Float32, UInt32[u[1], u[2] - u[1], u[3] - u[2], u[4] - u[3]])
+        @test reinterpret(UInt32, ZarrCore.zencode(original, f)) == reinterpret(UInt32, encoded)
+        @test reinterpret(UInt32, ZarrCore.zdecode(encoded, f)) == u
+        # Floating-point accumulation instead would repeat the first sample: the differences are tiny
+        # denormals.
+        @test ZarrCore.zdecode(encoded, f) != fill(original[1], 4)
+    end
+
+    @testset "round trip: floating point, interleaved, NaN and signed zero kept bit for bit" begin
+        Random.seed!(20261031)
+        for T in (Float32, Float64)
+            f = ChunkManifests.TIFFPredictor(T, 5, 3)
+            x = rand(T, 5 * 3 * 4)
+            x[2] = T(NaN); x[7] = -zero(T); x[11] = T(Inf)
+            bits = reinterpret(ChunkManifests._predictor_uint(T), x)
+            @test reinterpret(ChunkManifests._predictor_uint(T), ZarrCore.zdecode(ZarrCore.zencode(x, f), f)) == bits
+        end
+    end
+
+    @testset "GDAL-written Float32 GeoTIFFs with PREDICTOR=2 decode bit for bit" begin
+        # `test/data/float32_predictor2_{tiled,striped}.tif`: written by GDAL 3.12 (rasterio) from
+        # `sin(0.01(x + 3y)) + b` for x in 1:300, y in 1:40, band b in 1:3, with band 2 NaN at
+        # (17, 5) and band 1 -0.0 at (260, 33); DEFLATE, PREDICTOR=2, pixel-interleaved, tiled
+        # 256 × 256 and striped two rows per strip. libtiff differences a floating-point sample's
+        # bits as an unsigned integer, so these decode only that way.
+        expected = Float32[sin(0.01 * (x + 3y)) + b for b in 1:3, x in 1:300, y in 1:40]
+        expected[2, 17, 5] = NaN32
+        expected[1, 260, 33] = -0.0f0
+        for layout in ("tiled", "striped")
+            path = joinpath(@__DIR__, "data", "float32_predictor2_$layout.tif")
+            group = ChunkManifests.scan(path)
+            z = group.groups["0"]["data"]
+            @test only(z.metadata.filters) isa ChunkManifests.TIFFPredictor{Float32}
+            got = z[:, :, :]
+            @test size(got) == size(expected)
+            @test reinterpret(UInt32, vec(got)) == reinterpret(UInt32, vec(expected))
+        end
     end
 
     @testset "wrapping arithmetic" begin

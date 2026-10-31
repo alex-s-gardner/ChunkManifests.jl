@@ -94,10 +94,10 @@ function _copyprefix!(data::DenseArray{T}, bytes::AbstractVector{UInt8}) where {
     return data
 end
 
-# TIFF Predictor 2 on one band, in place: a cumulative sum along each row of `width` samples,
-# wrapping as `TIFFPredictor`'s decoding does.
+# TIFF Predictor 2 on one band, in place: a cumulative sum along each row of `width` samples of the
+# samples' bits as unsigned integers, wrapping as `TIFFPredictor`'s decoding does.
 function _undo_predictor!(data::DenseArray{T}, width::Int) where {T}
-    v = vec(data)
+    v = reinterpret(_predictor_uint(T), vec(data))
     length(v) % width == 0 || throw(ArgumentError("a chunk of $(length(v)) samples is not whole rows of $width"))
     for r in 0:(length(v) ÷ width - 1)
         base = r * width
