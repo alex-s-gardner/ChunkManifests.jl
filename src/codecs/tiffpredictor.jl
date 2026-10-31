@@ -19,7 +19,9 @@ Arithmetic is on each sample's bits as an unsigned integer of the same width,
 wrapping modulo `2^(8 * sizeof(T))`: TIFF defines the predictor over the
 sample's bit width, and libtiff applies it to a floating-point sample's bits
 too, so a `Float32` raster written with `PREDICTOR=2` decodes only through its
-`UInt32` bit patterns. Integer samples get the same result either way.
+`UInt32` bit patterns. A complex integer sample is differenced whole, as one
+integer of both parts' width, which is how libtiff writes it. Integer samples
+get the same result either way.
 
 Registered with Zarr.jl under the filter id `"tiff_predictor"`, a name this
 package invented: it is not part of the Zarr or numcodecs specifications. A
@@ -78,12 +80,16 @@ function _checkpredictorinput(v::AbstractVector, f::TIFFPredictor{T}) where {T}
     return rowsamples
 end
 
+# `a`'s samples as bit patterns: a view of a dense array, a copy of any other.
+_predictor_bits(a::AbstractArray{T}) where {T} =
+    reinterpret(_predictor_uint(T), a isa DenseArray ? vec(a) : collect(vec(a)))
+
 function ZarrCore.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     rowsamples = _checkpredictorinput(vec(a), f)
-    U = _predictor_uint(T)
-    v = reinterpret(U, collect(vec(a)))
+    v = _predictor_bits(a)
     nrows = length(v) ÷ rowsamples
-    out = similar(v)
+    result = Vector{T}(undef, length(v))
+    out = reinterpret(_predictor_uint(T), result)
     for r in 0:(nrows - 1)
         rowbase = r * rowsamples
         for b in 1:f.samplesperpixel
@@ -96,15 +102,15 @@ function ZarrCore.zdecode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
             end
         end
     end
-    return collect(reinterpret(T, out))
+    return result
 end
 
 function ZarrCore.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
     rowsamples = _checkpredictorinput(vec(a), f)
-    U = _predictor_uint(T)
-    v = reinterpret(U, collect(vec(a)))
+    v = _predictor_bits(a)
     nrows = length(v) ÷ rowsamples
-    out = similar(v)
+    result = Vector{T}(undef, length(v))
+    out = reinterpret(_predictor_uint(T), result)
     for r in 0:(nrows - 1)
         rowbase = r * rowsamples
         for b in 1:f.samplesperpixel
@@ -115,7 +121,7 @@ function ZarrCore.zencode(a::AbstractArray, f::TIFFPredictor{T}) where {T}
             end
         end
     end
-    return collect(reinterpret(T, out))
+    return result
 end
 
 function JSON.lower(f::TIFFPredictor{T}) where {T}
