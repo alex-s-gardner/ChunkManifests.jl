@@ -95,6 +95,31 @@ end
             @test a[1:64, 1:48] == data[1:64, 1:48]
         end
 
+        # GDAL-written (libtiff's encoder) LZW files in test/data, whose samples are a formula of the
+        # zero-based (x, y): a tiled byte image with predictor 2, a striped 16-bit image with a short
+        # last strip, and a long-run image whose codes reach the full 12 bits.
+        @testset "LZW, $name" for (name, T, w, h, f) in (
+                ("lzw_uint8_tiled_predictor2.tif", UInt8, 150, 97, (x, y) -> (x * 7 + y * 13 + (x * y) % 11) % 256),
+                ("lzw_uint16_striped.tif", UInt16, 150, 97, (x, y) -> (x * 251 + y * 509 + (x * x) % 97) % 65536),
+                ("lzw_uint8_tiled_runs.tif", UInt8, 3000, 40, (x, y) -> (y ÷ 3 + x ÷ 700) % 4),
+            )
+            want = T[f(x, y) for x in 0:(w - 1), y in 0:(h - 1)]
+            a = ChunkManifests.open_tiff(joinpath(@__DIR__, "data", name), T; transport = local_)
+            @test size(a) == (w, h)
+            @test a[:, :] == want
+            @test a[3:min(w, 70), 5:min(h, 60)] == want[3:min(w, 70), 5:min(h, 60)]
+        end
+
+        @testset "LZW decoding" begin
+            out = zeros(UInt8, 4)
+            # Clear, the literals 'A' 'B', then EOI, in 9-bit codes packed most significant bit first.
+            stream = UInt8[0x80, 0x10, 0x48, 0x50, 0x10]
+            @test ChunkManifests.lzw_decode!(out, stream) == 2
+            @test out[1:2] == UInt8['A', 'B']
+            @test_throws "more than its chunk's 1 bytes" ChunkManifests.lzw_decode!(zeros(UInt8, 1), stream)
+            @test_throws "old-style" ChunkManifests.lzw_decode!(out, UInt8[0x00, 0x01, 0x00])
+        end
+
         @testset "refusals name the file and the reason" begin
             path = joinpath(dir, "tiled_8_false.tif")
             @test_throws "not those of the type asked for" ChunkManifests.open_tiff(path, Float32; transport = local_)
@@ -102,10 +127,10 @@ end
             _gt_tiled(two; width = 64, height = 48, tilewidth = 64, tilelength = 48, bits = 16, samplesperpixel = 2,
                       payload = [zeros(UInt8, 64 * 48 * 4)])
             @test_throws "has 2 bands" ChunkManifests.open_tiff(two, UInt16; transport = local_)
-            lzw = joinpath(dir, "lzw.tif")
-            _gt_tiled(lzw; width = 64, height = 48, tilewidth = 64, tilelength = 48, bits = 16, compression = 5,
+            packbits = joinpath(dir, "packbits.tif")
+            _gt_tiled(packbits; width = 64, height = 48, tilewidth = 64, tilelength = 48, bits = 16, compression = 32773,
                       payload = [zeros(UInt8, 16)])
-            @test_throws "TIFF compression 5 is not read" ChunkManifests.open_tiff(lzw, UInt16; transport = local_)
+            @test_throws "TIFF compression 32773 is not read" ChunkManifests.open_tiff(packbits, UInt16; transport = local_)
         end
 
         @testset "JPEG 2000" begin

@@ -19,7 +19,7 @@ const LeafTransport = Union{LocalTransport, HTTPTransport, S3Transport}
 
 How every chunk of a typed array is encoded, one type for all the encodings a typed open reads, so
 the array's type does not depend on which one a file uses. `kind` is `CODEC_NONE`, `CODEC_ZLIB`,
-`CODEC_ZSTD` or `CODEC_JPEG2000`; `predictor` is TIFF's (`1` none, `2` horizontal differencing over
+`CODEC_ZSTD`, `CODEC_LZW` or `CODEC_JPEG2000`; `predictor` is TIFF's (`1` none, `2` horizontal differencing over
 rows of `width` samples); `shuffle` is the element size of HDF5's byte shuffle, undone after
 decompressing, or `0` for none; `jpeg2000` holds the codestream header a JPEG 2000 tile decodes against.
 """
@@ -37,6 +37,7 @@ const CODEC_NONE = 0
 const CODEC_ZLIB = 1
 const CODEC_ZSTD = 2
 const CODEC_JPEG2000 = 3
+const CODEC_LZW = 4
 
 ChunkCodec(kind::Int; predictor::Int = 1, width::Int = 1, shuffle::Int = 0,
            jpeg2000::JPEG2000Tile = JPEG2000Tile(UInt8[])) =
@@ -64,6 +65,10 @@ function ZarrCore.zuncompress!(data::DenseArray{T}, compressed, c::ChunkCodec, :
         catch
             _copyprefix!(data, ZarrCore.zuncompress(compressed, c.zstd, UInt8))
         end
+    elseif c.kind == CODEC_LZW
+        dest = reinterpret(UInt8, vec(data))
+        n = lzw_decode!(dest, compressed)
+        n < length(dest) && fill!(view(dest, (n + 1):length(dest)), 0x00)
     else
         throw(ArgumentError("unknown chunk encoding $(c.kind)"))
     end
@@ -437,7 +442,7 @@ open_tiff(uri::AbstractString; transport::LeafTransport) = open_tiff(uri, tiff_e
 The full-resolution image of the single-band TIFF at `uri`, read through `transport` (a
 [`LeafTransport`](@ref)), as an array of `T`. Throws, naming the file, unless its samples are `T`;
 for a big-endian file, more than one band, or a compression or predictor this package cannot decode
-byte-for-byte (`deflate`, `zstd` and none are read, with predictor 1 or 2).
+byte-for-byte (`deflate`, `zstd`, LZW and none are read, with predictor 1 or 2).
 
 `GDAL_NODATA` becomes the fill value of the chunks the file never wrote.
 """
@@ -453,7 +458,7 @@ function open_tiff(uri::AbstractString, ::Type{T}; transport::LeafTransport) whe
         "$context: holds $bits-bit samples of TIFF sample format $format, not those of the type asked for"))
     compression = _tiffint(entries, _TIFF_COMPRESSION, 1, src, context)
     kind = compression == 1 ? CODEC_NONE : compression in (8, 32946) ? CODEC_ZLIB :
-           compression == 50000 ? CODEC_ZSTD :
+           compression == 50000 ? CODEC_ZSTD : compression == 5 ? CODEC_LZW :
            throw(ArgumentError("$context: TIFF compression $compression is not read by a typed open"))
     predictor = _tiffint(entries, _TIFF_PREDICTOR, 1, src, context)
     predictor in (1, 2) || throw(ArgumentError("$context: TIFF predictor $predictor is not read by a typed open"))
